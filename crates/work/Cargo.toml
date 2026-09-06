@@ -1,0 +1,9 @@
+[package]
+name = "work"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+susutaku-mlx = { workspace = true }
+pdf-rs = { workspace = true }
+tokenizers = { workspace = true }

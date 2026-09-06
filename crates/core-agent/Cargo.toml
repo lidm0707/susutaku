@@ -1,0 +1,8 @@
+[package]
+name = "core-agent"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+serde_json = { workspace = true }
+ureq = { workspace = true }

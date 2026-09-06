@@ -1,0 +1,6 @@
+[package]
+name = "hf_loader"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]

@@ -1,0 +1,30 @@
+[workspace]
+resolver = "3"
+members = [
+    "backend",
+    "crates/core-agent",
+    "crates/hf_loader",
+    "crates/mlx-rs",
+    "crates/pdf-rs",
+    "crates/work",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+
+[workspace.dependencies]
+hf_loader = { path = "crates/hf_loader" }
+susutaku-mlx = { path = "crates/mlx-rs" }
+pdf-rs = { path = "crates/pdf-rs" }
+core-agent = { path = "crates/core-agent" }
+ureq = "2"
+serde_json = "1"
+pdf-extract = "0.7"
+mlx-rs = { version = "0.25", features = ["safetensors"] }
+tokenizers = "0.21"
+katgpt-tokenizer = { git = "https://github.com/lidm0707/katgpt-rs", branch = "main" }
+katgpt-core = { git = "https://github.com/lidm0707/katgpt-rs", branch = "main", default-features = false, features = [
+    "usage_rate_eviction",
+] }
+serde = { version = "1", features = ["derive"] }

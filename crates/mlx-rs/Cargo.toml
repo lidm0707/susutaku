@@ -1,0 +1,16 @@
+[package]
+name = "susutaku-mlx"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+mlx-rs = { workspace = true }
+mlx-sys = "=0.2.0"
+hf_loader = { workspace = true }
+libc = "0.2"
+tokenizers = { workspace = true }
+katgpt-tokenizer = { workspace = true }
+katgpt-core = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]

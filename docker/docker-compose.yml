@@ -1,0 +1,38 @@
+# Web chat -> inline qwen3.8 (MLX) backend.
+#
+# Metal reality check: MLX inference only works on Apple Silicon macOS with
+# direct Metal access. Linux containers (even on a Mac) have no Metal, so:
+#   - `web` runs in Docker (vite build + nginx, proxies /api -> host backend)
+#   - `backend` must run on the HOST:  cargo run -p backend
+# The `backend-container` service is behind the `container-backend`
+# profile for Linux/GPU-passthrough setups only (no Metal -> /api/chat 500s).
+#
+#   cargo run -p backend          # host, loads models/ qwen3.8 4bit mlx
+#   docker compose -f docker/docker-compose.yml up web --build
+#   # then open http://localhost:3334
+name: susutaku
+
+services:
+  web:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.web
+    ports:
+      - "3334:80"
+    environment:
+      BACKEND_URL: http://${BACKEND_HOST:-host.docker.internal}:8991
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  # Optional: backend in a container (no Metal -> /api/chat will 500).
+  backend-container:
+    profiles: ["container-backend"]
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.backend
+    volumes:
+      - ../models:/app/models:ro
+    ports:
+      - "8991:8991"
+    restart: unless-stopped

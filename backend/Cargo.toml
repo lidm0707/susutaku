@@ -1,0 +1,16 @@
+[package]
+name = "backend"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
+tower-http = { version = "0.6", features = ["cors", "fs"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+hf_loader = { workspace = true }
+susutaku-mlx = { workspace = true }
+core-agent = { workspace = true }
+tokenizers = { workspace = true }
+ureq = { workspace = true }

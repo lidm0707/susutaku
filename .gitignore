@@ -1,0 +1,6 @@
+/target
+.env
+.plans/
+models/
+input/
+output/
