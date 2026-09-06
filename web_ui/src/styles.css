@@ -143,3 +143,58 @@ button:disabled {
   opacity: 0.4;
   cursor: default;
 }
+
+.nav {
+  margin-left: auto;
+  display: flex;
+  gap: 0.5rem;
+}
+
+.nav a {
+  color: #888;
+  display: flex;
+  align-items: center;
+}
+
+.nav a:hover {
+  color: #e6e6ea;
+}
+
+header a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.model-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  width: 100%;
+  text-align: left;
+  padding: 0.7rem 1rem;
+  border-radius: 12px;
+  border: 1px solid #333;
+  background: #1c1c22;
+  color: inherit;
+  font-size: 0.95rem;
+}
+
+.model-row:disabled {
+  opacity: 0.4;
+}
+
+.model-name {
+  flex: 1;
+}
+
+.model-meta {
+  color: #888;
+  font-size: 0.8rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.selected-mark {
+  color: #6fcf7c;
+}

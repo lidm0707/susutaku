@@ -1,6 +1,18 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
+import {
+  Brain,
+  Check,
+  Globe,
+  HardDrive,
+  Puzzle,
+  Send,
+  Settings,
+  Snowflake,
+  Zap,
+} from "lucide-react";
+import { API_BASE, fetch_models, pretty_name, select_model, size_label } from "../lib.js";
 
-const API_BASE = import.meta.env.VITE_API_BASE || "";
 const MAX_TOKENS = 512;
 
 const THINK_OPEN = "<think>";
@@ -17,7 +29,11 @@ function split_thinking(text) {
   return { thinking, reply };
 }
 
-export default function App() {
+export function EngineIcon({ engine }) {
+  return engine === "gguf" ? <Snowflake size={14} /> : <Zap size={14} />;
+}
+
+export default function Chat() {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -26,21 +42,15 @@ export default function App() {
   const [models, setModels] = useState([]);
   const [model, setModel] = useState("");
   const [error, setError] = useState("");
-  const engine = models.find((m) => m.name === model)?.engine || "mlx";
+  const selected = models.find((m) => m.name === model);
 
   async function pick(name) {
-    const res = await fetch(`${API_BASE}/api/models/select`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name }),
-    });
-    if (!res.ok) throw new Error(await res.text());
+    await select_model(name);
     setModel(name);
   }
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/models`)
-      .then((r) => r.json())
+    fetch_models()
       .then(async (list) => {
         setModels(list);
         const sel = list.find((m) => m.selected) || list[0];
@@ -88,8 +98,15 @@ export default function App() {
   return (
     <main className="chat">
       <header>
-        <h1>susutaku</h1>
-        <span className="sub">{model || "—"} · {engine === "gguf" ? "🧊 gguf" : "⚡ mlx"} · inline</span>
+        <h1><Link to="/">susutaku</Link></h1>
+        <span className="sub">
+          {selected
+            ? `${pretty_name(selected.name)} · ${selected.engine.toUpperCase()} · ${size_label(selected.bytes)} · inline`
+            : "—"}
+        </span>
+        <nav className="nav">
+          <Link to="/models" title="models"><Settings size={16} /></Link>
+        </nav>
       </header>
       <section className="log">
         {messages.length === 0 && <p className="empty">Say something to the model.</p>}
@@ -97,12 +114,12 @@ export default function App() {
           <div key={i} className={`bubble ${m.role}`}>
             {m.thinking && (
               <details className="thinking">
-                <summary>💭 thinking</summary>
+                <summary><Brain size={12} /> thinking</summary>
                 <pre>{m.thinking}</pre>
               </details>
             )}
             <p>{m.text || (m.pending ? "…" : "")}</p>
-            {m.tps && <small>{m.model} · prompt {m.prompt_tps.toFixed(1)} tok/s · decode {m.tps.toFixed(1)} tok/s{m.searched ? " · 🌐 searched" : ""}{m.tok === "katgpt" ? " · 🧩 katgpt" : ""}</small>}
+            {m.tps && <small>{m.model} · prompt {m.prompt_tps.toFixed(1)} tok/s · decode {m.tps.toFixed(1)} tok/s{m.searched ? " · searched" : ""}{m.tok === "katgpt" ? " · katgpt" : ""}</small>}
           </div>
         ))}
       </section>
@@ -116,8 +133,7 @@ export default function App() {
         >
           {models.map((m) => (
             <option key={m.name} value={m.name} disabled={!m.loadable}>
-              {m.selected ? "★ " : ""}
-              {m.engine === "gguf" ? "🧊" : "⚡"} {m.name}
+              {m.selected ? "★ " : ""}{pretty_name(m.name)} ({m.engine.toUpperCase()})
             </option>
           ))}
         </select>
@@ -127,9 +143,9 @@ export default function App() {
           onChange={(e) => setSearch(e.target.value)}
           title="web search mode"
         >
-          <option value="auto">🌐 auto</option>
-          <option value="on">🌐 always</option>
-          <option value="off">· off</option>
+          <option value="auto">auto</option>
+          <option value="on">always</option>
+          <option value="off">off</option>
         </select>
         <select
           className="search-toggle"
@@ -137,8 +153,8 @@ export default function App() {
           onChange={(e) => setTok(e.target.value)}
           title="tokenizer"
         >
-          <option value="normal">⚙ normal</option>
-          <option value="katgpt">🧩 katgpt</option>
+          <option value="normal">normal</option>
+          <option value="katgpt">katgpt</option>
         </select>
         <input
           value={input}
@@ -147,8 +163,8 @@ export default function App() {
           disabled={busy}
           autoFocus
         />
-        <button type="submit" disabled={busy || !input.trim()}>
-          Send
+        <button type="submit" disabled={busy || !input.trim()} title="send">
+          <Send size={16} />
         </button>
       </form>
     </main>
