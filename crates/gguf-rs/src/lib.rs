@@ -139,15 +139,15 @@ impl Model {
         max_tokens: usize,
         use_draft: bool,
     ) -> Result<(String, GenStats), String> {
-        let started = Instant::now();
         self.weights.clear_kv_cache();
         let mut hist = tok.encode(prompt, true)?;
         let prompt_tokens = hist.len();
-        let prompt_secs = started.elapsed().as_secs_f64();
 
+        let t0 = Instant::now();
         let mut generated = 0usize;
         let mut processed = hist.len();
         let mut next = sample(&self.forward(&hist, 0)?, TEMP)?;
+        let prompt_secs = t0.elapsed().as_secs_f64();
         while generated < max_tokens && !self.is_eos(next) {
             hist.push(next);
             generated += 1;
@@ -175,7 +175,7 @@ impl Model {
             processed += window;
             next = sample(&chunk_logits, TEMP)?;
         }
-        let decode_secs = started.elapsed().as_secs_f64() - prompt_secs;
+        let decode_secs = t0.elapsed().as_secs_f64() - prompt_secs;
         Ok((
             tok.decode(&hist[prompt_tokens..])?,
             GenStats {
