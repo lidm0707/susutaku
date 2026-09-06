@@ -1,0 +1,6 @@
+[package]
+name = "ai-interface-layer"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]

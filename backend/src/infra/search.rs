@@ -5,8 +5,8 @@ use crate::port::outbound::{Fetcher, Searcher};
 
 pub struct DuckDuckGo;
 
-impl From<core_agent::web_search::SearchResult> for SearchResult {
-    fn from(r: core_agent::web_search::SearchResult) -> Self {
+impl From<core_agent::toolcall::web_search::SearchResult> for SearchResult {
+    fn from(r: core_agent::toolcall::web_search::SearchResult) -> Self {
         Self {
             title: r.title,
             url: r.url,
@@ -17,7 +17,8 @@ impl From<core_agent::web_search::SearchResult> for SearchResult {
 
 impl Searcher for DuckDuckGo {
     fn search(&self, query: &str) -> Result<Vec<SearchResult>, String> {
-        core_agent::web_search::search(query).map(|hits| hits.into_iter().map(Into::into).collect())
+        core_agent::toolcall::web_search::search(query)
+            .map(|hits| hits.into_iter().map(Into::into).collect())
     }
 }
 

@@ -7,12 +7,13 @@ use crate::domain::{
     Prompt, SearchMode, SearchResult, TOOL_RESULT_HEADER, TOOL_ROUNDS_MAX, ToolCall,
 };
 use crate::port::inbound::{ChatCmd, ChatHandling, ChatOutcome};
-use crate::port::outbound::{Fetcher, GenReply, Inference, ModelSwitch, Searcher};
+use crate::port::outbound::{Fetcher, GenReply, Inference, ModelSwitch, Runner, Searcher};
 use susutaku_mlx::tok::TokKind;
 
 pub struct ChatUseCase {
     searcher: Arc<dyn Searcher>,
     fetcher: Arc<dyn Fetcher>,
+    runner: Arc<dyn Runner>,
     engine: Arc<dyn Inference>,
     models: Arc<dyn ModelSwitch>,
 }
@@ -21,12 +22,14 @@ impl ChatUseCase {
     pub fn new(
         searcher: Arc<dyn Searcher>,
         fetcher: Arc<dyn Fetcher>,
+        runner: Arc<dyn Runner>,
         engine: Arc<dyn Inference>,
         models: Arc<dyn ModelSwitch>,
     ) -> Self {
         Self {
             searcher,
             fetcher,
+            runner,
             engine,
             models,
         }
@@ -66,6 +69,14 @@ impl ChatUseCase {
             .await
             .map_err(|_| "fetch task panicked".to_string())?
     }
+
+    async fn shell_blocking(&self, cmd: &str) -> Result<String, String> {
+        let runner = Arc::clone(&self.runner);
+        let owned = cmd.to_string();
+        tokio::task::spawn_blocking(move || runner.run(&owned))
+            .await
+            .map_err(|_| "shell task panicked".to_string())?
+    }
 }
 
 impl ChatHandling for ChatUseCase {
@@ -100,6 +111,11 @@ impl ChatHandling for ChatUseCase {
                     let page = self.fetch_blocking(&url).await?;
                     context.push_str(TOOL_RESULT_HEADER);
                     context.push_str(&page);
+                }
+                ToolCall::Shell(cmd) => {
+                    let out = self.shell_blocking(&cmd).await?;
+                    context.push_str(TOOL_RESULT_HEADER);
+                    context.push_str(&out);
                 }
             }
             prompt = Prompt::build(&cmd.message, &context, allow_tools);

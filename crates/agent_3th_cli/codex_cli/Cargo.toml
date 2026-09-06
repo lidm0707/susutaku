@@ -1,0 +1,14 @@
+[package]
+name = "codex-cli"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+ai-interface-layer = { path = "../ai_interface_layer" }
+zai-api = { path = "../zai_api" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+ureq = { workspace = true, features = ["json"] }
+base64 = "0.22"
+sha2 = "0.10"
+rand = "0.8"

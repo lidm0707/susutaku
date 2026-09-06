@@ -6,10 +6,25 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, RwLock};
 
 use crate::port::outbound::{GenReply, Inference, ModelSwitch, ReplyRx};
-use susutaku_mlx::engine::Model;
 use susutaku_mlx::tok::{ChatTok, TokKind};
 
 pub const MODELS_ROOT: &str = "models";
+
+/// Which inference backend runs a model.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EngineKind {
+    Mlx,
+    Gguf,
+}
+
+impl EngineKind {
+    fn of(format: hf_loader::ModelFormat) -> Self {
+        match format {
+            hf_loader::ModelFormat::Gguf => Self::Gguf,
+            _ => Self::Mlx,
+        }
+    }
+}
 
 /// Thread-safe handle to the inference thread.
 #[derive(Clone)]
@@ -32,10 +47,17 @@ impl Engine {
         let models = hf_loader::loadable_models(&PathBuf::from(MODELS_ROOT));
         let entry = models
             .iter()
-            .find(|e| Model::supported(&e.path))
+            .find(|e| match e.format {
+                hf_loader::ModelFormat::Mlx => susutaku_mlx::engine::Model::supported(&e.path),
+                hf_loader::ModelFormat::Gguf => gguf_rs::Model::supported(&e.path),
+                hf_loader::ModelFormat::Unknown => false,
+            })
             .or_else(|| models.first())
-            .ok_or_else(|| format!("no loadable MLX 4bit model under {MODELS_ROOT}"))?;
-        Ok(Self::spawn(entry.path.clone()))
+            .ok_or_else(|| format!("no loadable 4bit model under {MODELS_ROOT}"))?;
+        Ok(Self::spawn(
+            entry.path.clone(),
+            EngineKind::of(entry.format.clone()),
+        ))
     }
 
     pub fn spawn_by_name(name: &str) -> Result<Engine, String> {
@@ -43,16 +65,20 @@ impl Engine {
             .into_iter()
             .find(|e| e.name == name)
             .ok_or_else(|| format!("no loadable model named `{name}` under {MODELS_ROOT}"))?;
-        Ok(Self::spawn(entry.path))
+        let kind = EngineKind::of(entry.format);
+        Ok(Self::spawn(entry.path, kind))
     }
 
-    fn spawn(model_dir: PathBuf) -> Engine {
+    fn spawn(model_dir: PathBuf, kind: EngineKind) -> Engine {
         let name = model_dir
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
         let (tx, rx) = channel::<Job>();
-        std::thread::spawn(move || run(model_dir, rx));
+        match kind {
+            EngineKind::Gguf => std::thread::spawn(move || run_gguf(model_dir, rx)),
+            EngineKind::Mlx => std::thread::spawn(move || run_mlx(model_dir, rx)),
+        };
         Engine {
             name: Arc::new(name),
             tx,
@@ -87,6 +113,55 @@ impl Inference for Engine {
     }
 }
 
+/// Shared tokenizer state used by both engine loops.
+struct Toks {
+    normal: Result<ChatTok, String>,
+    katgpt: Result<ChatTok, String>,
+}
+
+impl Toks {
+    fn load(model_dir: &std::path::Path, name: &str) -> Self {
+        Self {
+            normal: ChatTok::load(model_dir, TokKind::Normal)
+                .map_err(|e| format!("failed to read tokenizer in {name}: {e}")),
+            katgpt: ChatTok::load(model_dir, TokKind::Katgpt)
+                .map_err(|e| format!("failed to build katgpt tokenizer in {name}: {e}")),
+        }
+    }
+
+    fn pick(&self, kind: TokKind) -> Result<&ChatTok, String> {
+        match kind {
+            TokKind::Normal => self.normal.as_ref().map_err(|e| e.clone()),
+            TokKind::Katgpt => self.katgpt.as_ref().map_err(|e| e.clone()),
+        }
+    }
+}
+
+/// Stats reply shape shared by both engines.
+struct Reply {
+    text: String,
+    stats: susutaku_mlx::engine::GenStats,
+}
+
+fn serve_jobs(
+    rx: Receiver<Job>,
+    name: &str,
+    toks: &Toks,
+    mut generate: impl FnMut(&ChatTok, &str, bool, usize) -> Result<Reply, String>,
+) {
+    while let Ok(job) = rx.recv() {
+        let result = toks
+            .pick(job.tok)
+            .and_then(|tok| generate(tok, &job.prompt, job.think, job.max_tokens))
+            .map(|r| GenReply {
+                model: name.to_string(),
+                text: r.text,
+                stats: r.stats,
+            });
+        let _ = job.reply.send(result);
+    }
+}
+
 fn fail_all(rx: &Receiver<Job>, err: String) {
     for job in rx.iter() {
         let _ = job.reply.send(Err(err.clone()));
@@ -107,39 +182,46 @@ impl ModelPool {
     }
 }
 
-fn run(model_dir: PathBuf, rx: Receiver<Job>) {
+fn run_mlx(model_dir: PathBuf, rx: Receiver<Job>) {
     let name = model_dir
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let Ok(mut model) = Model::load(&model_dir) else {
+    let Ok(mut model) = susutaku_mlx::engine::Model::load(&model_dir) else {
         fail_all(&rx, format!("failed to load model {name}"));
         return;
     };
     // Both tokenizer variants are built once per model thread; a katgpt
     // build failure only surfaces when a job actually requests it.
-    let normal = ChatTok::load(&model_dir, TokKind::Normal)
-        .map_err(|e| format!("failed to read tokenizer in {name}: {e}"));
-    let katgpt = ChatTok::load(&model_dir, TokKind::Katgpt)
-        .map_err(|e| format!("failed to build katgpt tokenizer in {name}: {e}"));
-    while let Ok(job) = rx.recv() {
-        let picked = match job.tok {
-            TokKind::Normal => normal.as_ref().map_err(|e| e.clone()),
-            TokKind::Katgpt => katgpt.as_ref().map_err(|e| e.clone()),
-        };
-        let result = picked.and_then(|tokenizer| {
-            let prompt = model.chat_tpl().wrap(&job.prompt, job.think);
-            model
-                .chat_stats(tokenizer, &prompt, job.max_tokens)
-                .map(|(text, stats)| GenReply {
-                    model: name.clone(),
-                    text,
-                    stats,
-                })
-                .map_err(|e| e.to_string())
-        });
-        let _ = job.reply.send(result);
-    }
+    let toks = Toks::load(&model_dir, &name);
+    let tpl = model.chat_tpl();
+    serve_jobs(rx, &name, &toks, |tok, prompt, think, max_tokens| {
+        let wrapped = tpl.wrap(prompt, think);
+        model
+            .chat_stats(tok, &wrapped, max_tokens)
+            .map(|(text, stats)| Reply { text, stats })
+            .map_err(|e| e.to_string())
+    });
+}
+
+fn run_gguf(model_dir: PathBuf, rx: Receiver<Job>) {
+    let name = model_dir
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let Ok(mut model) = gguf_rs::Model::load(&model_dir) else {
+        fail_all(&rx, format!("failed to load model {name}"));
+        return;
+    };
+    let toks = Toks::load(&model_dir, &name);
+    let tpl = model.chat_tpl();
+    serve_jobs(rx, &name, &toks, |tok, prompt, think, max_tokens| {
+        let wrapped = tpl.wrap(prompt, think);
+        model
+            .chat_stats(tok, &wrapped, max_tokens)
+            .map(|(text, stats)| Reply { text, stats })
+            .map_err(|e| e.to_string())
+    });
 }
 
 impl Inference for ModelPool {

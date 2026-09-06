@@ -117,6 +117,14 @@ impl ChatTok {
         }
     }
 
+    /// Look up one special-token id by content, when the vocab defines it.
+    pub fn token_id(&self, token: &str) -> Option<u32> {
+        match self {
+            Self::Normal(t) => t.token_to_id(token),
+            Self::Katgpt(t) => t.inner.vocab_to_id.get(token).map(|&id| id as u32),
+        }
+    }
+
     pub fn decode(&self, ids: &[u32]) -> Result<String, String> {
         match self {
             Self::Normal(t) => t.decode(ids, true).map_err(|e| e.to_string()),

@@ -1,0 +1,9 @@
+[package]
+name = "zai-api"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+ai-interface-layer = { path = "../ai_interface_layer" }
+ureq = { workspace = true }
+serde_json = { workspace = true }

@@ -148,7 +148,7 @@ fn clean(value: Option<&str>) -> Option<String> {
     if text.is_empty() {
         return None;
     }
-    Some(crate::fetch::strip_tags(text))
+    Some(crate::toolcall::fetch::strip_tags(text))
 }
 
 #[cfg(test)]

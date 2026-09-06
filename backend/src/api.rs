@@ -10,6 +10,7 @@ use axum::{
     routing::{get, post},
 };
 use serde::{Deserialize, Serialize};
+use utoipa::OpenApi;
 
 use crate::domain::SearchMode;
 use crate::port::inbound::{ChatCmd, ChatHandling};
@@ -24,14 +25,21 @@ pub fn router<T: ChatHandling + ModelSwitch + 'static>(use_case: Arc<T>) -> Rout
         .route("/api/models", get(models))
         .route("/api/models/select", post(select_model))
         .route("/api/chat", post(chat))
+        .route("/api-docs/openapi.json", get(openapi_json))
         .fallback(not_found)
         .with_state(use_case)
 }
 
+#[utoipa::path(get, path = "/api/health", responses((status = 200, body = &str)))]
 async fn health() -> &'static str {
     "ok"
 }
 
+async fn openapi_json() -> Json<utoipa::openapi::OpenApi> {
+    Json(ApiDoc::openapi())
+}
+
+#[utoipa::path(get, path = "/api/models", responses((status = 200, body = [ModelInfo])))]
 async fn models<T: ModelSwitch>(State(use_case): State<Arc<T>>) -> Json<Vec<ModelInfo>> {
     let selected = use_case.selected();
     Json(
@@ -41,12 +49,19 @@ async fn models<T: ModelSwitch>(State(use_case): State<Arc<T>>) -> Json<Vec<Mode
                 name: m.name.clone(),
                 loadable: m.is_loadable(),
                 bytes: m.bytes,
+                engine: m.engine(),
                 selected: selected.as_deref() == Some(m.name.as_str()),
             })
             .collect(),
     )
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/models/select",
+    request_body = SelectRequest,
+    responses((status = 200, body = SelectReply), (status = 400, body = str))
+)]
 async fn select_model<T: ModelSwitch>(
     State(use_case): State<Arc<T>>,
     Json(req): Json<SelectRequest>,
@@ -55,6 +70,12 @@ async fn select_model<T: ModelSwitch>(
     Ok(Json(SelectReply { selected: req.name }))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/chat",
+    request_body = ChatRequest,
+    responses((status = 200, body = ChatReply), (status = 500, body = str))
+)]
 async fn chat<T: ChatHandling>(
     State(use_case): State<Arc<T>>,
     Json(req): Json<ChatRequest>,
@@ -86,7 +107,26 @@ async fn not_found(_req: Request) -> Response {
     (StatusCode::NOT_FOUND, "not found").into_response()
 }
 
-#[derive(Deserialize)]
+#[derive(OpenApi)]
+#[openapi(
+    info(title = "susutaku backend", license(name = "MIT", url = "https://opensource.org/licenses/MIT")),
+    paths(
+        health,
+        models,
+        select_model,
+        chat,
+    ),
+    components(schemas(
+        ModelInfo,
+        SelectRequest,
+        SelectReply,
+        ChatRequest,
+        ChatReply,
+    ))
+)]
+struct ApiDoc;
+
+#[derive(Deserialize, utoipa::ToSchema)]
 struct ChatRequest {
     message: String,
     max_tokens: Option<usize>,
@@ -98,7 +138,7 @@ struct ChatRequest {
     think: Option<bool>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 struct ChatReply {
     model: Option<String>,
     reply: String,
@@ -110,20 +150,21 @@ struct ChatReply {
     decode_tps: f64,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 struct ModelInfo {
     name: String,
     loadable: bool,
     bytes: u64,
+    engine: &'static str,
     selected: bool,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 struct SelectRequest {
     name: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 struct SelectReply {
     selected: String,
 }

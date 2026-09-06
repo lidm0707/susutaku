@@ -5,8 +5,12 @@ members = [
     "crates/core-agent",
     "crates/hf_loader",
     "crates/mlx-rs",
+    "crates/gguf-rs",
+    "crates/agent_3th_cli/codex_cli",
     "crates/pdf-rs",
     "crates/work",
+    "crates/agent_3th_cli/ai_interface_layer",
+    "crates/agent_3th_cli/zai_api",
 ]
 
 [workspace.package]
@@ -16,6 +20,7 @@ edition = "2024"
 [workspace.dependencies]
 hf_loader = { path = "crates/hf_loader" }
 susutaku-mlx = { path = "crates/mlx-rs" }
+gguf-rs = { path = "crates/gguf-rs" }
 pdf-rs = { path = "crates/pdf-rs" }
 core-agent = { path = "crates/core-agent" }
 ureq = "2"
@@ -24,6 +29,9 @@ pdf-extract = "0.7"
 mlx-rs = { version = "0.25", features = ["safetensors"] }
 tokenizers = "0.21"
 katgpt-tokenizer = { git = "https://github.com/lidm0707/katgpt-rs", branch = "main" }
+katgpt-speculative = { git = "https://github.com/lidm0707/katgpt-rs", branch = "main", default-features = false, features = [
+    "bigram_markov",
+] }
 katgpt-core = { git = "https://github.com/lidm0707/katgpt-rs", branch = "main", default-features = false, features = [
     "usage_rate_eviction",
 ] }

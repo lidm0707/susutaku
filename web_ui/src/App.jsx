@@ -26,6 +26,7 @@ export default function App() {
   const [models, setModels] = useState([]);
   const [model, setModel] = useState("");
   const [error, setError] = useState("");
+  const engine = models.find((m) => m.name === model)?.engine || "mlx";
 
   async function pick(name) {
     const res = await fetch(`${API_BASE}/api/models/select`, {
@@ -88,7 +89,7 @@ export default function App() {
     <main className="chat">
       <header>
         <h1>susutaku</h1>
-        <span className="sub">{model || "mlx"} · inline</span>
+        <span className="sub">{model || "—"} · {engine === "gguf" ? "🧊 gguf" : "⚡ mlx"} · inline</span>
       </header>
       <section className="log">
         {messages.length === 0 && <p className="empty">Say something to the model.</p>}
@@ -116,7 +117,7 @@ export default function App() {
           {models.map((m) => (
             <option key={m.name} value={m.name} disabled={!m.loadable}>
               {m.selected ? "★ " : ""}
-              {m.name}
+              {m.engine === "gguf" ? "🧊" : "⚡"} {m.name}
             </option>
           ))}
         </select>

@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use app::ChatUseCase;
 use infra::engine::ModelPool;
+use infra::sandbox::AgentSandbox;
 use infra::search::{DuckDuckGo, PageFetcher};
 
 const PORT: u16 = 8991;
@@ -16,9 +17,11 @@ const PORT: u16 = 8991;
 #[tokio::main]
 async fn main() {
     let engine = ModelPool::spawn_first().expect("model init");
+    let sandbox = Arc::new(AgentSandbox::restore().expect("agent sandbox init"));
     let use_case = Arc::new(ChatUseCase::new(
         Arc::new(DuckDuckGo),
         Arc::new(PageFetcher),
+        sandbox,
         Arc::new(engine.clone()),
         Arc::new(engine),
     ));

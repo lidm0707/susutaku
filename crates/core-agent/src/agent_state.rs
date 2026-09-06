@@ -1,6 +1,6 @@
 use std::sync::RwLock;
 
-use crate::web_search::SearchResult;
+use crate::toolcall::web_search::SearchResult;
 
 pub const MAX_HISTORY: usize = 128;
 

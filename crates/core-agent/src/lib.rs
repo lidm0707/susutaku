@@ -1,10 +1,9 @@
 pub mod agent_state;
-pub mod fetch;
 #[cfg(target_os = "linux")]
 pub mod linux_workspace;
 #[cfg(target_os = "macos")]
 pub mod macos_workspace;
-pub mod web_search;
+pub mod toolcall;
 
 pub fn run_in_workspace(cmd: &str) -> Result<String, std::io::Error> {
     #[cfg(target_os = "macos")]

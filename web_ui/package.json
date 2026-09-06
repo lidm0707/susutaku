@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "gen:api": "orval --config orval.config.ts"
   },
   "dependencies": {
     "react": "^18.3.1",
@@ -14,6 +15,8 @@
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.4",
+    "orval": "^7.13.0",
+    "typescript": "^5.7.0",
     "vite": "^6.0.0"
   }
 }

@@ -12,17 +12,19 @@ pub const CONTEXT_FOOTER: &str = "\n\nUse the results above when relevant. Quest
 /// Tool-use protocol (Zed-style): the model calls tools by starting its reply
 /// with a TOOL: line. Max tool rounds before a forced final answer.
 pub const TOOL_ROUNDS_MAX: usize = 2;
-pub const TOOL_INSTRUCTION: &str = "You HAVE web tools and MUST use them when the question involves current/web information:\n- TOOL: SEARCH <query> - search the web\n- TOOL: FETCH <url> - read a web page\nIf a tool would help, reply with ONLY one tool line (like: TOOL: SEARCH apple mlx). The system runs it and gives you results. Never say you cannot access the web. Otherwise answer directly.\n\n";
+pub const TOOL_INSTRUCTION: &str = "You HAVE web tools and MUST use them when the question involves current/web information:\n- TOOL: SEARCH <query> - search the web\n- TOOL: FETCH <url> - read a web page\n- TOOL: SHELL <cmd> - run a shell command inside the agent sandbox\nIf a tool would help, reply with ONLY one tool line (like: TOOL: SEARCH apple mlx). The system runs it and gives you results. Never say you cannot access the web. Otherwise answer directly.\n\n";
 pub const TOOL_RESULT_HEADER: &str = "\n\nTool results:\n";
 const TOOL_PREFIX: &str = "TOOL:";
 const TOOL_SEARCH: &str = "SEARCH";
 const TOOL_FETCH: &str = "FETCH";
+const TOOL_SHELL: &str = "SHELL";
 
 /// A tool invocation parsed out of a model reply.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ToolCall {
     Search(String),
     Fetch(String),
+    Shell(String),
 }
 
 impl ToolCall {
@@ -42,8 +44,23 @@ impl ToolCall {
         match kind.to_uppercase().as_str() {
             TOOL_SEARCH => Some(Self::Search(arg.to_string())),
             TOOL_FETCH => Some(Self::Fetch(arg.to_string())),
+            TOOL_SHELL => Some(Self::Shell(arg.to_string())),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_shell_tool_call() {
+        let reply = "</think>\nTOOL: SHELL ls -la";
+        assert_eq!(
+            ToolCall::parse(reply),
+            Some(ToolCall::Shell("ls -la".into()))
+        );
     }
 }
 

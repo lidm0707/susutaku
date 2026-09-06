@@ -11,6 +11,8 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 hf_loader = { workspace = true }
 susutaku-mlx = { workspace = true }
+gguf-rs = { workspace = true }
 core-agent = { workspace = true }
 tokenizers = { workspace = true }
 ureq = { workspace = true }
+utoipa = { version = "5", features = ["axum_extras"] }
