@@ -13,7 +13,9 @@ sqlx = { version = "0.8", default-features = false, features = [
     "tls-rustls",
     "postgres",
     "macros",
+    "chrono",
 ] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
 thiserror = "2"
 piplines = { workspace = true }
 

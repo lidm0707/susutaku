@@ -4,6 +4,7 @@ import {
   Box,
   Brain,
   KanbanSquare,
+  MessageSquareText,
   Send,
   Settings,
   SlidersHorizontal,
@@ -149,6 +150,7 @@ export default function Chat() {
           <CodexLogin />
           <Link to="/models" title="models"><Settings size={16} /></Link>
           <Link to="/kanban" title="kanban"><KanbanSquare size={16} /></Link>
+          <Link to="/prompts" title="prompts"><MessageSquareText size={16} /></Link>
           <Link to="/sandbox" title="sandbox"><Box size={16} /></Link>
           <Link to="/settings" title="z.ai settings"><SlidersHorizontal size={16} /></Link>
         </nav>

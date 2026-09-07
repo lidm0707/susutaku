@@ -20,4 +20,10 @@ codex-cli = { path = "../crates/agent_3th_cli/codex_cli" }
 zai-api = { path = "../crates/agent_3th_cli/zai_api" }
 ai-interface-layer = { path = "../crates/agent_3th_cli/ai_interface_layer" }
 kanban-rs = { workspace = true }
+prompt-sys = { workspace = true }
 utoipa = { version = "5", features = ["axum_extras"] }
+async-trait = "0.1"
+mockall = "0.13"
+
+[dev-dependencies]
+chrono = "0.4"

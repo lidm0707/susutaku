@@ -10,6 +10,9 @@ pub const TABLE_NAME: &str = "kanban_cards";
 pub const NO_SUCH_CARD_MSG: &str = "no such card";
 pub const NO_SUCH_COLUMN_MSG: &str = "no such column";
 
+/// Open transaction on the store pool; repos run multi-statement writes on it.
+pub type DbTx = sqlx::Transaction<'static, sqlx::Postgres>;
+
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
     #[error("{NO_SUCH_CARD_MSG}")]
@@ -59,8 +62,8 @@ pub struct CardRow {
     pub position: i32,
     pub agent_name: Option<String>,
     pub agent_state: Option<String>,
+    pub assignee: Option<String>,
     pub pipeline_id: Option<i64>,
-    pub pipeline_name: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -82,6 +85,22 @@ pub struct MoveCard<'a> {
     pub id: i64,
     pub column_id: &'a str,
     pub position: i32,
+}
+
+pub struct UpdateCard<'a> {
+    pub id: i64,
+    pub title: &'a str,
+    pub description: &'a str,
+    pub assignee: Option<&'a str>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CommentRow {
+    pub id: i64,
+    pub card_id: i64,
+    pub author: String,
+    pub body: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
 #[derive(Clone)]
@@ -160,6 +179,21 @@ CREATE TABLE IF NOT EXISTS agent_settings (
     r#"
 ALTER TABLE kanban_cards ADD COLUMN IF NOT EXISTS pipeline_id BIGINT REFERENCES pipelines(id) ON DELETE SET NULL;
 "#,
+    r#"
+ALTER TABLE kanban_cards ADD COLUMN IF NOT EXISTS assignee TEXT;
+"#,
+    r#"
+CREATE TABLE IF NOT EXISTS kanban_comments (
+    id         BIGSERIAL PRIMARY KEY,
+    card_id    BIGINT NOT NULL REFERENCES kanban_cards(id) ON DELETE CASCADE,
+    author     TEXT NOT NULL,
+    body       TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+"#,
+    r#"
+CREATE INDEX IF NOT EXISTS kanban_comments_card_idx ON kanban_comments (card_id, id);
+"#,
 ];
 
 impl Store {
@@ -178,13 +212,11 @@ impl Store {
     pub async fn list(&self, project_id: Option<i64>) -> Result<Vec<CardRow>, StoreError> {
         let rows = sqlx::query_as!(
             CardRow,
-            r#"SELECT c.id, c.column_id, c.project_id, c.title, c.description,
-                      c.priority, c.position, c.agent_name, c.agent_state,
-                      c.pipeline_id, p.name AS "pipeline_name: Option<String>"
-               FROM kanban_cards c
-               LEFT JOIN pipelines p ON p.id = c.pipeline_id
-               WHERE ($1::bigint IS NULL OR c.project_id = $1)
-               ORDER BY c.column_id, c.position, c.id"#,
+            r#"SELECT id, column_id, project_id, title, description,
+                      priority, position, agent_name, agent_state, assignee, pipeline_id
+               FROM kanban_cards
+               WHERE ($1::bigint IS NULL OR project_id = $1)
+               ORDER BY column_id, position, id"#,
             project_id
         )
         .fetch_all(&self.pool)
@@ -213,12 +245,9 @@ impl Store {
     pub async fn get(&self, id: i64) -> Result<Option<CardRow>, StoreError> {
         let row = sqlx::query_as!(
             CardRow,
-            r#"SELECT c.id, c.column_id, c.project_id, c.title, c.description,
-                      c.priority, c.position, c.agent_name, c.agent_state,
-                      c.pipeline_id, p.name AS "pipeline_name: Option<String>"
-               FROM kanban_cards c
-               LEFT JOIN pipelines p ON p.id = c.pipeline_id
-               WHERE c.id = $1"#,
+            r#"SELECT id, column_id, project_id, title, description,
+                      priority, position, agent_name, agent_state, assignee, pipeline_id
+               FROM kanban_cards WHERE id = $1"#,
             id
         )
         .fetch_optional(&self.pool)
@@ -227,25 +256,9 @@ impl Store {
     }
 
     pub async fn move_card(&self, mv: MoveCard<'_>) -> Result<(), StoreError> {
-        let found = sqlx::query!(
-            r#"SELECT 1 AS "one!" FROM kanban_cards WHERE id = $1"#,
-            mv.id
-        )
-        .fetch_optional(&self.pool)
-        .await?;
-        if found.is_none() {
-            return Err(StoreError::NoSuchCard);
-        }
-        sqlx::query!(
-            r#"UPDATE kanban_cards
-               SET column_id = $2, position = $3
-               WHERE id = $1"#,
-            mv.id,
-            mv.column_id,
-            mv.position,
-        )
-        .execute(&self.pool)
-        .await?;
+        let mut tx = self.begin().await?;
+        self.move_card_tx(&mut tx, &mv).await?;
+        tx.commit().await?;
         Ok(())
     }
 
@@ -313,6 +326,160 @@ impl Store {
         if res.rows_affected() == 0 {
             return Err(StoreError::NoSuchCard);
         }
+        Ok(())
+    }
+
+    pub async fn update_card(&self, u: UpdateCard<'_>) -> Result<(), StoreError> {
+        let res = sqlx::query!(
+            r#"UPDATE kanban_cards
+               SET title = $2, description = $3, assignee = $4
+               WHERE id = $1"#,
+            u.id,
+            u.title,
+            u.description,
+            u.assignee,
+        )
+        .execute(&self.pool)
+        .await?;
+        if res.rows_affected() == 0 {
+            return Err(StoreError::NoSuchCard);
+        }
+        Ok(())
+    }
+
+    pub async fn list_comments(&self, card_id: i64) -> Result<Vec<CommentRow>, StoreError> {
+        let rows = sqlx::query_as!(
+            CommentRow,
+            r#"SELECT id, card_id, author, body, created_at
+               FROM kanban_comments WHERE card_id = $1 ORDER BY id"#,
+            card_id
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    pub async fn add_comment(
+        &self,
+        card_id: i64,
+        author: &str,
+        body: &str,
+    ) -> Result<i64, StoreError> {
+        let mut tx = self.begin().await?;
+        if !self.card_exists_tx(&mut tx, card_id).await? {
+            return Err(StoreError::NoSuchCard);
+        }
+        let id = self.add_comment_tx(&mut tx, card_id, author, body).await?.id;
+        tx.commit().await?;
+        Ok(id)
+    }
+
+    pub async fn begin(&self) -> Result<DbTx, StoreError> {
+        let tx = self.pool.begin().await?;
+        Ok(tx)
+    }
+
+    pub async fn add_tx(&self, tx: &mut DbTx, card: AddCard<'_>) -> Result<i64, StoreError> {
+        let row = sqlx::query_as!(
+            NewId,
+            r#"INSERT INTO kanban_cards (column_id, project_id, title, description, priority, position)
+               VALUES ($1, $5, $2, $3, $4,
+                       COALESCE((SELECT MAX(position) + 1 FROM kanban_cards WHERE column_id = $1), 0))
+               RETURNING id AS "id: i64""#,
+            card.column_id,
+            card.title,
+            card.description,
+            card.priority,
+            card.project_id,
+        )
+        .fetch_one(&mut **tx)
+        .await?;
+        Ok(row.id)
+    }
+
+    pub async fn get_tx(&self, tx: &mut DbTx, id: i64) -> Result<Option<CardRow>, StoreError> {
+        let row = sqlx::query_as!(
+            CardRow,
+            r#"SELECT id, column_id, project_id, title, description,
+                      priority, position, agent_name, agent_state, assignee, pipeline_id
+               FROM kanban_cards WHERE id = $1"#,
+            id
+        )
+        .fetch_optional(&mut **tx)
+        .await?;
+        Ok(row)
+    }
+
+    pub async fn update_card_tx(&self, tx: &mut DbTx, u: UpdateCard<'_>) -> Result<(), StoreError> {
+        let res = sqlx::query!(
+            r#"UPDATE kanban_cards
+               SET title = $2, description = $3, assignee = $4
+               WHERE id = $1"#,
+            u.id,
+            u.title,
+            u.description,
+            u.assignee,
+        )
+        .execute(&mut **tx)
+        .await?;
+        if res.rows_affected() == 0 {
+            return Err(StoreError::NoSuchCard);
+        }
+        Ok(())
+    }
+
+    pub async fn card_exists_tx(&self, tx: &mut DbTx, id: i64) -> Result<bool, StoreError> {
+        let found = sqlx::query!(
+            r#"SELECT 1 AS "one!" FROM kanban_cards WHERE id = $1"#,
+            id
+        )
+        .fetch_optional(&mut **tx)
+        .await?;
+        Ok(found.is_some())
+    }
+
+    /// Inserts a comment and returns the full row (id, author, body, created_at).
+    pub async fn add_comment_tx(
+        &self,
+        tx: &mut DbTx,
+        card_id: i64,
+        author: &str,
+        body: &str,
+    ) -> Result<CommentRow, StoreError> {
+        let row = sqlx::query_as!(
+            CommentRow,
+            r#"INSERT INTO kanban_comments (card_id, author, body)
+               VALUES ($1, $2, $3)
+               RETURNING id, card_id, author, body, created_at"#,
+            card_id,
+            author,
+            body,
+        )
+        .fetch_one(&mut **tx)
+        .await?;
+        Ok(row)
+    }
+
+    pub async fn move_card_tx(&self, tx: &mut DbTx, mv: &MoveCard<'_>) -> Result<(), StoreError> {
+        let found = sqlx::query!(
+            r#"SELECT 1 AS "one!" FROM kanban_cards WHERE id = $1"#,
+            mv.id
+        )
+        .fetch_optional(&mut **tx)
+        .await?;
+        if found.is_none() {
+            return Err(StoreError::NoSuchCard);
+        }
+        sqlx::query!(
+            r#"UPDATE kanban_cards
+               SET column_id = $2, position = $3
+               WHERE id = $1"#,
+            mv.id,
+            mv.column_id,
+            mv.position,
+        )
+        .execute(&mut **tx)
+        .await?;
         Ok(())
     }
 }

@@ -63,8 +63,17 @@ export interface Card {
   priority: string;
   agent_name?: string;
   agent_state?: unknown;
+  assignee?: string | null;
   pipeline_id?: number | null;
   pipeline_name?: string;
+}
+
+export interface Comment {
+  id: number;
+  card_id: number;
+  author: string;
+  body: string;
+  created_at: string;
 }
 
 export interface PipelineNode {
@@ -98,6 +107,17 @@ export interface SandboxDir {
 export interface ZaiSettings {
   api_key_set: boolean;
   model: string;
+}
+
+export interface PromptSection {
+  role: string;
+  body: string;
+}
+
+export interface RenderedPrompt {
+  rendered: string;
+  chars: number;
+  max_chars: number;
 }
 
 export interface UserInfo {
@@ -270,11 +290,25 @@ export async function save_zai_settings(api_key: string, model: string): Promise
   return res.json();
 }
 
-export async function chat_zai(message: string, model: string): Promise<ChatReply> {
+export async function chat_zai(
+  message: string,
+  model: string,
+  system?: PromptSection[]
+): Promise<ChatReply> {
   const res = await fetch(`${API_BASE}/api/chat/zai`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message, model: model || undefined }),
+    body: JSON.stringify({ message, model: model || undefined, system }),
+  });
+  if (!res.ok) throw new ApiError(res.status, await res.text());
+  return res.json();
+}
+
+export async function render_prompt(sections: PromptSection[]): Promise<RenderedPrompt> {
+  const res = await fetch(`${API_BASE}/api/prompts/render`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sections }),
   });
   if (!res.ok) throw new ApiError(res.status, await res.text());
   return res.json();
@@ -354,6 +388,33 @@ export async function move_card(id: number, column_id: string, position: number)
 
 export async function remove_card(id: number): Promise<Response> {
   return api(`/api/kanban/cards/${id}`, { method: "DELETE" });
+}
+
+export async function update_card(
+  id: number,
+  title: string,
+  description: string,
+  assignee: string | null
+): Promise<Card> {
+  const res = await api(`/api/kanban/cards/${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title, description, assignee }),
+  });
+  return res.json();
+}
+
+export async function fetch_comments(card_id: number): Promise<Comment[]> {
+  return (await api(`/api/kanban/cards/${card_id}/comments`)).json();
+}
+
+export async function add_comment(card_id: number, body: string): Promise<Comment> {
+  const res = await api(`/api/kanban/cards/${card_id}/comments`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ body }),
+  });
+  return res.json();
 }
 
 export async function fetch_pipelines(): Promise<Pipeline[]> {

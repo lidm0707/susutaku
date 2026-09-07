@@ -12,7 +12,9 @@ pub use agent_cfg::{AgentConfigRow, AgentConfigUpdate};
 pub use board::{Board, BoardError, Column};
 pub use card::{Card, CardId, Priority, PRIORITY_CRITICAL, PRIORITY_HIGH, PRIORITY_LOW, PRIORITY_NORMAL};
 pub use pipeline::PipelineRow;
-pub use store::{AddCard, AgentState, CardRow, MoveCard, Store, StoreError};
+pub use store::{
+    AddCard, AgentState, CardRow, CommentRow, DbTx, MoveCard, Store, StoreError, UpdateCard,
+};
 pub use user::{NewUser, Role, UserRow, DEFAULT_ADMIN_PASSWORD, DEFAULT_ADMIN_USER, MIN_PASSWORD_LEN};
 pub use workspace::{ProjectRow, WorkspaceRow};
 

@@ -1,13 +1,15 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { ArrowLeft, ArrowRight, Bot, LogOut, Plus, Trash2, Workflow, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, Bot, LogOut, Plus, Trash2, User, Workflow } from "lucide-react";
 import {
   clear_token,
+  add_comment,
   create_card,
   create_project,
   create_workspace,
   fetch_agents,
   fetch_cards,
+  fetch_comments,
   fetch_pipelines,
   fetch_projects,
   fetch_workspaces,
@@ -15,12 +17,15 @@ import {
   remove_card,
   set_agent,
   set_card_pipeline,
+  update_card,
   type Agent,
   type Card,
+  type Comment,
   type Pipeline,
   type Project,
   type Workspace,
 } from "../lib.js";
+import { Modal, PromptModal, SlideOver } from "../ui/Overlay.js";
 
 const COLUMNS = [
   { id: "todo", title: "To Do" },
@@ -50,6 +55,15 @@ export default function Kanban() {
   const [pipeFor, setPipeFor] = useState<Card | null>(null);
   const [pipePick, setPipePick] = useState("");
   const [pipelines, setPipelines] = useState<Pipeline[] | null>(null);
+  const [detail, setDetail] = useState<Card | null>(null);
+  const [dTitle, setDTitle] = useState("");
+  const [dDesc, setDDesc] = useState("");
+  const [dAssignee, setDAssignee] = useState("");
+  const [dComments, setDComments] = useState<Comment[]>([]);
+  const [dCommentBody, setDCommentBody] = useState("");
+  const [prompting, setPrompting] = useState<null | "workspace" | "project">(null);
+  const [dragOver, setDragOver] = useState<ColumnId | null>(null);
+  const [draggingId, setDraggingId] = useState<number | null>(null);
 
   useEffect(() => {
     load_workspaces();
@@ -112,24 +126,22 @@ export default function Kanban() {
     setProjectId(null);
   }
 
-  async function add_workspace() {
-    const name = window.prompt("workspace name");
-    if (!name?.trim()) return;
+  async function add_workspace(name: string) {
+    setPrompting(null);
     setError("");
     try {
-      await create_workspace(name.trim());
+      await create_workspace(name);
       await load_workspaces();
     } catch (err) {
       handle(err);
     }
   }
 
-  async function add_project() {
-    const name = window.prompt("project name");
-    if (!name?.trim()) return;
+  async function add_project(name: string) {
+    setPrompting(null);
     setError("");
     try {
-      await create_project(wsId as number, name.trim());
+      await create_project(wsId as number, name);
       await load_projects();
     } catch (err) {
       handle(err);
@@ -190,6 +202,61 @@ export default function Kanban() {
       card.agent_state ? JSON.stringify(card.agent_state, null, 2) : "{}"
     );
     fetch_agents().then(setSavedAgents).catch(() => setSavedAgents([]));
+  }
+
+  async function open_detail(card: Card) {
+    setDetail(card);
+    setDTitle(card.title);
+    setDDesc(card.description);
+    setDAssignee(card.assignee || "");
+    setDComments([]);
+    setDCommentBody("");
+    fetch_agents().then(setSavedAgents).catch(() => setSavedAgents([]));
+    try {
+      setDComments(await fetch_comments(card.id));
+    } catch (err) {
+      handle(err);
+    }
+  }
+
+  async function save_detail(e: React.FormEvent) {
+    e.preventDefault();
+    if (!detail || !dTitle.trim()) return;
+    setError("");
+    try {
+      await update_card(detail.id, dTitle.trim(), dDesc, dAssignee.trim() || null);
+      setDetail(null);
+      await refresh();
+    } catch (err) {
+      handle(err);
+    }
+  }
+
+  async function comment(e: React.FormEvent) {
+    e.preventDefault();
+    if (!detail || !dCommentBody.trim()) return;
+    setError("");
+    try {
+      await add_comment(detail.id, dCommentBody.trim());
+      setDCommentBody("");
+      setDComments(await fetch_comments(detail.id));
+    } catch (err) {
+      handle(err);
+    }
+  }
+
+  function pick_detail_bot(id: string) {
+    const a = savedAgents.find((x) => x.id === Number(id));
+    if (!a || !detail) return;
+    setError("");
+    set_agent(
+      detail.id,
+      a.name,
+      { model: a.model, persona: a.persona, prompt: a.prompt, output: a.output }
+    )
+      .then(refresh)
+      .then(() => setDetail(null))
+      .catch(handle);
   }
 
   function load_saved_agent(id: string) {
@@ -265,7 +332,7 @@ export default function Kanban() {
               <option key={w.id} value={w.id}>{w.name}</option>
             ))}
           </select>
-          <button className="kanban-mini" onClick={add_workspace} title="new workspace">+</button>
+          <button className="kanban-mini" onClick={() => setPrompting("workspace")} title="new workspace">+</button>
           <select
             className="kanban-select"
             value={projectId ?? ""}
@@ -277,7 +344,7 @@ export default function Kanban() {
               <option key={p.id} value={p.id}>{p.name}</option>
             ))}
           </select>
-          <button className="kanban-mini" onClick={add_project} disabled={wsId == null} title="new project">+</button>
+          <button className="kanban-mini" onClick={() => setPrompting("project")} disabled={wsId == null} title="new project">+</button>
           <Link to="/pipelines" title="pipelines"><Workflow size={16} /></Link>
           <Link to="/agents" title="saved agents"><Bot size={16} /></Link>
           <Link to="/" title="logout / switch user"><LogOut size={16} /></Link>
@@ -304,9 +371,16 @@ export default function Kanban() {
         {COLUMNS.map((col) => (
           <div
             key={col.id}
-            className="kanban-col"
-            onDragOver={(e: React.DragEvent<HTMLDivElement>) => e.preventDefault()}
+            className={dragOver === col.id ? "kanban-col drag-over" : "kanban-col"}
+            onDragOver={(e: React.DragEvent<HTMLDivElement>) => {
+              e.preventDefault();
+              setDragOver(col.id);
+            }}
+            onDragLeave={() => setDragOver((cur) => (cur === col.id ? null : cur))}
             onDrop={(e: React.DragEvent<HTMLDivElement>) => {
+              e.preventDefault();
+              setDragOver(null);
+              setDraggingId(null);
               const id = Number(e.dataTransfer.getData("text/plain"));
               const card = cards.find((k) => k.id === id);
               if (card) drop(card, col.id);
@@ -316,9 +390,13 @@ export default function Kanban() {
             {byColumn[col.id].map((card) => (
               <div
                 key={card.id}
-                className="kanban-card"
+                className={draggingId === card.id ? "kanban-card dragging" : "kanban-card"}
                 draggable
-                onDragStart={(e: React.DragEvent<HTMLDivElement>) => e.dataTransfer.setData("text/plain", String(card.id))}
+                onDragStart={(e: React.DragEvent<HTMLDivElement>) => {
+                  e.dataTransfer.setData("text/plain", String(card.id));
+                  setDraggingId(card.id);
+                }}
+                onDragEnd={() => setDraggingId(null)}
               >
                 <div className="kanban-card-top">
                   <span className={`kanban-prio prio-${card.priority}`}>{card.priority}</span>
@@ -342,10 +420,22 @@ export default function Kanban() {
                     </button>
                   </span>
                 </div>
-                <span className="kanban-title">{card.title}</span>
+                <span className="kanban-title kanban-title-link" onClick={() => open_detail(card)} title="open card">
+                  {card.title}
+                </span>
+                {card.description && (
+                  <span className="kanban-desc" title={card.description}>
+                    {card.description}
+                  </span>
+                )}
                 {card.agent_name && (
                   <span className="kanban-agent">
                     <Bot size={11} /> {card.agent_name}
+                  </span>
+                )}
+                {card.assignee && (
+                  <span className="kanban-agent">
+                    <User size={11} /> {card.assignee}
                   </span>
                 )}
                 {card.pipeline_name && (
@@ -366,13 +456,19 @@ export default function Kanban() {
           </div>
         ))}
       </section>
-      {agentFor && (
-        <div className="kanban-modal" onClick={() => setAgentFor(null)}>
-          <form className="kanban-modal-box" onClick={(e) => e.stopPropagation()} onSubmit={save_agent}>
-            <header>
-              <h2><Bot size={14} /> agent on card #{agentFor.id}</h2>
-              <button type="button" onClick={() => setAgentFor(null)} title="close"><X size={14} /></button>
-            </header>
+      <PromptModal
+        open={prompting != null}
+        title={prompting === "project" ? "new project" : "new workspace"}
+        placeholder="name…"
+        on_close={() => setPrompting(null)}
+        on_submit={(v) => (prompting === "project" ? add_project(v) : add_workspace(v))}
+      />
+      <Modal
+        open={agentFor != null}
+        title={<><Bot size={14} /> agent on card #{agentFor?.id}</>}
+        on_close={() => setAgentFor(null)}
+      >
+        <form className="modal-form" onSubmit={save_agent}>
             <select
               className="kanban-select"
               value=""
@@ -396,16 +492,14 @@ export default function Kanban() {
               spellCheck={false}
             />
             <button type="submit" disabled={!agentName.trim()}>save agent state</button>
-          </form>
-        </div>
-      )}
-      {pipeFor && (
-        <div className="kanban-modal" onClick={() => setPipeFor(null)}>
-          <form className="kanban-modal-box" onClick={(e) => e.stopPropagation()} onSubmit={save_pipeline}>
-            <header>
-              <h2><Workflow size={14} /> pipeline on card #{pipeFor.id}</h2>
-              <button type="button" onClick={() => setPipeFor(null)} title="close"><X size={14} /></button>
-            </header>
+        </form>
+      </Modal>
+      <Modal
+        open={pipeFor != null}
+        title={<><Workflow size={14} /> pipeline on card #{pipeFor?.id}</>}
+        on_close={() => setPipeFor(null)}
+      >
+        <form className="modal-form" onSubmit={save_pipeline}>
             <select
               className="kanban-select pipeline-pick"
               value={pipePick}
@@ -417,9 +511,69 @@ export default function Kanban() {
               ))}
             </select>
             <button type="submit">save</button>
-          </form>
-        </div>
-      )}
+        </form>
+      </Modal>
+      <SlideOver
+        open={detail != null}
+        title={<>card #{detail?.id}</>}
+        on_close={() => setDetail(null)}
+      >
+            <form className="kanban-detail-form" onSubmit={save_detail}>
+              <input
+                value={dTitle}
+                onChange={(e) => setDTitle(e.target.value)}
+                placeholder="title"
+              />
+              <textarea
+                value={dDesc}
+                onChange={(e) => setDDesc(e.target.value)}
+                rows={4}
+                spellCheck={false}
+                placeholder="description…"
+              />
+              <div className="kanban-assign-row">
+                <User size={13} />
+                <input
+                  className="kanban-select"
+                  value={dAssignee}
+                  onChange={(e) => setDAssignee(e.target.value)}
+                  placeholder="assign person…"
+                />
+                <select
+                  className="kanban-select"
+                  value=""
+                  onChange={(e) => pick_detail_bot(e.target.value)}
+                  title="assign bot (saved agent)"
+                >
+                  <option value="">assign bot…</option>
+                  {savedAgents.map((a) => (
+                    <option key={a.id} value={a.id}>{a.name}</option>
+                  ))}
+                </select>
+              </div>
+              <button type="submit" disabled={!dTitle.trim()}>save</button>
+            </form>
+            <div className="kanban-comments">
+              {dComments.map((c) => (
+                <div key={c.id} className="kanban-comment">
+                  <span className="kanban-comment-meta">
+                    <strong>{c.author}</strong> {new Date(c.created_at).toLocaleString()}
+                  </span>
+                  <span>{c.body}</span>
+                </div>
+              ))}
+              <form className="kanban-add" onSubmit={comment}>
+                <input
+                  value={dCommentBody}
+                  onChange={(e) => setDCommentBody(e.target.value)}
+                  placeholder="write a comment…"
+                />
+                <button type="submit" disabled={!dCommentBody.trim()}>
+                  <Plus size={14} />
+                </button>
+              </form>
+            </div>
+      </SlideOver>
     </main>
   );
 }

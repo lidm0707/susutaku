@@ -2,13 +2,14 @@ import React, { useEffect } from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter, Navigate, Route, Routes, useNavigate } from "react-router-dom";
 import Chat from "./pages/Chat.jsx";
-import AgentSettings from "./pages/AgentSettings.jsx";
+import AgentSettings from "./features/agents/AgentSettings.jsx";
 import Kanban from "./pages/Kanban.jsx";
 import Login from "./pages/Login.jsx";
 import Models from "./pages/Models.jsx";
 import Settings from "./pages/Settings.jsx";
 import Sandbox from "./pages/Sandbox.jsx";
 import Pipelines from "./pages/Pipelines.jsx";
+import Prompts from "./pages/Prompts.jsx";
 import { get_token } from "./lib.js";
 import { Toaster } from "./ui/Toast.jsx";
 import "./styles.css";
@@ -34,6 +35,7 @@ function App() {
         <Route path="/models" element={<RequireAuth><Models /></RequireAuth>} />
         <Route path="/kanban" element={<RequireAuth><Kanban /></RequireAuth>} />
         <Route path="/pipelines" element={<RequireAuth><Pipelines /></RequireAuth>} />
+        <Route path="/prompts" element={<RequireAuth><Prompts /></RequireAuth>} />
         <Route path="/agents" element={<RequireAuth><AgentSettings /></RequireAuth>} />
         <Route path="/settings" element={<RequireAuth><Settings /></RequireAuth>} />
         <Route path="/sandbox" element={<RequireAuth><Sandbox /></RequireAuth>} />

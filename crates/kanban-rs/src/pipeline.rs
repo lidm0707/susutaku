@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::store::{Store, StoreError};
+use crate::store::{DbTx, Store, StoreError};
 
 const UNIQUE_VIOLATION: &str = "23505";
 
@@ -32,18 +32,46 @@ impl Store {
 
     pub async fn create_pipeline(&self, name: &str, spec: &str) -> Result<i64, StoreError> {
         validate_spec(spec)?;
+        let mut tx = self.begin().await?;
+        let id = self.create_pipeline_tx(&mut tx, name, spec).await?;
+        tx.commit().await?;
+        Ok(id)
+    }
+
+    pub async fn create_pipeline_tx(
+        &self,
+        tx: &mut DbTx,
+        name: &str,
+        spec: &str,
+    ) -> Result<i64, StoreError> {
+        validate_spec(spec)?;
         let row = sqlx::query!(
             r#"INSERT INTO pipelines (name, spec) VALUES ($1, $2) RETURNING id AS "id: i64""#,
             name,
             spec,
         )
-        .fetch_one(&self.pool)
+        .fetch_one(&mut **tx)
         .await
         .map_err(|e| match e.as_database_error() {
             Some(d) if d.code().as_deref() == Some(UNIQUE_VIOLATION) => StoreError::PipelineTaken,
             _ => StoreError::Db(e),
         })?;
         Ok(row.id)
+    }
+
+    pub async fn get_pipeline_tx(
+        &self,
+        tx: &mut DbTx,
+        id: i64,
+    ) -> Result<Option<PipelineRow>, StoreError> {
+        let row = sqlx::query_as!(
+            PipelineRow,
+            r#"SELECT id, name, spec FROM pipelines WHERE id = $1"#,
+            id
+        )
+        .fetch_optional(&mut **tx)
+        .await?;
+        Ok(row)
     }
 
     pub async fn update_pipeline(&self, id: i64, name: &str, spec: &str) -> Result<(), StoreError> {
