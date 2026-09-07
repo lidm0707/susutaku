@@ -1,4 +1,6 @@
-use ai_interface_layer::{AiError, ChatRequest, Role};
+use ai_interface_layer::error::AiError;
+use ai_interface_layer::message::Role;
+use ai_interface_layer::request::ChatRequest;
 use serde_json::{Value, json};
 
 pub const ROLE_FIELD: &str = "role";
@@ -44,7 +46,8 @@ pub fn role_from_str(raw: &str) -> Role {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ai_interface_layer::{ChatRequest, Message};
+    use ai_interface_layer::message::Message;
+    use ai_interface_layer::request::ChatRequest;
 
     const SAMPLE: &str = r#"{
         "choices": [

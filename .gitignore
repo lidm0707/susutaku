@@ -1,5 +1,7 @@
 /target
 .env
+setting.json
+backend/setting.json
 .plans/
 models/
 input/

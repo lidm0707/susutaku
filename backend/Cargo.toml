@@ -15,4 +15,7 @@ gguf-rs = { workspace = true }
 core-agent = { workspace = true }
 tokenizers = { workspace = true }
 ureq = { workspace = true }
+codex-cli = { path = "../crates/agent_3th_cli/codex_cli" }
+zai-api = { path = "../crates/agent_3th_cli/zai_api" }
+ai-interface-layer = { path = "../crates/agent_3th_cli/ai_interface_layer" }
 utoipa = { version = "5", features = ["axum_extras"] }

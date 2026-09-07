@@ -5,12 +5,15 @@
 
 mod auth;
 mod exec;
+mod model;
 mod pkce;
 
-pub use auth::{account_id_from_id_token, auth_path, authorize_url, check, exchange_code, save};
 pub use auth::{AuthError, AuthStatus, Tokens};
+pub use auth::{account_id_from_id_token, auth_path, authorize_url, check, exchange_code, save};
 pub use exec::ExecError;
-pub use exec::{check_available, drain_events, exec_json};
+pub use exec::{check_available, drain_events, exec_json, resolve_bin};
+pub use model::ModelInfo;
+pub use model::list as list_models;
 pub use pkce::{challenge, new_verifier};
 
 use std::path::Path;

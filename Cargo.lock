@@ -134,7 +134,9 @@ dependencies = [
 name = "backend"
 version = "0.1.0"
 dependencies = [
+ "ai-interface-layer",
  "axum",
+ "codex-cli",
  "core-agent",
  "gguf-rs",
  "hf_loader",
@@ -146,6 +148,7 @@ dependencies = [
  "tower-http",
  "ureq",
  "utoipa",
+ "zai-api",
 ]
 
 [[package]]

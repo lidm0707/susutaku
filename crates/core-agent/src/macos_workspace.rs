@@ -87,6 +87,14 @@ impl Sandbox {
         let _ = fs::remove_file(state_path());
     }
 
+    /// Workspace root the sandboxed commands run in.
+    pub fn root(&self) -> PathBuf {
+        self.root
+            .read()
+            .map(|r| r.clone())
+            .unwrap_or_else(|_| std::env::temp_dir())
+    }
+
     /// Delete sandbox dir and saved state (full teardown).
     pub fn purge(&self) {
         if let Ok(root) = self.root.read() {

@@ -1,6 +1,9 @@
 use std::env;
 
-use ai_interface_layer::{AiError, ChatProvider, ChatRequest, ChatResponse, NamedProvider};
+use ai_interface_layer::error::AiError;
+use ai_interface_layer::provider::{ChatProvider, NamedProvider};
+use ai_interface_layer::request::ChatRequest;
+use ai_interface_layer::response::ChatResponse;
 use serde_json::json;
 
 pub const BASE_URL: &str = "https://api.z.ai/api/paas/v4/chat/completions";
@@ -22,6 +25,14 @@ pub struct ZaiClient {
 }
 
 impl ZaiClient {
+    /// Explicit key + model (e.g. from a settings file).
+    pub fn from_key(api_key: &str, model: &str) -> Self {
+        Self {
+            api_key: api_key.to_string(),
+            model: model.to_string(),
+        }
+    }
+
     /// Key comes from the environment; never hardcoded.
     pub fn from_env() -> Result<Self, AiError> {
         let api_key = env::var(ENV_API_KEY)
@@ -31,10 +42,7 @@ impl ZaiClient {
         if api_key.is_empty() {
             return Err(AiError::MissingApiKey(ENV_API_KEY));
         }
-        Ok(Self {
-            api_key,
-            model: DEFAULT_MODEL.to_string(),
-        })
+        Ok(Self::from_key(&api_key, DEFAULT_MODEL))
     }
 
     pub fn with_model(mut self, model: &str) -> Self {

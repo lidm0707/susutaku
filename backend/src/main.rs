@@ -18,6 +18,7 @@ const PORT: u16 = 8991;
 async fn main() {
     let engine = ModelPool::spawn_first().expect("model init");
     let sandbox = Arc::new(AgentSandbox::restore().expect("agent sandbox init"));
+    let codex_workspace = sandbox.root();
     let use_case = Arc::new(ChatUseCase::new(
         Arc::new(DuckDuckGo),
         Arc::new(PageFetcher),
@@ -29,7 +30,7 @@ async fn main() {
     let addr = SocketAddr::from(([0, 0, 0, 0], PORT));
     let listener = tokio::net::TcpListener::bind(addr).await.expect("bind");
     println!("backend listening on http://{addr}");
-    axum::serve(listener, api::router(use_case))
+    axum::serve(listener, api::router(use_case, codex_workspace))
         .with_graceful_shutdown(async {
             let _ = tokio::signal::ctrl_c().await;
         })

@@ -34,3 +34,57 @@ export async function select_model(name) {
   });
   if (!res.ok) throw new Error(await res.text());
 }
+
+export async function codex_start() {
+  const res = await fetch(`${API_BASE}/api/auth/codex/start`, { method: "POST" });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function codex_status() {
+  const res = await fetch(`${API_BASE}/api/auth/codex/status`);
+  if (!res.ok) throw new Error(`${res.status} fetching codex status`);
+  return res.json();
+}
+
+export async function fetch_codex_models() {
+  const res = await fetch(`${API_BASE}/api/auth/codex/models`);
+  if (!res.ok) throw new Error(`${res.status} fetching codex models`);
+  return res.json();
+}
+
+export async function chat_codex(message, model) {
+  const res = await fetch(`${API_BASE}/api/chat/codex`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message, model }),
+  });
+  if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+  return res.json();
+}
+
+export async function fetch_zai_settings() {
+  const res = await fetch(`${API_BASE}/api/settings/zai`);
+  if (!res.ok) throw new Error(`${res.status} fetching zai settings`);
+  return res.json();
+}
+
+export async function save_zai_settings(api_key, model) {
+  const res = await fetch(`${API_BASE}/api/settings/zai`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ api_key, model }),
+  });
+  if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+  return res.json();
+}
+
+export async function chat_zai(message, model) {
+  const res = await fetch(`${API_BASE}/api/chat/zai`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message, model: model || undefined }),
+  });
+  if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+  return res.json();
+}
