@@ -20,6 +20,23 @@ impl AgentSandbox {
     pub fn root(&self) -> PathBuf {
         self.inner.root()
     }
+
+    /// All sandbox dirs with owning-process liveness.
+    pub fn dirs() -> Vec<core_agent::macos_workspace::SandboxDir> {
+        core_agent::macos_workspace::list_dirs()
+    }
+
+    /// Delete another (ideally dead) backend's sandbox dir.
+    pub fn purge_dir(pid: u32) -> Result<bool, String> {
+        core_agent::macos_workspace::purge_dir(pid)
+    }
+
+    /// Delete dirs of dead PIDs; returns how many were removed.
+    pub fn sweep() -> usize {
+        let before = Self::dirs();
+        Sandbox::purge_stale();
+        before.iter().filter(|d| !d.alive).count()
+    }
 }
 
 impl Runner for AgentSandbox {

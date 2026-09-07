@@ -213,6 +213,48 @@ fn pid_alive(pid: i32) -> bool {
     unsafe { libc::kill(pid, 0) == 0 }
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SandboxDir {
+    pub pid: u32,
+    pub alive: bool,
+    pub path: PathBuf,
+}
+
+/// All sandbox dirs in TMPDIR with their owning-process liveness.
+pub fn list_dirs() -> Vec<SandboxDir> {
+    let Ok(entries) = fs::read_dir(std::env::temp_dir()) else {
+        return Vec::new();
+    };
+    let mut dirs: Vec<SandboxDir> = entries
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name().into_string().ok()?;
+            let pid = name.strip_prefix(SANDBOX_PREFIX)?.parse::<u32>().ok()?;
+            Some(SandboxDir {
+                pid,
+                alive: pid_alive(pid as i32),
+                path: entry.path(),
+            })
+        })
+        .collect();
+    dirs.sort_by_key(|d| d.pid);
+    dirs
+}
+
+/// Delete the sandbox dir of `pid`. Refuses the caller's own (live) dir.
+pub fn purge_dir(pid: u32) -> Result<bool, String> {
+    if pid == std::process::id() {
+        return Err("cannot purge the running backend's own sandbox".into());
+    }
+    let path = std::env::temp_dir().join(format!("{SANDBOX_PREFIX}{pid}"));
+    if !path.exists() {
+        return Ok(false);
+    }
+    fs::remove_dir_all(&path)
+        .map(|_| true)
+        .map_err(|e| e.to_string())
+}
+
 fn resolve_cwd(root: &Path, rel: &str) -> PathBuf {
     let candidate = root.join(rel.trim_start_matches('/'));
     if candidate.is_dir() {

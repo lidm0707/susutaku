@@ -16,6 +16,7 @@ use crate::domain::SearchMode;
 use crate::infra::codex_auth;
 use crate::infra::codex_auth::{CodexAuth, LoginStatus};
 use crate::infra::codex_chat;
+use crate::infra::sandbox::AgentSandbox;
 use crate::infra::zai_settings::SettingsState;
 use crate::port::inbound::{ChatCmd, ChatHandling};
 use crate::port::outbound::ModelSwitch;
@@ -48,6 +49,9 @@ pub fn router<T: ChatHandling + ModelSwitch + 'static>(
             get(get_zai_settings).post(set_zai_settings),
         )
         .route("/api/chat/zai", post(chat_zai))
+        .route("/api/sandbox", get(list_sandboxes))
+        .route("/api/sandbox/purge", post(purge_sandbox))
+        .route("/api/sandbox/sweep", post(sweep_sandboxes))
         .with_state(Arc::new(SettingsState::load()));
     core.merge(auth).merge(settings)
 }
@@ -280,6 +284,57 @@ async fn not_found(_req: Request) -> Response {
     (StatusCode::NOT_FOUND, "not found").into_response()
 }
 
+#[derive(Serialize, utoipa::ToSchema)]
+struct SandboxDirInfo {
+    pid: u32,
+    alive: bool,
+    path: String,
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/sandbox",
+    responses((status = 200, body = [SandboxDirInfo]))
+)]
+async fn list_sandboxes() -> Json<Vec<SandboxDirInfo>> {
+    Json(
+        AgentSandbox::dirs()
+            .iter()
+            .map(|d| SandboxDirInfo {
+                pid: d.pid,
+                alive: d.alive,
+                path: d.path.display().to_string(),
+            })
+            .collect(),
+    )
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/sandbox/purge",
+    request_body = SandboxPurgeRequest,
+    responses((status = 200, body = SandboxSweepReply), (status = 400, body = str))
+)]
+async fn purge_sandbox(
+    Json(req): Json<SandboxPurgeRequest>,
+) -> Result<Json<SandboxSweepReply>, ApiError> {
+    let removed = AgentSandbox::purge_dir(req.pid).map_err(ApiError::bad_request)?;
+    Ok(Json(SandboxSweepReply {
+        removed: removed as usize,
+    }))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/sandbox/sweep",
+    responses((status = 200, body = SandboxSweepReply))
+)]
+async fn sweep_sandboxes() -> Json<SandboxSweepReply> {
+    Json(SandboxSweepReply {
+        removed: AgentSandbox::sweep(),
+    })
+}
+
 #[derive(OpenApi)]
 #[openapi(
     info(
@@ -298,6 +353,9 @@ async fn not_found(_req: Request) -> Response {
         get_zai_settings,
         set_zai_settings,
         chat_zai,
+        list_sandboxes,
+        purge_sandbox,
+        sweep_sandboxes,
     ),
     components(schemas(
         ModelInfo,
@@ -312,6 +370,9 @@ async fn not_found(_req: Request) -> Response {
         ZaiSettingsReply,
         ZaiSettingsRequest,
         ZaiChatRequest,
+        SandboxDirInfo,
+        SandboxPurgeRequest,
+        SandboxSweepReply,
     ))
 )]
 struct ApiDoc;
@@ -413,6 +474,16 @@ struct ZaiChatRequest {
     message: String,
     /// Optional override; otherwise the model from settings / `glm-4.6`.
     model: Option<String>,
+}
+
+#[derive(Deserialize, utoipa::ToSchema)]
+struct SandboxPurgeRequest {
+    pid: u32,
+}
+
+#[derive(Serialize, utoipa::ToSchema)]
+struct SandboxSweepReply {
+    removed: usize,
 }
 
 struct ApiError(String);

@@ -88,3 +88,25 @@ export async function chat_zai(message, model) {
   if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
   return res.json();
 }
+
+export async function fetch_sandboxes() {
+  const res = await fetch(`${API_BASE}/api/sandbox`);
+  if (!res.ok) throw new Error(`${res.status} fetching sandboxes`);
+  return res.json();
+}
+
+export async function purge_sandbox(pid) {
+  const res = await fetch(`${API_BASE}/api/sandbox/purge`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ pid }),
+  });
+  if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+  return res.json();
+}
+
+export async function sweep_sandboxes() {
+  const res = await fetch(`${API_BASE}/api/sandbox/sweep`, { method: "POST" });
+  if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+  return res.json();
+}

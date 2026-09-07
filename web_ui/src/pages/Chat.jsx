@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import {
+  Box,
   Brain,
   Check,
   Globe,
@@ -143,6 +144,7 @@ export default function Chat() {
         <nav className="nav">
           <CodexLogin />
           <Link to="/models" title="models"><Settings size={16} /></Link>
+          <Link to="/sandbox" title="sandbox"><Box size={16} /></Link>
           <Link to="/settings" title="z.ai settings"><SlidersHorizontal size={16} /></Link>
         </nav>
       </header>
