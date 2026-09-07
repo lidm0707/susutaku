@@ -1,4 +1,4 @@
-//! Application layer: the chat use case. Depends on ports (traits) and the
+//! Compound service: the chat use case. Depends on ports (traits) and the
 //! domain, never on concrete infrastructure.
 
 use std::sync::Arc;
