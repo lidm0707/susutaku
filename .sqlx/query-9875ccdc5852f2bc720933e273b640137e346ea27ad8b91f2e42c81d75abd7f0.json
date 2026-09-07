@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO agent_settings (name, model, persona, prompt, output)\n               VALUES ($1, $2, $3, $4, $5)\n               RETURNING id AS \"id: i64\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id: i64",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "9875ccdc5852f2bc720933e273b640137e346ea27ad8b91f2e42c81d75abd7f0"
+}

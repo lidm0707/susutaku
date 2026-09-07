@@ -191,6 +191,7 @@ dependencies = [
  "hf_loader",
  "kanban-rs",
  "mockall",
+ "piplines",
  "prompt-sys",
  "serde",
  "serde_json",
@@ -200,6 +201,7 @@ dependencies = [
  "tower-http",
  "ureq",
  "utoipa",
+ "work",
  "zai-api",
 ]
 

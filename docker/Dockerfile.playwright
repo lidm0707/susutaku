@@ -1,0 +1,11 @@
+# syntax=docker/dockerfile:1
+# Playwright runner: tests live in the repo, image only provides browsers+deps.
+FROM mcr.microsoft.com/playwright:v1.63.0-noble
+
+WORKDIR /work
+COPY playwright/package.json ./
+RUN npm install --no-audit --no-fund
+COPY playwright/tests ./tests
+COPY playwright/playwright.config.ts ./
+
+ENTRYPOINT ["npx", "playwright", "test"]

@@ -9,15 +9,25 @@ pub const STAGE_PARSE: &str = "parse";
 pub const STAGE_TRANSFORM: &str = "transform";
 pub const STAGE_MODEL_INFER: &str = "model_infer";
 pub const STAGE_RENDER: &str = "render";
-pub const STAGE_CUSTOM: &str = "custom";
 
-pub const STAGE_NAMES: [&str; 6] = [
+/// Default node kinds: built-in connectors.
+pub const STAGE_FETCH: &str = "fetch";
+pub const STAGE_SEARCH: &str = "search";
+pub const STAGE_REF_IMAGE: &str = "ref_image";
+pub const STAGE_OUTPUT_RESOURCE: &str = "output_resource";
+pub const STAGE_AGENT: &str = "agent";
+
+pub const STAGE_NAMES: [&str; 10] = [
     STAGE_INGEST,
     STAGE_PARSE,
     STAGE_TRANSFORM,
     STAGE_MODEL_INFER,
     STAGE_RENDER,
-    STAGE_CUSTOM,
+    STAGE_FETCH,
+    STAGE_SEARCH,
+    STAGE_REF_IMAGE,
+    STAGE_OUTPUT_RESOURCE,
+    STAGE_AGENT,
 ];
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -70,7 +80,10 @@ impl PipelineSpec {
         }
         for (i, node) in self.nodes.iter().enumerate() {
             if !STAGE_NAMES.contains(&node.stage.as_str()) {
-                return Err(GraphError::BadLink(format!("unknown stage: {}", node.stage)));
+                return Err(GraphError::BadLink(format!(
+                    "unknown stage: {}",
+                    node.stage
+                )));
             }
             if self.nodes[..i].iter().any(|n| n.id == node.id) {
                 return Err(GraphError::DuplicateNode(node.id.clone()));
@@ -82,7 +95,10 @@ impl PipelineSpec {
     fn validate_links(&self) -> Result<(), GraphError> {
         for link in &self.links {
             if !self.nodes.iter().any(|n| n.id == link.from) {
-                return Err(GraphError::BadLink(format!("unknown source: {}", link.from)));
+                return Err(GraphError::BadLink(format!(
+                    "unknown source: {}",
+                    link.from
+                )));
             }
             if !self.nodes.iter().any(|n| n.id == link.to) {
                 return Err(GraphError::BadLink(format!("unknown target: {}", link.to)));
@@ -100,7 +116,9 @@ impl PipelineSpec {
             adj[from].push(to);
             indegree[to] += 1;
         }
-        let mut queue: Vec<usize> = (0..self.nodes.len()).filter(|&i| indegree[i] == 0).collect();
+        let mut queue: Vec<usize> = (0..self.nodes.len())
+            .filter(|&i| indegree[i] == 0)
+            .collect();
         let mut visited = 0;
         let mut head = 0;
         while head < queue.len() {

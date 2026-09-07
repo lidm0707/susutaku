@@ -1,8 +1,9 @@
 //! Integration tests: PipelineSpec validation (pure, no DB).
 
 use piplines::graph::{
-    GraphError, Link, NodeDef, PipelineSpec, MAX_NODES, STAGE_CUSTOM, STAGE_INGEST,
-    STAGE_PARSE, STAGE_RENDER, STAGE_TRANSFORM,
+    GraphError, Link, NodeDef, PipelineSpec, MAX_NODES, STAGE_FETCH,
+    STAGE_INGEST, STAGE_OUTPUT_RESOURCE, STAGE_PARSE, STAGE_REF_IMAGE, STAGE_RENDER,
+    STAGE_SEARCH, STAGE_TRANSFORM,
 };
 
 const ID_A: &str = "a";
@@ -18,7 +19,7 @@ fn chain() -> PipelineSpec {
         nodes: vec![
             node(ID_A, STAGE_INGEST),
             node(ID_B, STAGE_TRANSFORM),
-            node(ID_C, STAGE_CUSTOM),
+            node(ID_C, STAGE_RENDER),
         ],
         links: vec![Link { from: ID_A.into(), to: ID_B.into() }, Link { from: ID_B.into(), to: ID_C.into() }],
     }
@@ -27,6 +28,28 @@ fn chain() -> PipelineSpec {
 #[test]
 fn valid_spec_passes() {
     chain().validate().expect("valid chain");
+}
+
+#[test]
+fn default_stages_pass() {
+    let spec = PipelineSpec {
+        nodes: vec![
+            node(ID_A, STAGE_FETCH),
+            node(ID_B, STAGE_SEARCH),
+            node(ID_C, STAGE_REF_IMAGE),
+        ],
+        links: vec![
+            Link { from: ID_A.into(), to: ID_B.into() },
+            Link { from: ID_B.into(), to: ID_C.into() },
+        ],
+    };
+    spec.validate().expect("default stages valid");
+    PipelineSpec {
+        nodes: vec![node(ID_A, STAGE_OUTPUT_RESOURCE)],
+        links: vec![],
+    }
+    .validate()
+    .expect("output_resource valid");
 }
 
 #[test]

@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use work::services::schedule_task::{Scheduler, Schedule};
+use work::services::schedule_task::{Schedule, Scheduler};
 
 #[test]
 fn interval_task_fires_repeatedly() {
@@ -17,7 +17,6 @@ fn interval_task_fires_repeatedly() {
         }),
     );
     std::thread::sleep(Duration::from_millis(1400));
-    scheduler.tick();
     assert!(count.load(Ordering::Relaxed) >= 1);
 }
 
@@ -37,7 +36,7 @@ fn once_task_fires_then_removed() {
             *flag.write().expect("lock") = true;
         }),
     );
-    scheduler.tick();
+    std::thread::sleep(Duration::from_millis(500));
     assert!(*fired.read().expect("lock"));
     assert!(!scheduler.cancel(id), "once task should auto-remove");
     assert!(!scheduler.cancel(9999));

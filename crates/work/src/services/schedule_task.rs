@@ -17,7 +17,6 @@ pub enum Schedule {
 type Job = Box<dyn FnOnce() + Send>;
 
 struct Register {
-    name: String,
     schedule: Schedule,
     job: Job,
 }
@@ -37,6 +36,12 @@ pub struct Scheduler {
     tx: Sender<Msg>,
 }
 
+impl Default for Scheduler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Scheduler {
     pub fn new() -> Self {
         let (tx, rx) = mpsc::channel::<Msg>();
@@ -47,26 +52,17 @@ impl Scheduler {
         Self { tx }
     }
 
-    pub fn register(&self, name: &str, schedule: Schedule, job: Job) -> u64 {
+    pub fn register(&self, _name: &str, schedule: Schedule, job: Job) -> u64 {
         let (ack_tx, ack_rx) = mpsc::channel();
         self.tx
-            .send(Msg::Register(
-                Register {
-                    name: name.to_string(),
-                    schedule,
-                    job,
-                },
-                ack_tx,
-            ))
+            .send(Msg::Register(Register { schedule, job }, ack_tx))
             .expect(THREAD_NAME);
         ack_rx.recv().expect(THREAD_NAME)
     }
 
     pub fn cancel(&self, id: u64) -> bool {
         let (ack_tx, ack_rx) = mpsc::channel();
-        self.tx
-            .send(Msg::Cancel(id, ack_tx))
-            .expect(THREAD_NAME);
+        self.tx.send(Msg::Cancel(id, ack_tx)).expect(THREAD_NAME);
         ack_rx.recv().expect(THREAD_NAME)
     }
 }
@@ -82,7 +78,7 @@ fn run(rx: mpsc::Receiver<Msg>) {
             .map(|(id, _)| *id)
             .collect();
         for id in due {
-            let entry = &mut entries[&id];
+            let entry = entries.get_mut(&id).expect("id collected from entries");
             if let Some(job) = entry.job.take() {
                 job();
             }

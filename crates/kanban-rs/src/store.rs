@@ -2,8 +2,7 @@
 
 use sqlx::PgPool;
 
-pub const DEFAULT_DATABASE_URL: &str =
-    "postgres://susutaku:susutaku@localhost:5434/susutaku";
+pub const DEFAULT_DATABASE_URL: &str = "postgres://susutaku:susutaku@localhost:5434/susutaku";
 
 pub const TABLE_NAME: &str = "kanban_cards";
 
@@ -64,6 +63,7 @@ pub struct CardRow {
     pub agent_state: Option<String>,
     pub assignee: Option<String>,
     pub pipeline_id: Option<i64>,
+    pub cron: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -194,6 +194,9 @@ CREATE TABLE IF NOT EXISTS kanban_comments (
     r#"
 CREATE INDEX IF NOT EXISTS kanban_comments_card_idx ON kanban_comments (card_id, id);
 "#,
+    r#"
+ALTER TABLE kanban_cards ADD COLUMN IF NOT EXISTS cron TEXT;
+"#,
 ];
 
 impl Store {
@@ -213,7 +216,7 @@ impl Store {
         let rows = sqlx::query_as!(
             CardRow,
             r#"SELECT id, column_id, project_id, title, description,
-                      priority, position, agent_name, agent_state, assignee, pipeline_id
+                      priority, position, agent_name, agent_state, assignee, pipeline_id, cron
                FROM kanban_cards
                WHERE ($1::bigint IS NULL OR project_id = $1)
                ORDER BY column_id, position, id"#,
@@ -246,7 +249,7 @@ impl Store {
         let row = sqlx::query_as!(
             CardRow,
             r#"SELECT id, column_id, project_id, title, description,
-                      priority, position, agent_name, agent_state, assignee, pipeline_id
+                      priority, position, agent_name, agent_state, assignee, pipeline_id, cron
                FROM kanban_cards WHERE id = $1"#,
             id
         )
@@ -263,12 +266,9 @@ impl Store {
     }
 
     pub async fn remove(&self, id: i64) -> Result<(), StoreError> {
-        let res = sqlx::query!(
-            r#"DELETE FROM kanban_cards WHERE id = $1"#,
-            id
-        )
-        .execute(&self.pool)
-        .await?;
+        let res = sqlx::query!(r#"DELETE FROM kanban_cards WHERE id = $1"#, id)
+            .execute(&self.pool)
+            .await?;
         if res.rows_affected() == 0 {
             return Err(StoreError::NoSuchCard);
         }
@@ -329,6 +329,20 @@ impl Store {
         Ok(())
     }
 
+    pub async fn set_cron(&self, card_id: i64, cron: Option<&str>) -> Result<(), StoreError> {
+        let res = sqlx::query!(
+            r#"UPDATE kanban_cards SET cron = $2 WHERE id = $1"#,
+            card_id,
+            cron,
+        )
+        .execute(&self.pool)
+        .await?;
+        if res.rows_affected() == 0 {
+            return Err(StoreError::NoSuchCard);
+        }
+        Ok(())
+    }
+
     pub async fn update_card(&self, u: UpdateCard<'_>) -> Result<(), StoreError> {
         let res = sqlx::query!(
             r#"UPDATE kanban_cards
@@ -369,7 +383,10 @@ impl Store {
         if !self.card_exists_tx(&mut tx, card_id).await? {
             return Err(StoreError::NoSuchCard);
         }
-        let id = self.add_comment_tx(&mut tx, card_id, author, body).await?.id;
+        let id = self
+            .add_comment_tx(&mut tx, card_id, author, body)
+            .await?
+            .id;
         tx.commit().await?;
         Ok(id)
     }
@@ -401,7 +418,7 @@ impl Store {
         let row = sqlx::query_as!(
             CardRow,
             r#"SELECT id, column_id, project_id, title, description,
-                      priority, position, agent_name, agent_state, assignee, pipeline_id
+                      priority, position, agent_name, agent_state, assignee, pipeline_id, cron
                FROM kanban_cards WHERE id = $1"#,
             id
         )
@@ -429,12 +446,9 @@ impl Store {
     }
 
     pub async fn card_exists_tx(&self, tx: &mut DbTx, id: i64) -> Result<bool, StoreError> {
-        let found = sqlx::query!(
-            r#"SELECT 1 AS "one!" FROM kanban_cards WHERE id = $1"#,
-            id
-        )
-        .fetch_optional(&mut **tx)
-        .await?;
+        let found = sqlx::query!(r#"SELECT 1 AS "one!" FROM kanban_cards WHERE id = $1"#, id)
+            .fetch_optional(&mut **tx)
+            .await?;
         Ok(found.is_some())
     }
 

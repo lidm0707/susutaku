@@ -66,6 +66,39 @@ export interface Card {
   assignee?: string | null;
   pipeline_id?: number | null;
   pipeline_name?: string;
+  cron?: string | null;
+}
+
+export type RunStatus = "ok" | "failed";
+
+export interface CardRunStage {
+  node: string;
+  stage: string;
+  status: RunStatus;
+  note: string;
+}
+
+export interface CardRun {
+  pipeline_id: number;
+  pipeline_name: string;
+  status: RunStatus;
+  stages: CardRunStage[];
+  output?: string | null;
+  finished_at: string;
+}
+
+export function run_of(card: Card): CardRun | null {
+  if (!card.agent_state || typeof card.agent_state !== "object") return null;
+  const run = (card.agent_state as Record<string, unknown>).run;
+  return run && typeof run === "object" ? (run as CardRun) : null;
+}
+
+export interface CronJob {
+  card_id: number;
+  title: string;
+  cron: string;
+  pipeline_name?: string | null;
+  next_run: number;
 }
 
 export interface Comment {
@@ -107,6 +140,34 @@ export interface SandboxDir {
 export interface ZaiSettings {
   api_key_set: boolean;
   model: string;
+}
+
+export interface ClientEnv {
+  reported: boolean;
+  user_agent: string;
+  platform: string;
+  language: string;
+  timezone: string;
+  screen: string;
+  workspace_path: string;
+}
+
+export async function fetch_client_env(): Promise<ClientEnv> {
+  const res = await fetch(`${API_BASE}/api/settings/client-env`);
+  if (!res.ok) throw new ApiError(res.status, await res.text());
+  return res.json();
+}
+
+export async function save_client_env(
+  env: Omit<ClientEnv, "reported">
+): Promise<ClientEnv> {
+  const res = await fetch(`${API_BASE}/api/settings/client-env`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(env),
+  });
+  if (!res.ok) throw new ApiError(res.status, await res.text());
+  return res.json();
 }
 
 export interface PromptSection {
@@ -360,8 +421,9 @@ export async function create_project(workspace_id: number, name: string): Promis
   });
 }
 
-export async function fetch_cards(project_id: number): Promise<Card[]> {
-  return (await api(`/api/kanban/cards?project_id=${project_id}`)).json();
+export async function fetch_cards(project_id: number | null): Promise<Card[]> {
+  const qs = project_id == null ? "" : `?project_id=${project_id}`;
+  return (await api(`/api/kanban/cards${qs}`)).json();
 }
 
 export async function create_card(
@@ -452,6 +514,23 @@ export async function set_card_pipeline(id: number, pipeline_id: number | null):
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ pipeline_id }),
   });
+}
+
+export async function run_card(id: number): Promise<CardRun> {
+  const res = await api(`/api/kanban/cards/${id}/run`, { method: "POST" });
+  return res.json();
+}
+
+export async function set_card_schedule(id: number, cron: string | null): Promise<Response> {
+  return api(`/api/kanban/cards/${id}/schedule`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ cron }),
+  });
+}
+
+export async function fetch_cronjobs(): Promise<CronJob[]> {
+  return (await api("/api/cronjobs")).json();
 }
 
 export async function fetch_agents(): Promise<Agent[]> {

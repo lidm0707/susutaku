@@ -1,9 +1,4 @@
 # syntax=docker/dockerfile:1
-# Build the axum backend.
-# NOTE: MLX needs Metal (Apple Silicon macOS). Inside a Linux container there is
-# no Metal, so this image can build and serve /api but model inference will fail.
-# On macOS run the backend natively (cargo run -p backend) and only containerize
-# the web UI (see docker-compose.yml).
 FROM rust:1.85-slim AS build
 WORKDIR /app
 COPY Cargo.toml Cargo.lock ./

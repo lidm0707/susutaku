@@ -1,0 +1,88 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, column_id, project_id, title, description,\n                      priority, position, agent_name, agent_state, assignee, pipeline_id, cron\n               FROM kanban_cards WHERE id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "column_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "project_id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 3,
+        "name": "title",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "description",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "priority",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "position",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 7,
+        "name": "agent_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "agent_state",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 9,
+        "name": "assignee",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 10,
+        "name": "pipeline_id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 11,
+        "name": "cron",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "3310edc8e280f592f82cfe215988da7d5ec8f354f7a5ed969a4b701aa67d13fd"
+}

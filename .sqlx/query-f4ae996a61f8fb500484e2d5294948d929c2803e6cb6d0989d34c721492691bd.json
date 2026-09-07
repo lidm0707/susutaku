@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT agent_name, agent_state FROM kanban_cards WHERE id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "agent_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "agent_state",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      true,
+      true
+    ]
+  },
+  "hash": "f4ae996a61f8fb500484e2d5294948d929c2803e6cb6d0989d34c721492691bd"
+}

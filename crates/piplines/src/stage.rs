@@ -9,6 +9,12 @@ pub enum StageId {
     Transform,
     ModelInfer,
     Render,
+    Fetch,
+    Search,
+    RefImage,
+    OutputResource,
+    Agent,
+    Raw,
     Custom(&'static str),
 }
 

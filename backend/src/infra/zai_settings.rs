@@ -7,6 +7,8 @@ use std::sync::RwLock;
 use serde::Serialize;
 use zai_api::client::{DEFAULT_MODEL, ENV_API_KEY};
 
+use super::client_env::{self, ClientEnv};
+
 pub const SETTINGS_FILE: &str = "setting.json";
 pub const ZAI_SECTION: &str = "zai";
 pub const FIELD_API_KEY: &str = "api_key";
@@ -21,13 +23,31 @@ pub struct ZaiSettings {
 
 pub struct SettingsState {
     zai: RwLock<ZaiSettings>,
+    client_env: RwLock<Option<ClientEnv>>,
 }
 
 impl SettingsState {
     pub fn load() -> Self {
+        let doc = read_doc();
         Self {
             zai: RwLock::new(read_file().unwrap_or_default()),
+            client_env: RwLock::new(client_env::read(&doc)),
         }
+    }
+
+    pub fn client_env(&self) -> Option<ClientEnv> {
+        self.client_env
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    pub fn set_client_env(&self, env: &ClientEnv) -> Result<(), String> {
+        let mut doc = read_doc();
+        client_env::write(&mut doc, env);
+        write_doc(&doc)?;
+        *self.client_env.write().unwrap_or_else(|e| e.into_inner()) = Some(env.clone());
+        Ok(())
     }
 
     pub fn zai(&self) -> ZaiSettings {
@@ -61,10 +81,23 @@ impl SettingsState {
     }
 }
 
+fn read_doc() -> serde_json::Value {
+    std::fs::read(SETTINGS_FILE)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_else(|| serde_json::json!({}))
+}
+
+fn write_doc(doc: &serde_json::Value) -> Result<(), String> {
+    std::fs::write(
+        SETTINGS_FILE,
+        serde_json::to_vec_pretty(doc).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| format!("write {SETTINGS_FILE}: {e}"))
+}
+
 fn read_file() -> Option<ZaiSettings> {
-    let bytes = std::fs::read(SETTINGS_FILE).ok()?;
-    let v: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
-    let zai = v.get(ZAI_SECTION)?.clone();
+    let zai = read_doc().get(ZAI_SECTION)?.clone();
     Some(ZaiSettings {
         model: zai
             .get(FIELD_MODEL)
@@ -78,18 +111,10 @@ fn read_file() -> Option<ZaiSettings> {
 }
 
 fn write_file(zai: &ZaiSettings) -> Result<(), String> {
-    let mut doc = match std::fs::read(SETTINGS_FILE) {
-        Ok(bytes) => serde_json::from_slice::<serde_json::Value>(&bytes)
-            .unwrap_or_else(|_| serde_json::json!({})),
-        Err(_) => serde_json::json!({}),
-    };
+    let mut doc = read_doc();
     doc[ZAI_SECTION] = serde_json::json!({
         FIELD_API_KEY: zai.api_key.as_deref().unwrap_or(""),
         FIELD_MODEL: zai.model.as_deref().unwrap_or(DEFAULT_MODEL),
     });
-    std::fs::write(
-        SETTINGS_FILE,
-        serde_json::to_vec_pretty(&doc).map_err(|e| e.to_string())?,
-    )
-    .map_err(|e| format!("write {SETTINGS_FILE}: {e}"))
+    write_doc(&doc)
 }

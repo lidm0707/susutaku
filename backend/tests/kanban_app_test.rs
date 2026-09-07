@@ -7,6 +7,7 @@ use kanban_rs::{CardRow, PipelineRow, StoreError};
 use mockall::predicate::eq;
 
 use backend::app::kanban::{CardService, CommentService, KanbanApp, PipelineService};
+use backend::app::pipeline_run;
 use backend::port::outbound::{
     MockAgentConfigRepo, MockCardRepo, MockCardTx, MockCommentRepo, MockCommentTx,
     MockPipelineRepo, MockPipelineTx, MockProjectRepo, MockWorkspaceRepo, NewCard, NewPipeline,
@@ -15,6 +16,9 @@ use backend::port::outbound::{
 const CARD_ID: i64 = 5;
 const PIPE_ID: i64 = 7;
 const PIPE_NAME: &str = "ingest-render";
+const SPEC_OK: &str = r#"{"nodes":[{"id":"a","stage":"ingest"},{"id":"b","stage":"render"}],"links":[{"from":"a","to":"b"}]}"#;
+const SPEC_AGENT: &str = r#"{"nodes":[{"id":"a","stage":"ingest"},{"id":"bot","stage":"agent","params":{"agent":"qwen"}}],"links":[{"from":"a","to":"bot"}]}"#;
+const SPEC_FAIL: &str = r#"{"nodes":[{"id":"a","stage":"ingest"},{"id":"f","stage":"fetch"}],"links":[{"from":"a","to":"f"}]}"#;
 
 fn card_row(id: i64, pipeline_id: Option<i64>) -> CardRow {
     CardRow {
@@ -29,6 +33,7 @@ fn card_row(id: i64, pipeline_id: Option<i64>) -> CardRow {
         agent_state: None,
         assignee: None,
         pipeline_id,
+        cron: None,
     }
 }
 
@@ -75,7 +80,9 @@ async fn card_service_create_runs_write_and_read_back_in_one_tx() {
         tx.expect_add()
             .withf(|c: &NewCard| c.title == "hello")
             .returning(|_| Ok(CARD_ID));
-        tx.expect_get().with(eq(CARD_ID)).returning(|id| Ok(Some(card_row(id, None))));
+        tx.expect_get()
+            .with(eq(CARD_ID))
+            .returning(|id| Ok(Some(card_row(id, None))));
         tx.expect_commit().returning(|| Ok(()));
         Ok(Box::new(tx))
     });
@@ -99,7 +106,9 @@ async fn comment_service_add_checks_card_exists_before_insert() {
     let mut comments = MockCommentRepo::new();
     comments.expect_tx().returning(|| {
         let mut tx = MockCommentTx::new();
-        tx.expect_card_exists().with(eq(CARD_ID)).returning(|_| Ok(true));
+        tx.expect_card_exists()
+            .with(eq(CARD_ID))
+            .returning(|_| Ok(true));
         tx.expect_add()
             .with(eq(CARD_ID), eq("alice"), eq("hi"))
             .returning(|card_id, author, body| {
@@ -116,7 +125,10 @@ async fn comment_service_add_checks_card_exists_before_insert() {
     });
 
     let svc = CommentService::new(Arc::new(comments));
-    let row = svc.add(CARD_ID, "alice".into(), "hi".into()).await.expect("added");
+    let row = svc
+        .add(CARD_ID, "alice".into(), "hi".into())
+        .await
+        .expect("added");
     assert_eq!(row.body, "hi");
 }
 
@@ -159,4 +171,116 @@ async fn pipeline_service_create_reads_back_inside_tx() {
         .await
         .expect("created");
     assert_eq!(row.id, PIPE_ID);
+}
+
+fn runner_app(cards: MockCardRepo, pipelines: MockPipelineRepo) -> KanbanApp {
+    KanbanApp::new(
+        Arc::new(cards),
+        Arc::new(MockCommentRepo::new()),
+        Arc::new(pipelines),
+        Arc::new(MockAgentConfigRepo::new()),
+        Arc::new(MockWorkspaceRepo::new()),
+        Arc::new(MockProjectRepo::new()),
+    )
+}
+
+#[tokio::test]
+async fn run_card_pipeline_records_ok_and_persists_state() {
+    let mut cards = MockCardRepo::new();
+    let mut pipelines = MockPipelineRepo::new();
+    cards
+        .expect_get()
+        .with(eq(CARD_ID))
+        .returning(|id| Ok(Some(card_row(id, Some(PIPE_ID)))));
+    cards
+        .expect_set_agent()
+        .withf(|_, a: &kanban_rs::AgentState| {
+            a.name == "pipeline-runner"
+                && a.state["run"]["status"] == "ok"
+                && a.state["run"]["stages"]
+                    .as_array()
+                    .is_some_and(|s| s.len() == 2)
+        })
+        .returning(|_, _| Ok(()));
+    pipelines.expect_list().returning(move || {
+        let mut row = pipeline_row(PIPE_ID, PIPE_NAME);
+        row.spec = SPEC_OK.into();
+        Ok(vec![row])
+    });
+
+    let record = pipeline_run::run_card_pipeline(&runner_app(cards, pipelines), CARD_ID)
+        .await
+        .expect("ran");
+    assert_eq!(record.status, pipeline_run::StageStatus::Ok);
+    assert_eq!(record.pipeline_name, PIPE_NAME);
+}
+
+#[tokio::test]
+async fn run_card_pipeline_agent_node_sets_agent_name() {
+    let mut cards = MockCardRepo::new();
+    let mut pipelines = MockPipelineRepo::new();
+    cards
+        .expect_get()
+        .with(eq(CARD_ID))
+        .returning(|id| Ok(Some(card_row(id, Some(PIPE_ID)))));
+    cards
+        .expect_set_agent()
+        .withf(|_, a: &kanban_rs::AgentState| a.name == "qwen")
+        .returning(|_, _| Ok(()));
+    pipelines.expect_list().returning(move || {
+        let mut row = pipeline_row(PIPE_ID, PIPE_NAME);
+        row.spec = SPEC_AGENT.into();
+        Ok(vec![row])
+    });
+
+    let record = pipeline_run::run_card_pipeline(&runner_app(cards, pipelines), CARD_ID)
+        .await
+        .expect("ran");
+    assert_eq!(record.status, pipeline_run::StageStatus::Ok);
+}
+
+#[tokio::test]
+async fn run_card_pipeline_unwired_stage_fails_run_with_note() {
+    let mut cards = MockCardRepo::new();
+    let mut pipelines = MockPipelineRepo::new();
+    cards
+        .expect_get()
+        .with(eq(CARD_ID))
+        .returning(|id| Ok(Some(card_row(id, Some(PIPE_ID)))));
+    cards
+        .expect_set_agent()
+        .withf(|_, a: &kanban_rs::AgentState| a.state["run"]["status"] == "failed")
+        .returning(|_, _| Ok(()));
+    pipelines.expect_list().returning(move || {
+        let mut row = pipeline_row(PIPE_ID, PIPE_NAME);
+        row.spec = SPEC_FAIL.into();
+        Ok(vec![row])
+    });
+
+    let record = pipeline_run::run_card_pipeline(&runner_app(cards, pipelines), CARD_ID)
+        .await
+        .expect("run record persisted");
+    assert_eq!(record.status, pipeline_run::StageStatus::Failed);
+    assert!(
+        record
+            .stages
+            .last()
+            .expect("stage")
+            .note
+            .contains("not wired")
+    );
+}
+
+#[tokio::test]
+async fn run_card_pipeline_without_pipeline_is_no_such_pipeline() {
+    let mut cards = MockCardRepo::new();
+    cards
+        .expect_get()
+        .with(eq(CARD_ID))
+        .returning(|id| Ok(Some(card_row(id, None))));
+
+    let err = pipeline_run::run_card_pipeline(&runner_app(cards, MockPipelineRepo::new()), CARD_ID)
+        .await
+        .expect_err("no pipeline");
+    assert!(matches!(err, StoreError::NoSuchPipeline));
 }

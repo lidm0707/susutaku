@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
-import { ArrowLeft, ArrowRight, Bot, LogOut, Plus, Trash2, User, Workflow } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import { ArrowLeft, ArrowRight, Bot, CheckCircle2, Clock, Loader2, Play, Plus, Trash2, User, Workflow, XCircle } from "lucide-react";
 import {
   clear_token,
   add_comment,
@@ -12,17 +12,23 @@ import {
   fetch_comments,
   fetch_pipelines,
   fetch_projects,
+  fetch_users,
   fetch_workspaces,
   move_card,
   remove_card,
   set_agent,
   set_card_pipeline,
+  set_card_schedule,
+  run_card,
+  run_of,
   update_card,
   type Agent,
   type Card,
+  type CardRun,
   type Comment,
   type Pipeline,
   type Project,
+  type UserInfo,
   type Workspace,
 } from "../lib.js";
 import { Modal, PromptModal, SlideOver } from "../ui/Overlay.js";
@@ -34,6 +40,15 @@ const COLUMNS = [
 ] as const;
 
 const PRIORITIES = ["low", "normal", "high", "critical"] as const;
+
+const CRON_PRESETS = [
+  { expr: "* * * * *", label: "every minute" },
+  { expr: "*/5 * * * *", label: "every 5 minutes" },
+  { expr: "*/15 * * * *", label: "every 15 minutes" },
+  { expr: "0 * * * *", label: "hourly" },
+  { expr: "0 */6 * * *", label: "every 6 hours" },
+  { expr: "0 3 * * *", label: "daily 03:00" },
+] as const;
 
 type ColumnId = (typeof COLUMNS)[number]["id"];
 type Priority = (typeof PRIORITIES)[number];
@@ -59,11 +74,13 @@ export default function Kanban() {
   const [dTitle, setDTitle] = useState("");
   const [dDesc, setDDesc] = useState("");
   const [dAssignee, setDAssignee] = useState("");
+  const [users, setUsers] = useState<UserInfo[]>([]);
   const [dComments, setDComments] = useState<Comment[]>([]);
   const [dCommentBody, setDCommentBody] = useState("");
   const [prompting, setPrompting] = useState<null | "workspace" | "project">(null);
   const [dragOver, setDragOver] = useState<ColumnId | null>(null);
   const [draggingId, setDraggingId] = useState<number | null>(null);
+  const [runningId, setRunningId] = useState<number | null>(null);
 
   useEffect(() => {
     load_workspaces();
@@ -212,6 +229,7 @@ export default function Kanban() {
     setDComments([]);
     setDCommentBody("");
     fetch_agents().then(setSavedAgents).catch(() => setSavedAgents([]));
+    fetch_users().then(setUsers).catch(() => setUsers([]));
     try {
       setDComments(await fetch_comments(card.id));
     } catch (err) {
@@ -240,6 +258,18 @@ export default function Kanban() {
       await add_comment(detail.id, dCommentBody.trim());
       setDCommentBody("");
       setDComments(await fetch_comments(detail.id));
+    } catch (err) {
+      handle(err);
+    }
+  }
+
+  async function pick_detail_schedule(expr: string) {
+    if (!detail) return;
+    setError("");
+    try {
+      await set_card_schedule(detail.id, expr || null);
+      await refresh();
+      setDetail({ ...detail, cron: expr || null });
     } catch (err) {
       handle(err);
     }
@@ -292,6 +322,19 @@ export default function Kanban() {
     }
   }
 
+  async function run(card: Card) {
+    setRunningId(card.id);
+    setError("");
+    try {
+      await run_card(card.id);
+      await refresh();
+    } catch (err) {
+      handle(err);
+    } finally {
+      setRunningId(null);
+    }
+  }
+
   async function save_agent(e: React.FormEvent) {
     e.preventDefault();
     setError("");
@@ -318,7 +361,7 @@ export default function Kanban() {
   return (
     <main className="chat kanban-page">
       <header>
-        <h1><Link to="/chat">kanban</Link></h1>
+        <h1>kanban</h1>
         <span className="sub">{cards.length} task{cards.length === 1 ? "" : "s"}</span>
         <nav className="nav">
           <select
@@ -345,10 +388,6 @@ export default function Kanban() {
             ))}
           </select>
           <button className="kanban-mini" onClick={() => setPrompting("project")} disabled={wsId == null} title="new project">+</button>
-          <Link to="/pipelines" title="pipelines"><Workflow size={16} /></Link>
-          <Link to="/agents" title="saved agents"><Bot size={16} /></Link>
-          <Link to="/" title="logout / switch user"><LogOut size={16} /></Link>
-          <Link to="/chat" title="back to chat"><ArrowLeft size={16} /></Link>
         </nav>
       </header>
       <form className="kanban-add" onSubmit={add}>
@@ -401,6 +440,15 @@ export default function Kanban() {
                 <div className="kanban-card-top">
                   <span className={`kanban-prio prio-${card.priority}`}>{card.priority}</span>
                   <span className="kanban-card-actions">
+                    {card.pipeline_id != null && (
+                      <button
+                        onClick={() => run(card)}
+                        title="run pipeline"
+                        disabled={runningId != null}
+                      >
+                        {runningId === card.id ? <Loader2 size={13} className="spin" /> : <Play size={13} />}
+                      </button>
+                    )}
                     <button
                       onClick={() => open_pipe_modal(card)}
                       title="assign pipeline"
@@ -443,6 +491,7 @@ export default function Kanban() {
                     <Workflow size={11} /> {card.pipeline_name}
                   </span>
                 )}
+                <RunBadge run={run_of(card)} on_open={() => open_detail(card)} />
                 <span className="kanban-move">
                   <button onClick={() => shift(card, -1)} disabled={card.column_id === COLUMNS[0].id}>
                     <ArrowLeft size={13} />
@@ -538,7 +587,13 @@ export default function Kanban() {
                   value={dAssignee}
                   onChange={(e) => setDAssignee(e.target.value)}
                   placeholder="assign person…"
+                  list="kanban-user-list"
                 />
+                <datalist id="kanban-user-list">
+                  {users.map((u) => (
+                    <option key={u.username} value={u.username} />
+                  ))}
+                </datalist>
                 <select
                   className="kanban-select"
                   value=""
@@ -549,6 +604,23 @@ export default function Kanban() {
                   {savedAgents.map((a) => (
                     <option key={a.id} value={a.id}>{a.name}</option>
                   ))}
+                </select>
+              </div>
+              <div className="kanban-assign-row">
+                <Clock size={13} />
+                <select
+                  className="kanban-select"
+                  value={detail?.cron || ""}
+                  onChange={(e) => pick_detail_schedule(e.target.value)}
+                  title="schedule pipeline runs (cron)"
+                >
+                  <option value="">no schedule…</option>
+                  {CRON_PRESETS.map((p) => (
+                    <option key={p.expr} value={p.expr}>{p.label}</option>
+                  ))}
+                  {detail?.cron && !CRON_PRESETS.some((p) => p.expr === detail.cron) && (
+                    <option value={detail.cron}>{detail.cron}</option>
+                  )}
                 </select>
               </div>
               <button type="submit" disabled={!dTitle.trim()}>save</button>
@@ -573,7 +645,54 @@ export default function Kanban() {
                 </button>
               </form>
             </div>
+            <RunTimeline run={detail ? run_of(cards.find((c) => c.id === detail.id) || detail) : null} />
       </SlideOver>
     </main>
+  );
+}
+
+const STAGE_LABEL: Record<string, string> = {
+  ok: "passed",
+  failed: "failed",
+};
+
+function RunBadge({ run, on_open }: { run: CardRun | null; on_open: () => void }) {
+  if (!run) return null;
+  return (
+    <button
+      className={`run-badge run-${run.status}`}
+      onClick={on_open}
+      title="open run log"
+    >
+      {run.status === "ok" ? <CheckCircle2 size={11} /> : <XCircle size={11} />}
+      {run.pipeline_name} · {run.status === "ok" ? "ran" : "failed"} · {run.stages.length} stage{run.stages.length === 1 ? "" : "s"}
+    </button>
+  );
+}
+
+function RunTimeline({ run }: { run: CardRun | null }) {
+  if (!run) return null;
+  return (
+    <section className="run-timeline" aria-label="pipeline run log">
+      <h3>
+        <Workflow size={13} /> run · {run.pipeline_name} ·{" "}
+        <span className={run.status === "ok" ? "run-ok-text" : "run-failed-text"}>{STAGE_LABEL[run.status]}</span>
+      </h3>
+      <ol>
+        {run.stages.map((s, i) => (
+          <li key={`${s.node}-${i}`} className={`run-stage run-${s.status}`}>
+            <span className="run-stage-icon">
+              {s.status === "ok" ? <CheckCircle2 size={13} /> : <XCircle size={13} />}
+            </span>
+            <span className="run-stage-body">
+              <strong>{s.node}</strong>
+              <span className="run-stage-stage">{s.stage}</span>
+              <span className="run-stage-note">{s.note}</span>
+            </span>
+          </li>
+        ))}
+      </ol>
+      {run.output && <pre className="run-output">{run.output}</pre>}
+    </section>
   );
 }

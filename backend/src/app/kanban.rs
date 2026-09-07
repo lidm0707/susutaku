@@ -74,6 +74,10 @@ impl CardService {
     ) -> Result<(), StoreError> {
         self.repo.set_pipeline(card_id, pipeline_id).await
     }
+
+    pub async fn set_cron(&self, card_id: i64, cron: Option<String>) -> Result<(), StoreError> {
+        self.repo.set_cron(card_id, cron).await
+    }
 }
 
 pub struct CommentService {

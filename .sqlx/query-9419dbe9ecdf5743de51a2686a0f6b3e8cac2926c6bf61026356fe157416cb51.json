@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE kanban_cards\n               SET agent_name = $2, agent_state = $3\n               WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "9419dbe9ecdf5743de51a2686a0f6b3e8cac2926c6bf61026356fe157416cb51"
+}

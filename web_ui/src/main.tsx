@@ -5,13 +5,14 @@ import Chat from "./pages/Chat.jsx";
 import AgentSettings from "./features/agents/AgentSettings.jsx";
 import Kanban from "./pages/Kanban.jsx";
 import Login from "./pages/Login.jsx";
-import Models from "./pages/Models.jsx";
 import Settings from "./pages/Settings.jsx";
 import Sandbox from "./pages/Sandbox.jsx";
 import Pipelines from "./pages/Pipelines.jsx";
+import Cronjobs from "./pages/Cronjobs.jsx";
 import Prompts from "./pages/Prompts.jsx";
 import { get_token } from "./lib.js";
 import { Toaster } from "./ui/Toast.jsx";
+import SideNav from "./components/SideNav.tsx";
 import "./styles.css";
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
@@ -32,15 +33,17 @@ function App() {
         <Route path="/" element={<Login />} />
         <Route path="/login" element={<Navigate to="/" replace />} />
         <Route path="/chat" element={<RequireAuth><Chat /></RequireAuth>} />
-        <Route path="/models" element={<RequireAuth><Models /></RequireAuth>} />
+        <Route path="/models" element={<Navigate to="/chat" replace />} />
         <Route path="/kanban" element={<RequireAuth><Kanban /></RequireAuth>} />
         <Route path="/pipelines" element={<RequireAuth><Pipelines /></RequireAuth>} />
+        <Route path="/cronjobs" element={<RequireAuth><Cronjobs /></RequireAuth>} />
         <Route path="/prompts" element={<RequireAuth><Prompts /></RequireAuth>} />
         <Route path="/agents" element={<RequireAuth><AgentSettings /></RequireAuth>} />
         <Route path="/settings" element={<RequireAuth><Settings /></RequireAuth>} />
         <Route path="/sandbox" element={<RequireAuth><Sandbox /></RequireAuth>} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
+      <SideNav />
       <Toaster />
     </>
   );

@@ -12,19 +12,19 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use utoipa::OpenApi;
 
-use crate::domain::SearchMode;
 use crate::app::kanban::{CardView, KanbanApp};
-use crate::port::outbound::{
-    AgentConfigDraft, CardMove, CardPatch, NewCard, NewPipeline, NewProject, NewWorkspace,
-};
+use crate::domain::SearchMode;
 use crate::infra::codex_auth;
 use crate::infra::codex_auth::{CodexAuth, LoginStatus};
 use crate::infra::codex_chat;
 use crate::infra::sandbox::AgentSandbox;
 use crate::infra::zai_settings::SettingsState;
 use crate::port::inbound::{ChatCmd, ChatHandling};
-use prompt_sys::{PromptBuilder, Role as PromptRole, MAX_PROMPT_CHARS};
 use crate::port::outbound::ModelSwitch;
+use crate::port::outbound::{
+    AgentConfigDraft, CardMove, CardPatch, NewCard, NewPipeline, NewProject, NewWorkspace,
+};
+use prompt_sys::{MAX_PROMPT_CHARS, PromptBuilder, Role as PromptRole};
 use std::path::PathBuf;
 use susutaku_mlx::tok::TokKind;
 
@@ -35,6 +35,7 @@ pub fn router<T: ChatHandling + ModelSwitch + 'static>(
     codex_workspace: PathBuf,
     kanban_store: std::sync::Arc<kanban_rs::Store>,
 ) -> Router {
+    let kanban_store_for_sched = kanban_store.clone();
     let core = Router::new()
         .route("/api/health", get(health))
         .route("/api/models", get(models))
@@ -55,12 +56,23 @@ pub fn router<T: ChatHandling + ModelSwitch + 'static>(
             "/api/settings/zai",
             get(get_zai_settings).post(set_zai_settings),
         )
+        .route(
+            "/api/settings/client-env",
+            get(get_client_env).post(set_client_env),
+        )
         .route("/api/chat/zai", post(chat_zai))
         .route("/api/sandbox", get(list_sandboxes))
         .route("/api/sandbox/purge", post(purge_sandbox))
         .route("/api/sandbox/sweep", post(sweep_sandboxes))
         .with_state(Arc::new(SettingsState::load()));
-    core.merge(auth).merge(settings).merge(kanban_router(kanban_state(kanban_store)))
+    core.merge(auth)
+        .merge(settings)
+        .merge(kanban_router(kanban_state(
+            kanban_store,
+            std::sync::Arc::new(crate::app::schedule_work::spawn(std::sync::Arc::new(
+                crate::app::kanban::build(kanban_store_for_sched),
+            ))),
+        )))
 }
 
 fn kanban_router(state: KanbanStore) -> Router {
@@ -69,10 +81,7 @@ fn kanban_router(state: KanbanStore) -> Router {
         .route("/api/auth/logout", post(logout))
         .route("/api/auth/bootstrap", get(bootstrap))
         .route("/api/auth/change-password", post(change_password))
-        .route(
-            "/api/auth/users",
-            get(list_users).post(create_user),
-        )
+        .route("/api/auth/users", get(list_users).post(create_user))
         .route(
             "/api/workspaces",
             get(list_workspaces).post(create_workspace),
@@ -83,10 +92,7 @@ fn kanban_router(state: KanbanStore) -> Router {
             get(list_projects).post(create_project),
         )
         .route("/api/projects/{id}", delete(delete_project))
-        .route(
-            "/api/kanban/cards",
-            get(list_cards).post(create_card),
-        )
+        .route("/api/kanban/cards", get(list_cards).post(create_card))
         .route(
             "/api/kanban/cards/{id}",
             delete(remove_card).put(update_card),
@@ -100,14 +106,11 @@ fn kanban_router(state: KanbanStore) -> Router {
             "/api/kanban/cards/{id}/agent",
             get(get_agent).put(set_agent),
         )
-        .route(
-            "/api/kanban/cards/{id}/pipeline",
-            put(set_card_pipeline),
-        )
-        .route(
-            "/api/pipelines",
-            get(list_pipelines).post(create_pipeline),
-        )
+        .route("/api/kanban/cards/{id}/pipeline", put(set_card_pipeline))
+        .route("/api/kanban/cards/{id}/run", post(run_card))
+        .route("/api/kanban/cards/{id}/schedule", put(set_card_schedule))
+        .route("/api/cronjobs", get(list_cronjobs))
+        .route("/api/pipelines", get(list_pipelines).post(create_pipeline))
         .route(
             "/api/pipelines/{id}",
             put(update_pipeline).delete(remove_pipeline),
@@ -153,11 +156,7 @@ impl FromRequestParts<KanbanStore> for AuthUser {
         if user.must_change_password {
             let path = parts.uri.path();
             if path != CHANGE_PASSWORD_PATH && path != LOGOUT_PATH {
-                return Err((
-                    StatusCode::FORBIDDEN,
-                    PASSWORD_CHANGE_REQUIRED_MSG,
-                )
-                    .into_response());
+                return Err((StatusCode::FORBIDDEN, PASSWORD_CHANGE_REQUIRED_MSG).into_response());
             }
         }
         Ok(AuthUser(user))
@@ -291,7 +290,11 @@ async fn create_user(
         require_users(&user)?;
     }
     let role = parse_role(&req.role)?;
-    let role = if needs_setup { kanban_rs::Role::Owner } else { role };
+    let role = if needs_setup {
+        kanban_rs::Role::Owner
+    } else {
+        role
+    };
     let row = state
         .store
         .create_user(&kanban_rs::NewUser {
@@ -516,6 +519,56 @@ async fn set_zai_settings(
 }
 
 #[utoipa::path(
+    get,
+    path = "/api/settings/client-env",
+    responses((status = 200, body = ClientEnvReply))
+)]
+async fn get_client_env(State(state): State<Arc<SettingsState>>) -> Json<ClientEnvReply> {
+    let env = state.client_env();
+    let default = crate::infra::client_env::ClientEnv::default();
+    let env = env.unwrap_or(default);
+    Json(ClientEnvReply {
+        reported: state.client_env().is_some(),
+        user_agent: env.user_agent,
+        platform: env.platform,
+        language: env.language,
+        timezone: env.timezone,
+        screen: env.screen,
+        workspace_path: env.workspace_path,
+    })
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/settings/client-env",
+    request_body = ClientEnvRequest,
+    responses((status = 200, body = ClientEnvReply), (status = 500, body = str))
+)]
+async fn set_client_env(
+    State(state): State<Arc<SettingsState>>,
+    Json(req): Json<ClientEnvRequest>,
+) -> Result<Json<ClientEnvReply>, ApiError> {
+    let env = crate::infra::client_env::ClientEnv {
+        user_agent: req.user_agent,
+        platform: req.platform,
+        language: req.language,
+        timezone: req.timezone,
+        screen: req.screen,
+        workspace_path: req.workspace_path,
+    };
+    state.set_client_env(&env).map_err(ApiError::internal)?;
+    Ok(Json(ClientEnvReply {
+        reported: true,
+        user_agent: env.user_agent,
+        platform: env.platform,
+        language: env.language,
+        timezone: env.timezone,
+        screen: env.screen,
+        workspace_path: env.workspace_path,
+    }))
+}
+
+#[utoipa::path(
     post,
     path = "/api/chat/zai",
     request_body = ZaiChatRequest,
@@ -538,9 +591,9 @@ async fn chat_zai(
                 chat_model,
                 system
                     .into_iter()
-                    .chain(std::iter::once(
-                        ai_interface_layer::message::Message::user(user),
-                    ))
+                    .chain(std::iter::once(ai_interface_layer::message::Message::user(
+                        user,
+                    )))
                     .collect(),
             ),
         )
@@ -582,22 +635,26 @@ fn build_system_message(
     if sections.is_empty() {
         return Ok(None);
     }
-    build_prompt(sections)
-        .map(|p| Some(ai_interface_layer::message::Message::system(p.render())))
+    build_prompt(sections).map(|p| Some(ai_interface_layer::message::Message::system(p.render())))
 }
 
 /// Shared handler state: the composed kanban app plus the raw store for auth.
 struct KanbanState {
     app: KanbanApp,
     store: std::sync::Arc<kanban_rs::Store>,
+    sched: std::sync::Arc<crate::app::schedule_work::ScheduleHandle>,
 }
 
 type KanbanStore = std::sync::Arc<KanbanState>;
 
-fn kanban_state(store: std::sync::Arc<kanban_rs::Store>) -> KanbanStore {
+fn kanban_state(
+    store: std::sync::Arc<kanban_rs::Store>,
+    sched: std::sync::Arc<crate::app::schedule_work::ScheduleHandle>,
+) -> KanbanStore {
     std::sync::Arc::new(KanbanState {
         app: crate::app::kanban::build(store.clone()),
         store,
+        sched,
     })
 }
 
@@ -625,7 +682,9 @@ async fn create_workspace(
     let row = state
         .app
         .workspaces
-        .create(NewWorkspace { name: req.name.trim().to_string() })
+        .create(NewWorkspace {
+            name: req.name.trim().to_string(),
+        })
         .await
         .map_err(workspace_err)?;
     Ok(Json(WorkspaceDto::from(row)))
@@ -638,12 +697,7 @@ async fn delete_workspace(
     user: AuthUser,
 ) -> Result<&'static str, ApiError> {
     require_edit(&user)?;
-    state
-        .app
-        .workspaces
-        .remove(id)
-        .await
-        .map_err(store_err)?;
+    state.app.workspaces.remove(id).await.map_err(store_err)?;
     Ok("ok")
 }
 
@@ -689,12 +743,7 @@ async fn delete_project(
     user: AuthUser,
 ) -> Result<&'static str, ApiError> {
     require_edit(&user)?;
-    state
-        .app
-        .projects
-        .remove(id)
-        .await
-        .map_err(store_err)?;
+    state.app.projects.remove(id).await.map_err(store_err)?;
     Ok("ok")
 }
 
@@ -704,7 +753,11 @@ async fn list_cards(
     axum::extract::Query(query): axum::extract::Query<ListCardsQuery>,
     _user: AuthUser,
 ) -> Result<Json<Vec<CardDto>>, ApiError> {
-    let views = state.app.card_views(query.project_id).await.map_err(kanban_err)?;
+    let views = state
+        .app
+        .card_views(query.project_id)
+        .await
+        .map_err(kanban_err)?;
     Ok(Json(views.into_iter().map(CardDto::from).collect()))
 }
 
@@ -720,7 +773,9 @@ async fn create_card(
     Json(req): Json<CreateCardRequest>,
 ) -> Result<Json<CardDto>, ApiError> {
     require_edit(&user)?;
-    let priority = req.priority.unwrap_or_else(|| kanban_rs::PRIORITY_NORMAL.to_string());
+    let priority = req
+        .priority
+        .unwrap_or_else(|| kanban_rs::PRIORITY_NORMAL.to_string());
     let row = state
         .app
         .cards
@@ -843,6 +898,93 @@ async fn set_card_pipeline(
 }
 
 #[utoipa::path(
+    post,
+    path = "/api/kanban/cards/{id}/run",
+    responses((status = 200, body = crate::app::pipeline_run::RunRecord), (status = 404, body = str), (status = 400, body = str))
+)]
+async fn run_card(
+    State(state): State<KanbanStore>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+    user: AuthUser,
+) -> Result<Json<crate::app::pipeline_run::RunRecord>, ApiError> {
+    require_edit(&user)?;
+    let record = crate::app::pipeline_run::run_card_pipeline(&state.app, id)
+        .await
+        .map_err(kanban_err)?;
+    Ok(Json(record))
+}
+
+#[utoipa::path(
+    put,
+    path = "/api/kanban/cards/{id}/schedule",
+    request_body = SetScheduleRequest,
+    responses((status = 200, body = str), (status = 404, body = str), (status = 400, body = str))
+)]
+async fn set_card_schedule(
+    State(state): State<KanbanStore>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+    user: AuthUser,
+    Json(req): Json<SetScheduleRequest>,
+) -> Result<&'static str, ApiError> {
+    require_edit(&user)?;
+    if let Some(expr) = &req.cron {
+        work::services::cron::Cron::parse(expr)
+            .map_err(|e| ApiError::bad_request(e.to_string()))?;
+    }
+    state
+        .app
+        .cards
+        .set_cron(id, req.cron.clone())
+        .await
+        .map_err(kanban_err)?;
+    Ok("ok")
+}
+
+#[derive(Serialize, utoipa::ToSchema)]
+struct CronJobDto {
+    card_id: i64,
+    title: String,
+    cron: String,
+    pipeline_name: Option<String>,
+    next_run: u64,
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/cronjobs",
+    responses((status = 200, body = [CronJobDto]))
+)]
+async fn list_cronjobs(
+    State(state): State<KanbanStore>,
+    _user: AuthUser,
+) -> Result<Json<Vec<CronJobDto>>, ApiError> {
+    let next: std::collections::HashMap<i64, u64> = state
+        .sched
+        .entries()
+        .into_iter()
+        .map(|e| (e.card_id, e.next_run))
+        .collect();
+    let jobs = state
+        .app
+        .card_views(None)
+        .await
+        .map_err(kanban_err)?
+        .into_iter()
+        .filter_map(|v| {
+            let cron = v.card.cron.clone()?;
+            Some(CronJobDto {
+                card_id: v.card.id,
+                title: v.card.title,
+                cron,
+                pipeline_name: v.pipeline_name,
+                next_run: next.get(&v.card.id).copied().unwrap_or(0),
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(Json(jobs))
+}
+
+#[utoipa::path(
     put,
     path = "/api/kanban/cards/{id}",
     request_body = UpdateCardRequest,
@@ -943,7 +1085,11 @@ async fn create_pipeline(
         .await
         .map_err(cfg_err)?;
     let spec = serde_json::from_str(&row.spec).unwrap_or(serde_json::Value::Null);
-    Ok(Json(PipelineDto { id: row.id, name: row.name, spec }))
+    Ok(Json(PipelineDto {
+        id: row.id,
+        name: row.name,
+        spec,
+    }))
 }
 
 #[utoipa::path(
@@ -959,8 +1105,7 @@ async fn update_pipeline(
     Json(req): Json<SavePipelineRequest>,
 ) -> Result<&'static str, ApiError> {
     require_edit(&user)?;
-    let spec = serde_json::to_string(&req.spec)
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let spec = serde_json::to_string(&req.spec).map_err(|e| ApiError::internal(e.to_string()))?;
     state
         .app
         .pipelines
@@ -1174,6 +1319,8 @@ async fn sweep_sandboxes() -> Json<SandboxSweepReply> {
         chat_codex,
         get_zai_settings,
         set_zai_settings,
+        get_client_env,
+        set_client_env,
         chat_zai,
         render_prompt,
         list_sandboxes,
@@ -1186,6 +1333,9 @@ async fn sweep_sandboxes() -> Json<SandboxSweepReply> {
         remove_card,
         get_agent,
         set_agent,
+        run_card,
+        set_card_schedule,
+        list_cronjobs,
         list_comments,
         add_comment,
         login,
@@ -1212,6 +1362,8 @@ async fn sweep_sandboxes() -> Json<SandboxSweepReply> {
         CodexChatRequest,
         ZaiSettingsReply,
         ZaiSettingsRequest,
+        ClientEnvReply,
+        ClientEnvRequest,
         ZaiChatRequest,
         PromptSectionDto,
         RenderPromptRequest,
@@ -1221,10 +1373,16 @@ async fn sweep_sandboxes() -> Json<SandboxSweepReply> {
         SandboxSweepReply,
         CardDto,
         AgentDto,
+        crate::app::pipeline_run::RunRecord,
+        crate::app::pipeline_run::RunStage,
+        crate::app::pipeline_run::StageStatus,
         CreateCardRequest,
         ListCardsQuery,
         MoveCardRequest,
         SetAgentRequest,
+        SetScheduleRequest,
+        CronJobDto,
+        crate::app::schedule_work::CronJobState,
         UpdateCardRequest,
         CommentDto,
         AddCommentRequest,
@@ -1334,6 +1492,27 @@ struct ZaiSettingsRequest {
     model: Option<String>,
 }
 
+#[derive(Serialize, utoipa::ToSchema)]
+struct ClientEnvReply {
+    reported: bool,
+    user_agent: String,
+    platform: String,
+    language: String,
+    timezone: String,
+    screen: String,
+    workspace_path: String,
+}
+
+#[derive(Deserialize, utoipa::ToSchema)]
+struct ClientEnvRequest {
+    user_agent: String,
+    platform: String,
+    language: String,
+    timezone: String,
+    screen: String,
+    workspace_path: String,
+}
+
 #[derive(Deserialize, utoipa::ToSchema)]
 struct ZaiChatRequest {
     message: String,
@@ -1414,6 +1593,7 @@ struct CardDto {
     assignee: Option<String>,
     pipeline_id: Option<i64>,
     pipeline_name: Option<String>,
+    cron: Option<String>,
 }
 
 impl From<kanban_rs::CardRow> for CardDto {
@@ -1431,6 +1611,7 @@ impl From<kanban_rs::CardRow> for CardDto {
             assignee: r.assignee,
             pipeline_id: r.pipeline_id,
             pipeline_name: None,
+            cron: r.cron,
         }
     }
 }
@@ -1484,6 +1665,12 @@ struct SetCardPipelineRequest {
 }
 
 #[derive(Deserialize, utoipa::ToSchema)]
+struct SetScheduleRequest {
+    /// 5-field cron expression (UTC), or null to unschedule the card.
+    cron: Option<String>,
+}
+
+#[derive(Deserialize, utoipa::ToSchema)]
 struct SavePipelineRequest {
     name: String,
     /// piplines::graph::PipelineSpec: {nodes: [{id, stage, params}], links: [{from, to}]}
@@ -1500,7 +1687,11 @@ struct PipelineDto {
 impl From<kanban_rs::PipelineRow> for PipelineDto {
     fn from(r: kanban_rs::PipelineRow) -> Self {
         let spec = serde_json::from_str(&r.spec).unwrap_or(serde_json::Value::Null);
-        Self { id: r.id, name: r.name, spec }
+        Self {
+            id: r.id,
+            name: r.name,
+            spec,
+        }
     }
 }
 
@@ -1614,7 +1805,10 @@ struct WorkspaceDto {
 
 impl From<kanban_rs::WorkspaceRow> for WorkspaceDto {
     fn from(w: kanban_rs::WorkspaceRow) -> Self {
-        Self { id: w.id, name: w.name }
+        Self {
+            id: w.id,
+            name: w.name,
+        }
     }
 }
 
@@ -1665,15 +1859,9 @@ impl IntoResponse for ApiError {
             Self(msg) if msg.starts_with("no loadable model") => {
                 (StatusCode::NOT_FOUND, msg).into_response()
             }
-            Self(msg) if msg == Self::NOT_FOUND_MSG => {
-                (StatusCode::NOT_FOUND, msg).into_response()
-            }
-            Self(msg) if msg == UNAUTHORIZED_MSG => {
-                (StatusCode::UNAUTHORIZED, msg).into_response()
-            }
-            Self(msg) if msg == FORBIDDEN_MSG => {
-                (StatusCode::FORBIDDEN, msg).into_response()
-            }
+            Self(msg) if msg == Self::NOT_FOUND_MSG => (StatusCode::NOT_FOUND, msg).into_response(),
+            Self(msg) if msg == UNAUTHORIZED_MSG => (StatusCode::UNAUTHORIZED, msg).into_response(),
+            Self(msg) if msg == FORBIDDEN_MSG => (StatusCode::FORBIDDEN, msg).into_response(),
             Self(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
         }
     }

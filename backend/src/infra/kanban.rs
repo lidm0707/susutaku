@@ -4,7 +4,10 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use kanban_rs::{AgentConfigRow, AgentState, CardRow, CommentRow, DbTx, PipelineRow, ProjectRow, Store, StoreError, UpdateCard, WorkspaceRow, AddCard, AgentConfigUpdate, MoveCard};
+use kanban_rs::{
+    AddCard, AgentConfigRow, AgentConfigUpdate, AgentState, CardRow, CommentRow, DbTx, MoveCard,
+    PipelineRow, ProjectRow, Store, StoreError, UpdateCard, WorkspaceRow,
+};
 
 use crate::port::outbound::{
     AgentConfigDraft, AgentConfigRepo, CardMove, CardPatch, CardRepo, CardTx, CommentRepo,
@@ -17,7 +20,10 @@ pub const DATABASE_URL_ENV: &str = "DATABASE_URL";
 pub async fn connect() -> Store {
     let url = std::env::var(DATABASE_URL_ENV).unwrap_or_else(|_| Store::default_url().into());
     let store = Store::connect(&url).await.expect("kanban postgres connect");
-    store.ensure_default_admin().await.expect("seed default admin");
+    store
+        .ensure_default_admin()
+        .await
+        .expect("seed default admin");
     store
 }
 
@@ -123,6 +129,10 @@ impl CardRepo for PgKanban {
         self.store().set_card_pipeline(card_id, pipeline_id).await
     }
 
+    async fn set_cron(&self, card_id: i64, cron: Option<String>) -> Result<(), StoreError> {
+        self.store().set_cron(card_id, cron.as_deref()).await
+    }
+
     async fn tx(&self) -> Result<Box<dyn CardTx>, StoreError> {
         Ok(Box::new(PgCardTx {
             store: Arc::clone(&self.store),
@@ -147,7 +157,9 @@ impl CardTx for PgCardTx {
     }
 
     async fn update(&mut self, patch: CardPatch) -> Result<(), StoreError> {
-        self.store.update_card_tx(&mut self.tx, as_patch(&patch)).await
+        self.store
+            .update_card_tx(&mut self.tx, as_patch(&patch))
+            .await
     }
 
     async fn commit(self: Box<Self>) -> Result<(), StoreError> {
@@ -186,8 +198,15 @@ impl CommentTx for PgCommentTx {
         self.store.card_exists_tx(&mut self.tx, card_id).await
     }
 
-    async fn add(&mut self, card_id: i64, author: &str, body: &str) -> Result<CommentRow, StoreError> {
-        self.store.add_comment_tx(&mut self.tx, card_id, author, body).await
+    async fn add(
+        &mut self,
+        card_id: i64,
+        author: &str,
+        body: &str,
+    ) -> Result<CommentRow, StoreError> {
+        self.store
+            .add_comment_tx(&mut self.tx, card_id, author, body)
+            .await
     }
 
     async fn commit(self: Box<Self>) -> Result<(), StoreError> {

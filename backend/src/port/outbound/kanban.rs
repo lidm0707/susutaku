@@ -2,7 +2,10 @@
 //! by the Postgres adapter. Owned DTOs keep the boundary free of borrows.
 
 use async_trait::async_trait;
-use kanban_rs::{AgentConfigRow, AgentState, CardRow, CommentRow, PipelineRow, ProjectRow, StoreError, WorkspaceRow};
+use kanban_rs::{
+    AgentConfigRow, AgentState, CardRow, CommentRow, PipelineRow, ProjectRow, StoreError,
+    WorkspaceRow,
+};
 use mockall::automock;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -81,6 +84,7 @@ pub trait CardRepo: Send + Sync {
     async fn set_agent(&self, id: i64, agent: &AgentState) -> Result<(), StoreError>;
     async fn agent(&self, id: i64) -> Result<Option<AgentState>, StoreError>;
     async fn set_pipeline(&self, card_id: i64, pipeline_id: Option<i64>) -> Result<(), StoreError>;
+    async fn set_cron(&self, card_id: i64, cron: Option<String>) -> Result<(), StoreError>;
     /// Opens a transaction handle; write + read-back run inside it.
     async fn tx(&self) -> Result<Box<dyn CardTx>, StoreError>;
 }
@@ -107,7 +111,12 @@ pub trait CommentRepo: Send + Sync {
 pub trait CommentTx: Send {
     async fn card_exists(&mut self, card_id: i64) -> Result<bool, StoreError>;
     /// Inserts and returns the persisted row (author, body, created_at filled in).
-    async fn add(&mut self, card_id: i64, author: &str, body: &str) -> Result<CommentRow, StoreError>;
+    async fn add(
+        &mut self,
+        card_id: i64,
+        author: &str,
+        body: &str,
+    ) -> Result<CommentRow, StoreError>;
     async fn commit(self: Box<Self>) -> Result<(), StoreError>;
     async fn rollback(self: Box<Self>) -> Result<(), StoreError>;
 }

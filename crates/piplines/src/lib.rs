@@ -1,6 +1,7 @@
 //! Pipeline: named stages wired sequentially, payload passed stage to stage.
 //! Pure data + ops, no I/O. Connectors to models/files live in callers.
 
+pub mod agent;
 pub mod graph;
 pub mod payload;
 pub mod stage;
@@ -24,7 +25,9 @@ pub struct Pipeline {
 
 impl Pipeline {
     pub fn new() -> Self {
-        Self { stages: VecDeque::new() }
+        Self {
+            stages: VecDeque::new(),
+        }
     }
 
     pub fn attach(&mut self, stage: Box<dyn Stage>) -> Result<(), PipelineError> {
@@ -45,7 +48,9 @@ impl Pipeline {
         }
         while let Some(stage) = self.stages.pop_front() {
             let id = stage.id();
-            payload = stage.apply(payload).map_err(|e| PipelineError::StageFailed(id, e))?;
+            payload = stage
+                .apply(payload)
+                .map_err(|e| PipelineError::StageFailed(id, e))?;
         }
         Ok(payload)
     }

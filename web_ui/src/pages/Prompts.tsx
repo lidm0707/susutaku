@@ -1,6 +1,5 @@
 import { useState } from "react";
-import { Link } from "react-router-dom";
-import { ArrowLeft, FileText, Play, Plus, Trash2 } from "lucide-react";
+import { FileText, Play, Plus, Trash2 } from "lucide-react";
 import {
   chat_zai,
   render_prompt,
@@ -8,8 +7,9 @@ import {
   type PromptSection,
   type RenderedPrompt,
 } from "../lib.js";
+import { Button, IconButton, Select, TextArea } from "../ui/controls.js";
 
-const ROLES = ["system", "instructions", "context", "tools"];
+const ROLES = ["system", "instructions", "context", "tools"] as const;
 
 export default function Prompts() {
   const [sections, setSections] = useState<PromptSection[]>([
@@ -60,69 +60,75 @@ export default function Prompts() {
   }
 
   return (
-    <main className="chat">
+    <main className="chat kanban-page agents-page">
       <header>
-        <h1><Link to="/prompts">prompts</Link></h1>
+        <h1>prompts</h1>
         <span className="sub">
           {preview
             ? `${preview.chars} / ${preview.max_chars} chars`
             : "compose a system prompt"}
         </span>
-        <nav className="nav">
-          <button className="codex-login" onClick={previewPrompt}>
-            <FileText size={14} /> render
-          </button>
-          <Link to="/chat" title="back to chat"><ArrowLeft size={16} /></Link>
-        </nav>
       </header>
       {error && <p className="error">{error}</p>}
-      <section className="log">
-        {sections.map((s, i) => (
-          <div key={i} className="model-row" style={{ alignItems: "flex-start" }}>
-            <select
-              value={s.role}
-              onChange={(e) => update(i, { role: e.target.value })}
-              className="codex-login"
-              style={{ width: "9rem" }}
-            >
-              {ROLES.map((r) => (
-                <option key={r} value={r}>{r}</option>
-              ))}
-            </select>
-            <textarea
-              value={s.body}
-              onChange={(e) => update(i, { body: e.target.value })}
-              placeholder={`${s.role} body…`}
-              rows={3}
-              style={{ flex: 1 }}
-            />
-            <button className="codex-login" onClick={() => remove(i)} title="remove section">
-              <Trash2 size={14} />
-            </button>
-          </div>
-        ))}
-        <button className="model-row" onClick={add}>
-          <Plus size={14} />
-          <span className="model-name">add section</span>
-        </button>
-        {preview && (
-          <pre className="log" style={{ whiteSpace: "pre-wrap" }}>{preview.rendered}</pre>
-        )}
-      </section>
-      <section className="log">
-        <div className="model-row">
-          <input
+      <div className="prompts-layout">
+        <section className="agent-editor">
+          {sections.map((s, i) => (
+            <div key={i} className="prompt-section">
+              <div className="prompt-section-head">
+                <Select
+                  aria-label="section role"
+                  value={s.role}
+                  onChange={(e) => update(i, { role: e.target.value })}
+                >
+                  {ROLES.map((r) => (
+                    <option key={r} value={r}>{r}</option>
+                  ))}
+                </Select>
+                <IconButton title="remove section" onClick={() => remove(i)}>
+                  <Trash2 size={14} />
+                </IconButton>
+              </div>
+              <TextArea
+                value={s.body}
+                onChange={(e) => update(i, { body: e.target.value })}
+                placeholder={`${s.role} body…`}
+                rows={3}
+                spellCheck={false}
+              />
+            </div>
+          ))}
+          <Button variant="ghost" className="agents-new" onClick={add}>
+            <Plus size={14} /> add section
+          </Button>
+          {preview && (
+            <pre className="prompt-preview">{preview.rendered}</pre>
+          )}
+          <footer className="agent-editor-foot">
+            <Button variant="primary" type="button" onClick={previewPrompt}>
+              <FileText size={14} /> render
+            </Button>
+          </footer>
+        </section>
+        <section className="agent-editor">
+          <TextArea
             value={message}
             onChange={(e) => setMessage(e.target.value)}
             placeholder="test message (z.ai)…"
-            style={{ flex: 1 }}
+            rows={4}
           />
-          <button className="codex-login" onClick={test} disabled={busy || !message.trim()}>
-            <Play size={14} /> {busy ? "…" : "test"}
-          </button>
-        </div>
-        {reply && <pre className="log" style={{ whiteSpace: "pre-wrap" }}>{reply.reply}</pre>}
-      </section>
+          {reply && <pre className="prompt-preview">{reply.reply}</pre>}
+          <footer className="agent-editor-foot">
+            <Button
+              variant="primary"
+              type="button"
+              onClick={test}
+              disabled={busy || !message.trim()}
+            >
+              <Play size={14} /> {busy ? "…" : "test"}
+            </Button>
+          </footer>
+        </section>
+      </div>
     </main>
   );
 }

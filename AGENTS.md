@@ -23,6 +23,7 @@
 - `crates/gguf-rs` — GGUF model file parsing
 - `crates/agent_3th_cli/` — third-party CLI integrations (`claude_cli`, `codex_cli`, `zai_api`, `ai_interface_layer`)
 - `crates/work` — applications/services built on the crates above
+- `attachments/` — file attachment storage (see `docs/attachments.md`)
 - `piplines/`, `input/`, `output/`, `web_ui/` — pipeline and UI assets (`web_ui` includes a Kanban board page backed by `crates/kanban-rs` + Postgres)
 
 ## Kanban Postgres
@@ -48,6 +49,17 @@
   the first user, forced to role `owner`.
 - Guards: any role reads kanban; editor+ mutates cards/agent state;
   admin+ manages users. Passwords: min 8 chars, never returned.
+
+## Web UI conventions (`web_ui/`)
+
+- Overlay choice: lots of information (detail views, long lists, multi-section
+  content) → `SlideOver`; light content (short forms, confirmations, single
+  input) → `Modal` / `PromptModal`. Components live in `src/ui/Overlay.tsx`.
+- Semantic layout: use landmarks/elements for their meaning (`main`, `header`,
+  `nav`, `section`, `form`, `article`) and ARIA (`role="dialog"`,
+  `aria-modal`, labels) — not div soup.
+- Minimal design: no decorative chrome, few colors, small icon set
+  (`lucide-react`), sparse borders/shadows.
 
 ## Rules
 

@@ -1,13 +1,7 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
 import {
-  Box,
   Brain,
-  KanbanSquare,
-  MessageSquareText,
   Send,
-  Settings,
-  SlidersHorizontal,
   Snowflake,
   Zap,
 } from "lucide-react";
@@ -136,7 +130,7 @@ export default function Chat() {
   return (
     <main className="chat">
       <header>
-        <h1><Link to="/chat">susutaku</Link></h1>
+        <h1>susutaku</h1>
         <span className="sub">
           {model === CODEX
             ? `codex · ${codexModel}`
@@ -148,11 +142,6 @@ export default function Chat() {
         </span>
         <nav className="nav">
           <CodexLogin />
-          <Link to="/models" title="models"><Settings size={16} /></Link>
-          <Link to="/kanban" title="kanban"><KanbanSquare size={16} /></Link>
-          <Link to="/prompts" title="prompts"><MessageSquareText size={16} /></Link>
-          <Link to="/sandbox" title="sandbox"><Box size={16} /></Link>
-          <Link to="/settings" title="z.ai settings"><SlidersHorizontal size={16} /></Link>
         </nav>
       </header>
       <section className="log">

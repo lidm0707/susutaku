@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
-import { ArrowLeft, Bot, Cpu, Plus, Save, Sparkles, Terminal, Trash2 } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import { Bot, Cpu, Plus, Save, Sparkles, Terminal, Trash2 } from "lucide-react";
 import {
   clear_token,
   create_agent,
@@ -126,11 +126,8 @@ export default function AgentSettings() {
   return (
     <main className="chat kanban-page agents-page">
       <header>
-        <h1><Link to="/agents">agents</Link></h1>
+        <h1>agents</h1>
         <span className="sub">{agents.length} saved</span>
-        <nav className="nav">
-          <Link to="/chat" title="back to chat"><ArrowLeft size={16} /></Link>
-        </nav>
       </header>
       <div className="agents-layout">
         <aside className="agents-side">

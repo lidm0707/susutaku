@@ -1,0 +1,59 @@
+# E2E test stack: postgres + web + playwright runner.
+#
+# No service publishes a port to the host — everything stays on the internal
+# docker network. All configuration is environment inside this compose file.
+#
+# MLX inference needs macOS Metal, so the backend runs on the HOST
+# (`cargo run -p backend`); the web service proxies /api to it. The e2e user
+# is seeded through the real auth API using admin credentials provided via
+# env (see tests/helpers.ts + docs/playwright-workflow.md).
+#
+#   docker compose -f docker/docker-compose.playwright.yml up --build --exit-code-from playwright
+#
+# Screenshots (UX snapshots) land in playwright/screenshots/ and
+# playwright/test-results/ on the host via bind mounts.
+name: susutaku-e2e
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: susutaku
+      POSTGRES_PASSWORD: susutaku
+      POSTGRES_DB: susutaku
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.web
+    environment:
+      # MLX inference needs macOS Metal -> the backend runs on the HOST.
+      BACKEND_URL: http://host.docker.internal:${BACKEND_PORT:-8991}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - postgres
+    restart: unless-stopped
+
+  playwright:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.playwright
+    environment:
+      # Web is reachable by service name on the internal network only.
+      PLAYWRIGHT_BASE_URL: http://web
+      # Credentials used to seed the e2e user (see tests/global-setup.ts).
+      E2E_ADMIN_USER: ${E2E_ADMIN_USER:-e2e-admin}
+      E2E_ADMIN_PASSWORD: ${E2E_ADMIN_PASSWORD:-e2e-admin-e2e-admin}
+      E2E_USER: e2e-tester
+      E2E_PASSWORD: e2e-e2e-e2e
+    volumes:
+      # Tests directory writable: playwright writes snapshot baselines next to specs.
+      - ../playwright/tests:/work/tests
+      - ../playwright/playwright.config.ts:/work/playwright.config.ts:ro
+      # Snapshots + results back to host for UX review.
+      - ../playwright/screenshots:/work/screenshots
+      - ../playwright/test-results:/work/test-results
+    depends_on:
+      - web

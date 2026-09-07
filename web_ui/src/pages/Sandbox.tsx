@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
-import { ArrowLeft, Box, Trash2 } from "lucide-react";
+import { Box, Trash2 } from "lucide-react";
 import { fetch_sandboxes, purge_sandbox, sweep_sandboxes, type SandboxDir } from "../lib.js";
 
 export default function Sandbox() {
@@ -48,13 +47,12 @@ export default function Sandbox() {
   return (
     <main className="chat">
       <header>
-        <h1><Link to="/sandbox">sandbox</Link></h1>
+        <h1>sandbox</h1>
         <span className="sub">{dirs.length} dir{dirs.length === 1 ? "" : "s"} · {stale} stale</span>
         <nav className="nav">
           <button className="codex-login" onClick={sweep} title="remove dirs of dead backends">
             <Trash2 size={14} /> sweep stale
           </button>
-          <Link to="/chat" title="back to chat"><ArrowLeft size={16} /></Link>
         </nav>
       </header>
       {status && <p className="saved-mark" style={{ textAlign: "center" }}>{status}</p>}

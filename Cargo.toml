@@ -32,6 +32,7 @@ kanban-rs = { path = "crates/kanban-rs" }
 queue-rs = { path = "crates/queue-rs" }
 prompt-sys = { path = "crates/prompt-sys" }
 piplines = { path = "crates/piplines" }
+work = { path = "crates/work" }
 core-agent = { path = "crates/core-agent" }
 ureq = "2"
 serde_json = "1"
