@@ -93,16 +93,3 @@ fn write_file(zai: &ZaiSettings) -> Result<(), String> {
     )
     .map_err(|e| format!("write {SETTINGS_FILE}: {e}"))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn empty_values_do_not_overwrite() {
-        let state = SettingsState::load();
-        let before = state.zai();
-        state.set_zai(Some(String::new()), Some(String::new())).ok();
-        assert_eq!(state.zai(), before);
-    }
-}

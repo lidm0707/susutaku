@@ -13,10 +13,13 @@
 
 ## Layout
 
-- `crates/core-agent` — agent state, workspace (macOS/Linux), web search
+- `backend/` — HTTP backend (agent API, sandbox adapter, auth, settings)
+- `crates/core-agent` — agent state, sandbox (macOS/Linux/Windows, `sandbox/{macos,linux,windows}.rs`), web search
 - `crates/hf_loader` — model dir scanning + loadability filter (size ≥ 30 GiB, q4, MLX)
 - `crates/mlx-rs` — MLX inference backend
 - `crates/pdf-rs` — PDF parsing
+- `crates/gguf-rs` — GGUF model file parsing
+- `crates/agent_3th_cli/` — third-party CLI integrations (`claude_cli`, `codex_cli`, `zai_api`, `ai_interface_layer`)
 - `crates/work` — applications/services built on the crates above
 - `piplines/`, `input/`, `output/`, `web_ui/` — pipeline and UI assets
 
@@ -24,5 +27,6 @@
 
 - Use **pure Rust** — no Python scripts, no shell-out glue where a Rust crate exists; Rust-only dependencies, no C/C++ build wrappers unless unavoidable
 - Every finished task: `cargo check && cargo clippy`
+- Tests live in each crate's `tests/` dir (integration tests, public API only) — no inline `#[cfg(test)] mod tests` in `src/`
 - New plans go in `./.plans`, numbered 00–99
 - Prefer enums over hard-coded values; constants for all magic numbers

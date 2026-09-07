@@ -28,7 +28,7 @@ pub fn chat(prompt: &str, model: Option<&str>, workspace: &Path) -> Result<Strin
 }
 
 /// Collect agent messages and error payloads from the codex JSONL event stream.
-fn extract(line: &str, text: &mut String, err: &mut String) {
+pub fn extract(line: &str, text: &mut String, err: &mut String) {
     let Ok(v) = serde_json::from_str::<Value>(line) else {
         return;
     };
@@ -50,41 +50,5 @@ fn extract(line: &str, text: &mut String, err: &mut String) {
 fn push_str(into: &mut String, v: Option<&Value>) {
     if let Some(s) = v.and_then(Value::as_str) {
         into.push_str(s);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn extracts_agent_message_new_and_old_shapes() {
-        let mut text = String::new();
-        let mut err = String::new();
-        extract(
-            r#"{"id":"1","item":{"type":"agent_message","text":"hello"}}"#,
-            &mut text,
-            &mut err,
-        );
-        extract(
-            r#"{"msg":{"type":"agent_message","message":"world"}}"#,
-            &mut text,
-            &mut err,
-        );
-        extract(
-            r#"{"msg":{"type":"error","message":"boom"}}"#,
-            &mut text,
-            &mut err,
-        );
-        assert_eq!(text, "helloworld");
-        assert_eq!(err, "boom");
-    }
-
-    #[test]
-    fn ignores_non_json_lines() {
-        let mut text = String::new();
-        let mut err = String::new();
-        extract("not json", &mut text, &mut err);
-        assert!(text.is_empty() && err.is_empty());
     }
 }

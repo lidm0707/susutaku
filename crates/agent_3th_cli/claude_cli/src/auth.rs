@@ -114,7 +114,7 @@ pub fn refresh(refresh_token: &str) -> Result<Tokens, AuthError> {
     to_tokens(resp)
 }
 
-fn to_tokens(resp: Value) -> Result<Tokens, AuthError> {
+pub fn to_tokens(resp: Value) -> Result<Tokens, AuthError> {
     let get = |k: &'static str| {
         resp.get(k)
             .and_then(Value::as_str)
@@ -140,7 +140,7 @@ fn to_tokens(resp: Value) -> Result<Tokens, AuthError> {
     })
 }
 
-fn unix_millis() -> u64 {
+pub fn unix_millis() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
@@ -184,30 +184,5 @@ pub fn check(claude_home: &Path) -> AuthStatus {
         AuthStatus::Expired
     } else {
         AuthStatus::LoggedIn
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn authorize_url_contains_pkce() {
-        let url = authorize_url("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk");
-        assert!(url.contains("code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"));
-        assert!(url.contains(CLIENT_ID));
-        assert!(url.contains("claude.ai/oauth/authorize"));
-    }
-
-    #[test]
-    fn to_tokens_roundtrip() {
-        let resp = serde_json::json!({
-            "access_token": "at", "refresh_token": "rt",
-            "expires_in": 3600, "scope": "user:profile user:inference"
-        });
-        let tokens = to_tokens(resp).unwrap();
-        assert_eq!(tokens.access_token, "at");
-        assert_eq!(tokens.scopes, vec!["user:profile", "user:inference"]);
-        assert!(tokens.expires_at_millis > unix_millis());
     }
 }

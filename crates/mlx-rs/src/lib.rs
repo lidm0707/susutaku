@@ -1,7 +1,7 @@
 pub mod arch;
 pub mod engine;
 pub mod json_guard;
-pub(crate) mod kv;
+pub mod kv;
 pub mod mem;
 pub mod platform;
 pub mod quant;

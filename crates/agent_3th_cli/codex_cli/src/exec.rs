@@ -113,16 +113,3 @@ pub fn check_available() -> Result<PathBuf, ExecError> {
         .map(|_| bin)
         .map_err(ExecError::from)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn missing_binary_reports_spawn_error() {
-        let result = Command::new("codex-definitely-not-installed")
-            .arg("--version")
-            .status();
-        assert!(result.is_err());
-    }
-}

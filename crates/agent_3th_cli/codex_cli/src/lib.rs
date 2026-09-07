@@ -3,10 +3,10 @@
 //! backend exchanges the code, stores `$CODEX_HOME/auth.json`, and the CLI
 //! reuses/refreshes it on every `codex exec`.
 
-mod auth;
-mod exec;
-mod model;
-mod pkce;
+pub mod auth;
+pub mod exec;
+pub mod model;
+pub mod pkce;
 
 pub use auth::{AuthError, AuthStatus, Tokens};
 pub use auth::{account_id_from_id_token, auth_path, authorize_url, check, exchange_code, save};

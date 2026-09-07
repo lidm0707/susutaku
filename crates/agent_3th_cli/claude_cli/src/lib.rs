@@ -3,9 +3,9 @@
 //! the backend exchanges the pasted code, stores
 //! `$CLAUDE_CONFIG_DIR/.credentials.json`, and `claude -p` reuses it.
 
-mod auth;
-mod exec;
-mod pkce;
+pub mod auth;
+pub mod exec;
+pub mod pkce;
 
 pub use auth::{authorize_url, check, credentials_path, exchange_code, load, refresh, save};
 pub use auth::{AuthError, AuthStatus, Tokens};

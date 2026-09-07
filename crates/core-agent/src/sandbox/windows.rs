@@ -6,12 +6,15 @@ use std::sync::RwLock;
 
 use serde::{Deserialize, Serialize};
 
-pub const SHELL: &str = "/bin/zsh";
-pub const RUN_FLAG: &str = "-c";
+pub const SHELL: &str = "powershell";
+pub const RUN_FLAG: &str = "-Command";
 pub const MAX_OUTPUT_BYTES: usize = 1 << 20;
 pub const MAX_HISTORY: usize = 128;
 pub const SANDBOX_PREFIX: &str = "susutaku-agent-sandbox-";
 pub const STATE_FILE: &str = "agent-sandbox-state.json";
+pub const TASKLIST: &str = "tasklist";
+pub const TASKLIST_ARG_FILTER: &str = "/FI";
+pub const TASKLIST_ARG_NOHEADER: &str = "/NH";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Role {
@@ -83,8 +86,6 @@ impl Sandbox {
     }
 
     /// Remove leftover state of dead processes (call at backend startup).
-    /// The state JSON is kept (it is the restore mechanism); sandbox dirs of
-    /// dead PIDs are deleted, dirs of live backends are left alone.
     pub fn purge_stale() {
         let _ = fs::remove_file(state_path());
         purge_stale_dirs();
@@ -182,7 +183,7 @@ impl Sandbox {
     }
 }
 
-fn state_path() -> PathBuf {
+pub fn state_path() -> PathBuf {
     std::env::temp_dir().join(STATE_FILE)
 }
 
@@ -202,15 +203,26 @@ fn purge_stale_dirs() {
         else {
             continue;
         };
-        if pid != own_pid && !pid_alive(pid as i32) {
+        if pid != own_pid && !pid_alive(pid) {
             let _ = fs::remove_dir_all(entry.path());
         }
     }
 }
 
-/// Signal 0 probes existence/permission without delivering anything.
-fn pid_alive(pid: i32) -> bool {
-    unsafe { libc::kill(pid, 0) == 0 }
+/// tasklist prints "INFO: ..." instead of a row when no process matches.
+fn pid_alive(pid: u32) -> bool {
+    Command::new(TASKLIST)
+        .args([
+            TASKLIST_ARG_FILTER,
+            &format!("PID eq {pid}"),
+            TASKLIST_ARG_NOHEADER,
+        ])
+        .output()
+        .map(|out| {
+            let text = String::from_utf8_lossy(&out.stdout);
+            text.contains(&pid.to_string())
+        })
+        .unwrap_or(false)
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -232,7 +244,7 @@ pub fn list_dirs() -> Vec<SandboxDir> {
             let pid = name.strip_prefix(SANDBOX_PREFIX)?.parse::<u32>().ok()?;
             Some(SandboxDir {
                 pid,
-                alive: pid_alive(pid as i32),
+                alive: pid_alive(pid),
                 path: entry.path(),
             })
         })
@@ -267,42 +279,5 @@ fn resolve_cwd(root: &Path, rel: &str) -> PathBuf {
 impl Drop for Sandbox {
     fn drop(&mut self) {
         self.clear();
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::Mutex;
-
-    static STATE_LOCK: Mutex<()> = Mutex::new(());
-
-    #[test]
-    fn sandbox_run_and_clear() {
-        let _g = STATE_LOCK.lock().unwrap();
-        let sb = Sandbox::new().unwrap();
-        let out = sb.run("echo hi").unwrap();
-        assert_eq!(out.trim(), "hi");
-        assert!(state_path().exists());
-        let t = sb.transcript();
-        assert_eq!(t.len(), 1);
-        drop(sb);
-        assert!(state_path().exists());
-        Sandbox::purge_stale();
-        assert!(!state_path().exists());
-    }
-
-    #[test]
-    fn restore_reloads_state() {
-        let _g = STATE_LOCK.lock().unwrap();
-        {
-            let sb = Sandbox::new().unwrap();
-            sb.push_context(Role::User, "hello");
-        }
-        let sb = Sandbox::restore().unwrap();
-        assert_eq!(sb.transcript().len(), 1);
-        assert_eq!(sb.transcript()[0].content, "hello");
-        sb.purge();
-        assert!(!state_path().exists());
     }
 }

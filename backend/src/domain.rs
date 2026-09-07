@@ -50,20 +50,6 @@ impl ToolCall {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parses_shell_tool_call() {
-        let reply = "</think>\nTOOL: SHELL ls -la";
-        assert_eq!(
-            ToolCall::parse(reply),
-            Some(ToolCall::Shell("ls -la".into()))
-        );
-    }
-}
-
 /// A single web result to ground a prompt with.
 #[derive(Debug, Clone)]
 pub struct SearchResult {

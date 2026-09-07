@@ -5,9 +5,9 @@
 
 /// Share of installed RAM always left free (safety margin for the OS,
 /// other apps, and mmap headroom).
-const SAFETY_FREE_FRAC: f64 = 0.25;
+pub const SAFETY_FREE_FRAC: f64 = 0.25;
 /// The safety margin never shrinks below this, even on small machines.
-const SAFETY_FREE_MIN: usize = 16 * GIB;
+pub const SAFETY_FREE_MIN: usize = 16 * GIB;
 /// Hard resident-memory budget: installed RAM minus the safety margin
 /// (64 GB machine → 48 GiB budget).
 pub static MEM_BUDGET_BYTES: LazyLock<usize> = LazyLock::new(budget_bytes);
@@ -111,21 +111,5 @@ pub fn check() -> MemVerdict {
         MemVerdict::Over
     } else {
         MemVerdict::Cleared
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn budget_leaves_safety_free_space() {
-        let installed = *crate::platform::INSTALLED_BYTES;
-        let budget = *MEM_BUDGET_BYTES;
-        let free = installed - budget;
-        let min_free = SAFETY_FREE_MIN;
-        assert!(free >= min_free, "free {free} < {min_free}");
-        let quarter = (installed as f64 * SAFETY_FREE_FRAC) as usize;
-        assert_eq!(free, quarter.max(min_free));
     }
 }

@@ -1,16 +1,11 @@
-mod api;
-mod app;
-mod domain;
-mod infra;
-mod port;
-
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use app::ChatUseCase;
-use infra::engine::ModelPool;
-use infra::sandbox::AgentSandbox;
-use infra::search::{DuckDuckGo, PageFetcher};
+use backend::api;
+use backend::app::ChatUseCase;
+use backend::infra::engine::ModelPool;
+use backend::infra::sandbox::AgentSandbox;
+use backend::infra::search::{DuckDuckGo, PageFetcher};
 
 const PORT: u16 = 8991;
 

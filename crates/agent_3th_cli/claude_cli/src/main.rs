@@ -1,4 +1,4 @@
-use ai_interface_layer::run_prompt;
+use ai_interface_layer::provider::run_prompt;
 use zai_api::client::ZaiClient;
 
 pub const CLI_NAME: &str = "claude-cli";
