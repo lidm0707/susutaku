@@ -83,8 +83,11 @@ impl Sandbox {
     }
 
     /// Remove leftover state of dead processes (call at backend startup).
+    /// The state JSON is kept (it is the restore mechanism); sandbox dirs of
+    /// dead PIDs are deleted, dirs of live backends are left alone.
     pub fn purge_stale() {
         let _ = fs::remove_file(state_path());
+        purge_stale_dirs();
     }
 
     /// Workspace root the sandboxed commands run in.
@@ -181,6 +184,33 @@ impl Sandbox {
 
 fn state_path() -> PathBuf {
     std::env::temp_dir().join(STATE_FILE)
+}
+
+/// Delete sandbox dirs whose owning backend process is gone.
+fn purge_stale_dirs() {
+    let own_pid = std::process::id();
+    let Ok(entries) = fs::read_dir(std::env::temp_dir()) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let Ok(name) = entry.file_name().into_string() else {
+            continue;
+        };
+        let Some(pid) = name
+            .strip_prefix(SANDBOX_PREFIX)
+            .and_then(|raw| raw.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        if pid != own_pid && !pid_alive(pid as i32) {
+            let _ = fs::remove_dir_all(entry.path());
+        }
+    }
+}
+
+/// Signal 0 probes existence/permission without delivering anything.
+fn pid_alive(pid: i32) -> bool {
+    unsafe { libc::kill(pid, 0) == 0 }
 }
 
 fn resolve_cwd(root: &Path, rel: &str) -> PathBuf {
