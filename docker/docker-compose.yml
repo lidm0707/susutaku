@@ -13,6 +13,20 @@
 name: susutaku
 
 services:
+  # Kanban + agent state store. Host port 5434: 5432/5433 are already taken by
+  # other local postgres containers, so this never hits them.
+  postgres:
+    image: postgres:17-alpine
+    ports:
+      - "5434:5432"
+    environment:
+      POSTGRES_USER: susutaku
+      POSTGRES_PASSWORD: susutaku
+      POSTGRES_DB: susutaku
+    volumes:
+      - susutaku-pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+
   web:
     build:
       context: ..
@@ -35,4 +49,11 @@ services:
       - ../models:/app/models:ro
     ports:
       - "8991:8991"
+    environment:
+      DATABASE_URL: postgres://susutaku:susutaku@postgres:5432/susutaku
+    depends_on:
+      - postgres
     restart: unless-stopped
+
+volumes:
+  susutaku-pgdata:

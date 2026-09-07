@@ -26,6 +26,12 @@ PORT := 8991
 WEB_PORT := 3334
 COMPOSE := docker compose -f docker/docker-compose.yml
 
+# Load env from the repo root (.env) for every target.
+ifneq (,$(wildcard .env))
+include .env
+export
+endif
+
 MODELS_DIR := models
 QWEN38_REPO := mlx-community/Qwen3.8-27B-4bit
 GEMMA4_REPO := mlx-community/gemma-4-26b-a4b-it-4bit

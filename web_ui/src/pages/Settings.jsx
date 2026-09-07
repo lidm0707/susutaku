@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { ArrowLeft, KeyRound } from "lucide-react";
+import { ArrowLeft, Bot, KeyRound, Workflow } from "lucide-react";
 import { fetch_zai_settings, save_zai_settings } from "../lib.js";
 
 export default function Settings() {
@@ -40,6 +40,8 @@ export default function Settings() {
         <h1><Link to="/settings">settings</Link></h1>
         <span className="sub">z.ai · {keySet ? "key saved" : "no key"}</span>
         <nav className="nav">
+          <Link to="/pipelines" title="pipelines"><Workflow size={16} /></Link>
+          <Link to="/agents" title="saved agents"><Bot size={16} /></Link>
           <Link to="/" title="back to chat"><ArrowLeft size={16} /></Link>
         </nav>
       </header>

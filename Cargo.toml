@@ -9,6 +9,8 @@ members = [
     "crates/agent_3th_cli/codex_cli",
     "crates/agent_3th_cli/claude_cli",
     "crates/pdf-rs",
+    "crates/kanban-rs",
+    "crates/piplines",
     "crates/work",
     "crates/agent_3th_cli/ai_interface_layer",
     "crates/agent_3th_cli/zai_api",
@@ -17,12 +19,15 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
+license = "Apache-2.0"
 
 [workspace.dependencies]
 hf_loader = { path = "crates/hf_loader" }
 susutaku-mlx = { path = "crates/mlx-rs" }
 gguf-rs = { path = "crates/gguf-rs" }
 pdf-rs = { path = "crates/pdf-rs" }
+kanban-rs = { path = "crates/kanban-rs" }
+piplines = { path = "crates/piplines" }
 core-agent = { path = "crates/core-agent" }
 ureq = "2"
 serde_json = "1"

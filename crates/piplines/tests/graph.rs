@@ -1,0 +1,93 @@
+//! Integration tests: PipelineSpec validation (pure, no DB).
+
+use piplines::graph::{
+    GraphError, Link, NodeDef, PipelineSpec, MAX_NODES, STAGE_CUSTOM, STAGE_INGEST,
+    STAGE_PARSE, STAGE_RENDER, STAGE_TRANSFORM,
+};
+
+const ID_A: &str = "a";
+const ID_B: &str = "b";
+const ID_C: &str = "c";
+
+fn node(id: &str, stage: &str) -> NodeDef {
+    NodeDef { id: id.into(), stage: stage.into(), params: serde_json::Value::Null }
+}
+
+fn chain() -> PipelineSpec {
+    PipelineSpec {
+        nodes: vec![
+            node(ID_A, STAGE_INGEST),
+            node(ID_B, STAGE_TRANSFORM),
+            node(ID_C, STAGE_CUSTOM),
+        ],
+        links: vec![Link { from: ID_A.into(), to: ID_B.into() }, Link { from: ID_B.into(), to: ID_C.into() }],
+    }
+}
+
+#[test]
+fn valid_spec_passes() {
+    chain().validate().expect("valid chain");
+}
+
+#[test]
+fn empty_fails() {
+    let spec = PipelineSpec { nodes: vec![], links: vec![] };
+    assert_eq!(spec.validate(), Err(GraphError::Empty));
+}
+
+#[test]
+fn too_many_nodes_fails() {
+    let spec = PipelineSpec {
+        nodes: (0..=MAX_NODES).map(|i| node(&format!("n{i}"), STAGE_PARSE)).collect(),
+        links: vec![],
+    };
+    assert_eq!(spec.validate(), Err(GraphError::TooManyNodes));
+}
+
+#[test]
+fn duplicate_id_fails() {
+    let mut spec = chain();
+    spec.nodes.push(node(ID_A, STAGE_RENDER));
+    assert_eq!(
+        spec.validate(),
+        Err(GraphError::DuplicateNode(ID_A.into()))
+    );
+}
+
+#[test]
+fn bad_stage_fails() {
+    let spec = PipelineSpec { nodes: vec![node(ID_A, "warp")], links: vec![] };
+    assert!(matches!(spec.validate(), Err(GraphError::BadLink(_))));
+}
+
+#[test]
+fn link_to_unknown_node_fails() {
+    let mut spec = chain();
+    spec.links.push(Link { from: ID_C.into(), to: "ghost".into() });
+    assert!(matches!(spec.validate(), Err(GraphError::BadLink(_))));
+
+    let mut spec = chain();
+    spec.links.push(Link { from: "ghost".into(), to: ID_A.into() });
+    assert!(matches!(spec.validate(), Err(GraphError::BadLink(_))));
+}
+
+#[test]
+fn cycle_fails() {
+    let mut spec = chain();
+    spec.links.push(Link { from: ID_C.into(), to: ID_A.into() });
+    assert_eq!(spec.validate(), Err(GraphError::Cycle));
+}
+
+#[test]
+fn self_link_fails() {
+    let mut spec = chain();
+    spec.links.push(Link { from: ID_A.into(), to: ID_A.into() });
+    assert_eq!(spec.validate(), Err(GraphError::Cycle));
+}
+
+#[test]
+fn spec_serializes_roundtrip() {
+    let json = serde_json::to_string(&chain()).expect("serialize");
+    let back: PipelineSpec = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(back, chain());
+}

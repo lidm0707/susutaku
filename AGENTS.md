@@ -18,10 +18,36 @@
 - `crates/hf_loader` — model dir scanning + loadability filter (size ≥ 30 GiB, q4, MLX)
 - `crates/mlx-rs` — MLX inference backend
 - `crates/pdf-rs` — PDF parsing
+- `crates/kanban-rs` — kanban board model + Postgres store (`query_as!`); hierarchy
+  workspace → project → task (card); cards carry per-card agent state (`agent_name`, `agent_state` JSON)
 - `crates/gguf-rs` — GGUF model file parsing
 - `crates/agent_3th_cli/` — third-party CLI integrations (`claude_cli`, `codex_cli`, `zai_api`, `ai_interface_layer`)
 - `crates/work` — applications/services built on the crates above
-- `piplines/`, `input/`, `output/`, `web_ui/` — pipeline and UI assets
+- `piplines/`, `input/`, `output/`, `web_ui/` — pipeline and UI assets (`web_ui` includes a Kanban board page backed by `crates/kanban-rs` + Postgres)
+
+## Kanban Postgres
+
+- Postgres runs via `docker/docker-compose.yml` (`postgres` service, host port **5434** — 5432/5433 are taken by other local containers).
+- Connection: `postgres://susutaku:susutaku@localhost:5434/susutaku` (override with `DATABASE_URL`).
+- sqlx macros compile against the live DB — keep the container up when running `cargo check` on `kanban-rs`/`backend`.
+- API: `/api/workspaces` (GET/POST), `/api/workspaces/{id}` (DELETE),
+  `/api/workspaces/{id}/projects` (GET/POST), `/api/projects/{id}` (DELETE).
+- Tasks: `/api/kanban/cards?project_id=` (GET/POST), `/api/kanban/cards/{id}` (DELETE),
+  `/api/kanban/cards/{id}/move` (POST), `/api/kanban/cards/{id}/agent` (GET/PUT).
+  A task (card) belongs to exactly one project; deleting a workspace cascades
+  to its projects and tasks.
+
+## User auth (argon2)
+
+- `kanban-rs/src/user.rs`: argon2 password hashing, ranked `Role` enum —
+  `owner > super_admin > admin > editor > viewer`.
+- Tables: `users(username unique, password_hash, role)`, `auth_sessions(token, user_id)`.
+- Bearer-token auth: `POST /api/auth/login`, `POST /api/auth/logout`,
+  `GET /api/auth/bootstrap`, `GET/POST /api/auth/users`.
+- Bootstrap: with zero users, an unauthenticated `POST /api/auth/users` creates
+  the first user, forced to role `owner`.
+- Guards: any role reads kanban; editor+ mutates cards/agent state;
+  admin+ manages users. Passwords: min 8 chars, never returned.
 
 ## Rules
 

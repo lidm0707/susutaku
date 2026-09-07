@@ -2,6 +2,7 @@
 name = "backend"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 
 [dependencies]
 axum = "0.8"
@@ -18,4 +19,5 @@ ureq = { workspace = true }
 codex-cli = { path = "../crates/agent_3th_cli/codex_cli" }
 zai-api = { path = "../crates/agent_3th_cli/zai_api" }
 ai-interface-layer = { path = "../crates/agent_3th_cli/ai_interface_layer" }
+kanban-rs = { workspace = true }
 utoipa = { version = "5", features = ["axum_extras"] }

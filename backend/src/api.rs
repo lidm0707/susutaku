@@ -4,10 +4,10 @@ use std::sync::Arc;
 
 use axum::{
     Json, Router,
-    extract::{Request, State},
-    http::StatusCode,
+    extract::{FromRequestParts, Request, State},
+    http::{self, StatusCode, request::Parts},
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{delete, get, post, put},
 };
 use serde::{Deserialize, Serialize};
 use utoipa::OpenApi;
@@ -28,6 +28,7 @@ const DEFAULT_MAX_TOKENS: usize = 512;
 pub fn router<T: ChatHandling + ModelSwitch + 'static>(
     use_case: Arc<T>,
     codex_workspace: PathBuf,
+    kanban: KanbanStore,
 ) -> Router {
     let core = Router::new()
         .route("/api/health", get(health))
@@ -53,7 +54,242 @@ pub fn router<T: ChatHandling + ModelSwitch + 'static>(
         .route("/api/sandbox/purge", post(purge_sandbox))
         .route("/api/sandbox/sweep", post(sweep_sandboxes))
         .with_state(Arc::new(SettingsState::load()));
-    core.merge(auth).merge(settings)
+    core.merge(auth).merge(settings).merge(kanban_router(kanban))
+}
+
+fn kanban_router(store: KanbanStore) -> Router {
+    Router::new()
+        .route("/api/auth/login", post(login))
+        .route("/api/auth/logout", post(logout))
+        .route("/api/auth/bootstrap", get(bootstrap))
+        .route("/api/auth/change-password", post(change_password))
+        .route(
+            "/api/auth/users",
+            get(list_users).post(create_user),
+        )
+        .route(
+            "/api/workspaces",
+            get(list_workspaces).post(create_workspace),
+        )
+        .route("/api/workspaces/{id}", delete(delete_workspace))
+        .route(
+            "/api/workspaces/{id}/projects",
+            get(list_projects).post(create_project),
+        )
+        .route("/api/projects/{id}", delete(delete_project))
+        .route(
+            "/api/kanban/cards",
+            get(list_cards).post(create_card),
+        )
+        .route("/api/kanban/cards/{id}", delete(remove_card))
+        .route("/api/kanban/cards/{id}/move", post(move_card))
+        .route(
+            "/api/kanban/cards/{id}/agent",
+            get(get_agent).put(set_agent),
+        )
+        .route(
+            "/api/kanban/cards/{id}/pipeline",
+            put(set_card_pipeline),
+        )
+        .route(
+            "/api/pipelines",
+            get(list_pipelines).post(create_pipeline),
+        )
+        .route(
+            "/api/pipelines/{id}",
+            put(update_pipeline).delete(remove_pipeline),
+        )
+        .route("/api/agents", get(list_agents).post(create_agent))
+        .route(
+            "/api/agents/{id}",
+            put(update_agent_cfg).delete(remove_agent_cfg),
+        )
+        .with_state(store)
+}
+
+/// Bearer-token auth extractor: resolves the session to a user.
+struct AuthUser(kanban_rs::UserRow);
+
+const BEARER_PREFIX: &str = "Bearer ";
+const UNAUTHORIZED_MSG: &str = "unauthorized";
+const FORBIDDEN_MSG: &str = "forbidden";
+const PASSWORD_CHANGE_REQUIRED_MSG: &str = "password change required";
+const CHANGE_PASSWORD_PATH: &str = "/api/auth/change-password";
+const LOGOUT_PATH: &str = "/api/auth/logout";
+
+impl FromRequestParts<KanbanStore> for AuthUser {
+    type Rejection = Response;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        store: &KanbanStore,
+    ) -> Result<Self, Self::Rejection> {
+        let header = parts
+            .headers
+            .get(http::header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.strip_prefix(BEARER_PREFIX))
+            .ok_or_else(|| (StatusCode::UNAUTHORIZED, UNAUTHORIZED_MSG).into_response())?;
+        let user = store
+            .auth(header)
+            .await
+            .map_err(|e| ApiError::internal(e.to_string()).into_response())?
+            .ok_or_else(|| (StatusCode::UNAUTHORIZED, UNAUTHORIZED_MSG).into_response())?;
+        // Forced password change blocks everything except the change itself and logout.
+        if user.must_change_password {
+            let path = parts.uri.path();
+            if path != CHANGE_PASSWORD_PATH && path != LOGOUT_PATH {
+                return Err((
+                    StatusCode::FORBIDDEN,
+                    PASSWORD_CHANGE_REQUIRED_MSG,
+                )
+                    .into_response());
+            }
+        }
+        Ok(AuthUser(user))
+    }
+}
+
+fn require_edit(user: &AuthUser) -> Result<(), ApiError> {
+    let role = parse_role(&user.0.role)?;
+    role.can_edit()
+        .then_some(())
+        .ok_or_else(|| ApiError(FORBIDDEN_MSG.into()))
+}
+
+fn require_users(user: &AuthUser) -> Result<(), ApiError> {
+    let role = parse_role(&user.0.role)?;
+    role.can_manage_users()
+        .then_some(())
+        .ok_or_else(|| ApiError(FORBIDDEN_MSG.into()))
+}
+
+fn parse_role(role: &str) -> Result<kanban_rs::Role, ApiError> {
+    role.parse()
+        .map_err(|e: kanban_rs::StoreError| ApiError::internal(e.to_string()))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/auth/login",
+    request_body = LoginRequest,
+    responses((status = 200, body = LoginReply), (status = 401, body = str))
+)]
+async fn login(
+    State(store): State<KanbanStore>,
+    Json(req): Json<LoginRequest>,
+) -> Result<Json<LoginReply>, ApiError> {
+    let token = store
+        .login(&req.username, &req.password)
+        .await
+        .map_err(store_err)?;
+    let user = match &token {
+        Some(t) => store.auth(t).await.map_err(store_err)?,
+        None => None,
+    };
+    let user = user.ok_or(ApiError(UNAUTHORIZED_MSG.into()))?;
+    Ok(Json(LoginReply {
+        token: token.unwrap_or_default(),
+        username: user.username,
+        role: user.role,
+        must_change_password: user.must_change_password,
+    }))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/auth/change-password",
+    request_body = ChangePasswordRequest,
+    responses((status = 200, body = str), (status = 400, body = str), (status = 401, body = str))
+)]
+async fn change_password(
+    State(store): State<KanbanStore>,
+    user: AuthUser,
+    Json(req): Json<ChangePasswordRequest>,
+) -> Result<&'static str, ApiError> {
+    store
+        .change_password(user.0.id, &req.old_password, &req.new_password)
+        .await
+        .map_err(|e| match e {
+            kanban_rs::StoreError::PasswordTooShort | kanban_rs::StoreError::BadCredentials => {
+                ApiError::bad_request(e.to_string())
+            }
+            other => ApiError::internal(other.to_string()),
+        })?;
+    Ok("ok")
+}
+
+#[utoipa::path(post, path = "/api/auth/logout", responses((status = 200, body = str)))]
+async fn logout(
+    State(store): State<KanbanStore>,
+    parts: axum::extract::RawQuery,
+    req: Request,
+) -> &'static str {
+    let _ = parts;
+    let token = req
+        .headers()
+        .get(http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix(BEARER_PREFIX));
+    if let Some(token) = token {
+        let _ = store.logout(token).await;
+    }
+    "ok"
+}
+
+#[utoipa::path(get, path = "/api/auth/bootstrap", responses((status = 200, body = BootstrapReply)))]
+async fn bootstrap(
+    State(store): State<KanbanStore>,
+    _user: AuthUser,
+) -> Result<Json<BootstrapReply>, ApiError> {
+    let count = store.user_count().await.map_err(store_err)?;
+    Ok(Json(BootstrapReply {
+        needs_setup: count == 0,
+    }))
+}
+
+#[utoipa::path(get, path = "/api/auth/users", responses((status = 200, body = [UserDto]), (status = 403, body = str)))]
+async fn list_users(
+    State(store): State<KanbanStore>,
+    user: AuthUser,
+) -> Result<Json<Vec<UserDto>>, ApiError> {
+    require_users(&user)?;
+    let users = store.list_users().await.map_err(store_err)?;
+    Ok(Json(users.into_iter().map(UserDto::from).collect()))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/auth/users",
+    request_body = CreateUserRequest,
+    responses((status = 200, body = UserDto), (status = 400, body = str), (status = 403, body = str))
+)]
+async fn create_user(
+    State(store): State<KanbanStore>,
+    user: AuthUser,
+    Json(req): Json<CreateUserRequest>,
+) -> Result<Json<UserDto>, ApiError> {
+    // Bootstrap: with zero users, an unauthenticated call creates the owner.
+    let needs_setup = store.user_count().await.map_err(store_err)? == 0;
+    if !needs_setup {
+        require_users(&user)?;
+    }
+    let role = parse_role(&req.role)?;
+    let role = if needs_setup { kanban_rs::Role::Owner } else { role };
+    let row = store
+        .create_user(&kanban_rs::NewUser {
+            username: &req.username,
+            password: &req.password,
+            role,
+        })
+        .await
+        .map_err(|e| match e {
+            kanban_rs::StoreError::UsernameTaken | kanban_rs::StoreError::PasswordTooShort => {
+                ApiError::bad_request(e.to_string())
+            }
+            other => ApiError::internal(other.to_string()),
+        })?;
+    Ok(Json(UserDto::from(row)))
 }
 
 #[utoipa::path(get, path = "/api/health", responses((status = 200, body = &str)))]
@@ -280,6 +516,369 @@ async fn chat_zai(
     }))
 }
 
+type KanbanStore = std::sync::Arc<kanban_rs::Store>;
+
+#[utoipa::path(get, path = "/api/workspaces", responses((status = 200, body = [WorkspaceDto])))]
+async fn list_workspaces(
+    State(store): State<KanbanStore>,
+    _user: AuthUser,
+) -> Result<Json<Vec<WorkspaceDto>>, ApiError> {
+    let rows = store.list_workspaces().await.map_err(store_err)?;
+    Ok(Json(rows.into_iter().map(WorkspaceDto::from).collect()))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/workspaces",
+    request_body = CreateWorkspaceRequest,
+    responses((status = 200, body = WorkspaceDto), (status = 400, body = str))
+)]
+async fn create_workspace(
+    State(store): State<KanbanStore>,
+    user: AuthUser,
+    Json(req): Json<CreateWorkspaceRequest>,
+) -> Result<Json<WorkspaceDto>, ApiError> {
+    require_edit(&user)?;
+    let row = store.create_workspace(req.name.trim()).await.map_err(store_err)?;
+    Ok(Json(WorkspaceDto::from(row)))
+}
+
+#[utoipa::path(delete, path = "/api/workspaces/{id}", responses((status = 200, body = str), (status = 404, body = str)))]
+async fn delete_workspace(
+    State(store): State<KanbanStore>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+    user: AuthUser,
+) -> Result<&'static str, ApiError> {
+    require_edit(&user)?;
+    store.delete_workspace(id).await.map_err(kanban_err)?;
+    Ok("ok")
+}
+
+#[utoipa::path(get, path = "/api/workspaces/{id}/projects", responses((status = 200, body = [ProjectDto])))]
+async fn list_projects(
+    State(store): State<KanbanStore>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+    _user: AuthUser,
+) -> Result<Json<Vec<ProjectDto>>, ApiError> {
+    let rows = store.list_projects(id).await.map_err(store_err)?;
+    Ok(Json(rows.into_iter().map(ProjectDto::from).collect()))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/workspaces/{id}/projects",
+    request_body = CreateProjectRequest,
+    responses((status = 200, body = ProjectDto), (status = 400, body = str))
+)]
+async fn create_project(
+    State(store): State<KanbanStore>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+    user: AuthUser,
+    Json(req): Json<CreateProjectRequest>,
+) -> Result<Json<ProjectDto>, ApiError> {
+    require_edit(&user)?;
+    let row = store.create_project(id, req.name.trim()).await.map_err(store_err)?;
+    Ok(Json(ProjectDto::from(row)))
+}
+
+#[utoipa::path(delete, path = "/api/projects/{id}", responses((status = 200, body = str), (status = 404, body = str)))]
+async fn delete_project(
+    State(store): State<KanbanStore>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+    user: AuthUser,
+) -> Result<&'static str, ApiError> {
+    require_edit(&user)?;
+    store.delete_project(id).await.map_err(kanban_err)?;
+    Ok("ok")
+}
+
+#[utoipa::path(get, path = "/api/kanban/cards", responses((status = 200, body = [CardDto])))]
+async fn list_cards(
+    State(store): State<KanbanStore>,
+    axum::extract::Query(query): axum::extract::Query<ListCardsQuery>,
+    _user: AuthUser,
+) -> Result<Json<Vec<CardDto>>, ApiError> {
+    let rows = store.list(query.project_id).await.map_err(kanban_err)?;
+    Ok(Json(rows.into_iter().map(CardDto::from).collect()))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/kanban/cards",
+    request_body = CreateCardRequest,
+    responses((status = 200, body = CardDto), (status = 400, body = str))
+)]
+async fn create_card(
+    State(store): State<KanbanStore>,
+    user: AuthUser,
+    Json(req): Json<CreateCardRequest>,
+) -> Result<Json<CardDto>, ApiError> {
+    require_edit(&user)?;
+    let priority = req.priority.unwrap_or_else(|| kanban_rs::PRIORITY_NORMAL.to_string());
+    let id = store
+        .add(kanban_rs::AddCard {
+            project_id: req.project_id,
+            column_id: &req.column_id,
+            title: &req.title,
+            description: req.description.as_deref().unwrap_or_default(),
+            priority: &priority,
+        })
+        .await
+        .map_err(kanban_err)?;
+    let row = store
+        .get(id)
+        .await
+        .map_err(kanban_err)?
+        .ok_or(ApiError(ApiError::NOT_FOUND_MSG.into()))?;
+    Ok(Json(CardDto::from(row)))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/kanban/cards/{id}/move",
+    request_body = MoveCardRequest,
+    responses((status = 200, body = str), (status = 404, body = str))
+)]
+async fn move_card(
+    State(store): State<KanbanStore>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+    user: AuthUser,
+    Json(req): Json<MoveCardRequest>,
+) -> Result<&'static str, ApiError> {
+    require_edit(&user)?;
+    store
+        .move_card(kanban_rs::MoveCard {
+            id,
+            column_id: &req.column_id,
+            position: req.position,
+        })
+        .await
+        .map_err(kanban_err)?;
+    Ok("ok")
+}
+
+#[utoipa::path(delete, path = "/api/kanban/cards/{id}", responses((status = 200, body = str), (status = 404, body = str)))]
+async fn remove_card(
+    State(store): State<KanbanStore>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+    user: AuthUser,
+) -> Result<&'static str, ApiError> {
+    require_edit(&user)?;
+    store.remove(id).await.map_err(kanban_err)?;
+    Ok("ok")
+}
+
+#[utoipa::path(get, path = "/api/kanban/cards/{id}/agent", responses((status = 200, body = AgentDto), (status = 404, body = str)))]
+async fn get_agent(
+    State(store): State<KanbanStore>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+    _user: AuthUser,
+) -> Result<Json<AgentDto>, ApiError> {
+    let agent = store
+        .agent(id)
+        .await
+        .map_err(kanban_err)?
+        .ok_or(ApiError(ApiError::NOT_FOUND_MSG.into()))?;
+    Ok(Json(AgentDto::from(agent)))
+}
+
+#[utoipa::path(
+    put,
+    path = "/api/kanban/cards/{id}/agent",
+    request_body = SetAgentRequest,
+    responses((status = 200, body = str), (status = 404, body = str))
+)]
+async fn set_agent(
+    State(store): State<KanbanStore>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+    user: AuthUser,
+    Json(req): Json<SetAgentRequest>,
+) -> Result<&'static str, ApiError> {
+    require_edit(&user)?;
+    store
+        .set_agent(
+            id,
+            &kanban_rs::AgentState {
+                name: req.name,
+                state: req.state.unwrap_or(serde_json::Value::Null),
+            },
+        )
+        .await
+        .map_err(kanban_err)?;
+    Ok("ok")
+}
+
+#[utoipa::path(
+    put,
+    path = "/api/kanban/cards/{id}/pipeline",
+    request_body = SetCardPipelineRequest,
+    responses((status = 200, body = str), (status = 404, body = str))
+)]
+async fn set_card_pipeline(
+    State(store): State<KanbanStore>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+    user: AuthUser,
+    Json(req): Json<SetCardPipelineRequest>,
+) -> Result<&'static str, ApiError> {
+    require_edit(&user)?;
+    store
+        .set_card_pipeline(id, req.pipeline_id)
+        .await
+        .map_err(kanban_err)?;
+    Ok("ok")
+}
+
+#[utoipa::path(get, path = "/api/pipelines", responses((status = 200, body = [PipelineDto])))]
+async fn list_pipelines(
+    State(store): State<KanbanStore>,
+    _user: AuthUser,
+) -> Result<Json<Vec<PipelineDto>>, ApiError> {
+    let rows = store.list_pipelines().await.map_err(cfg_err)?;
+    Ok(Json(rows.into_iter().map(PipelineDto::from).collect()))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/pipelines",
+    request_body = SavePipelineRequest,
+    responses((status = 200, body = PipelineDto), (status = 400, body = str))
+)]
+async fn create_pipeline(
+    State(store): State<KanbanStore>,
+    user: AuthUser,
+    Json(req): Json<SavePipelineRequest>,
+) -> Result<Json<PipelineDto>, ApiError> {
+    require_edit(&user)?;
+    let spec = serde_json::to_string(&req.spec)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let id = store
+        .create_pipeline(req.name.trim(), &spec)
+        .await
+        .map_err(cfg_err)?;
+    Ok(Json(PipelineDto {
+        id,
+        name: req.name.trim().to_string(),
+        spec: req.spec,
+    }))
+}
+
+#[utoipa::path(
+    put,
+    path = "/api/pipelines/{id}",
+    request_body = SavePipelineRequest,
+    responses((status = 200, body = str), (status = 404, body = str), (status = 400, body = str))
+)]
+async fn update_pipeline(
+    State(store): State<KanbanStore>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+    user: AuthUser,
+    Json(req): Json<SavePipelineRequest>,
+) -> Result<&'static str, ApiError> {
+    require_edit(&user)?;
+    let spec = serde_json::to_string(&req.spec)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    store
+        .update_pipeline(id, req.name.trim(), &spec)
+        .await
+        .map_err(cfg_err)?;
+    Ok("ok")
+}
+
+#[utoipa::path(delete, path = "/api/pipelines/{id}", responses((status = 200, body = str), (status = 404, body = str)))]
+async fn remove_pipeline(
+    State(store): State<KanbanStore>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+    user: AuthUser,
+) -> Result<&'static str, ApiError> {
+    require_edit(&user)?;
+    store.remove_pipeline(id).await.map_err(cfg_err)?;
+    Ok("ok")
+}
+
+#[utoipa::path(get, path = "/api/agents", responses((status = 200, body = [AgentConfigDto])))]
+async fn list_agents(
+    State(store): State<KanbanStore>,
+    _user: AuthUser,
+) -> Result<Json<Vec<AgentConfigDto>>, ApiError> {
+    let rows = store.list_agents().await.map_err(cfg_err)?;
+    Ok(Json(rows.into_iter().map(AgentConfigDto::from).collect()))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/agents",
+    request_body = AgentConfigRequest,
+    responses((status = 200, body = AgentConfigDto), (status = 400, body = str))
+)]
+async fn create_agent(
+    State(store): State<KanbanStore>,
+    user: AuthUser,
+    Json(req): Json<AgentConfigRequest>,
+) -> Result<Json<AgentConfigDto>, ApiError> {
+    require_edit(&user)?;
+    let cfg = req.into_row(0);
+    let id = store.create_agent(&cfg).await.map_err(cfg_err)?;
+    Ok(Json(AgentConfigDto::from(kanban_rs::AgentConfigRow { id, ..cfg })))
+}
+
+#[utoipa::path(
+    put,
+    path = "/api/agents/{id}",
+    request_body = AgentConfigRequest,
+    responses((status = 200, body = str), (status = 404, body = str), (status = 400, body = str))
+)]
+async fn update_agent_cfg(
+    State(store): State<KanbanStore>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+    user: AuthUser,
+    Json(req): Json<AgentConfigRequest>,
+) -> Result<&'static str, ApiError> {
+    require_edit(&user)?;
+    store
+        .update_agent(req.into_update(id))
+        .await
+        .map_err(cfg_err)?;
+    Ok("ok")
+}
+
+#[utoipa::path(delete, path = "/api/agents/{id}", responses((status = 200, body = str), (status = 404, body = str)))]
+async fn remove_agent_cfg(
+    State(store): State<KanbanStore>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+    user: AuthUser,
+) -> Result<&'static str, ApiError> {
+    require_edit(&user)?;
+    store.remove_agent(id).await.map_err(cfg_err)?;
+    Ok("ok")
+}
+
+fn store_err(e: kanban_rs::StoreError) -> ApiError {
+    ApiError::internal(e.to_string())
+}
+
+fn cfg_err(e: kanban_rs::StoreError) -> ApiError {
+    match e {
+        kanban_rs::StoreError::NoSuchCard
+        | kanban_rs::StoreError::NoSuchPipeline
+        | kanban_rs::StoreError::NoSuchAgent => ApiError(ApiError::NOT_FOUND_MSG.into()),
+        kanban_rs::StoreError::PipelineTaken => {
+            ApiError::bad_request("pipeline name already taken")
+        }
+        kanban_rs::StoreError::AgentTaken => ApiError::bad_request("agent name already taken"),
+        kanban_rs::StoreError::BadSpec(msg) => ApiError::bad_request(msg),
+        other => ApiError::internal(other.to_string()),
+    }
+}
+
+fn kanban_err(e: kanban_rs::StoreError) -> ApiError {
+    match e {
+        kanban_rs::StoreError::NoSuchCard | kanban_rs::StoreError::NoSuchColumn => {
+            ApiError(ApiError::NOT_FOUND_MSG.into())
+        }
+        other => ApiError::internal(other.to_string()),
+    }
+}
+
 async fn not_found(_req: Request) -> Response {
     (StatusCode::NOT_FOUND, "not found").into_response()
 }
@@ -356,6 +955,23 @@ async fn sweep_sandboxes() -> Json<SandboxSweepReply> {
         list_sandboxes,
         purge_sandbox,
         sweep_sandboxes,
+        list_cards,
+        create_card,
+        move_card,
+        remove_card,
+        get_agent,
+        set_agent,
+        login,
+        logout,
+        bootstrap,
+        list_users,
+        create_user,
+        list_workspaces,
+        create_workspace,
+        delete_workspace,
+        list_projects,
+        create_project,
+        delete_project,
     ),
     components(schemas(
         ModelInfo,
@@ -373,6 +989,22 @@ async fn sweep_sandboxes() -> Json<SandboxSweepReply> {
         SandboxDirInfo,
         SandboxPurgeRequest,
         SandboxSweepReply,
+        CardDto,
+        AgentDto,
+        CreateCardRequest,
+        ListCardsQuery,
+        MoveCardRequest,
+        SetAgentRequest,
+        LoginRequest,
+        LoginReply,
+        ChangePasswordRequest,
+        BootstrapReply,
+        CreateUserRequest,
+        UserDto,
+        WorkspaceDto,
+        ProjectDto,
+        CreateWorkspaceRequest,
+        CreateProjectRequest,
     ))
 )]
 struct ApiDoc;
@@ -486,9 +1118,267 @@ struct SandboxSweepReply {
     removed: usize,
 }
 
+#[derive(Deserialize, utoipa::ToSchema)]
+struct CreateCardRequest {
+    column_id: String,
+    title: String,
+    description: Option<String>,
+    /// "low" | "normal" | "high" | "critical" (default: normal).
+    priority: Option<String>,
+    /// Owning project — a task lives in exactly one project.
+    project_id: Option<i64>,
+}
+
+#[derive(Deserialize, utoipa::IntoParams, utoipa::ToSchema)]
+struct ListCardsQuery {
+    /// Only cards of this project; omit for all cards.
+    project_id: Option<i64>,
+}
+
+#[derive(Deserialize, utoipa::ToSchema)]
+struct MoveCardRequest {
+    column_id: String,
+    position: i32,
+}
+
+#[derive(Deserialize, utoipa::ToSchema)]
+struct SetAgentRequest {
+    name: String,
+    /// Arbitrary JSON state saved with the agent on the card.
+    state: Option<serde_json::Value>,
+}
+
+#[derive(Serialize, utoipa::ToSchema)]
+struct CardDto {
+    id: i64,
+    column_id: String,
+    project_id: Option<i64>,
+    title: String,
+    description: String,
+    priority: String,
+    position: i32,
+    agent_name: Option<String>,
+    /// JSON-encoded agent state, if an agent is attached.
+    agent_state: Option<serde_json::Value>,
+    pipeline_id: Option<i64>,
+    pipeline_name: Option<String>,
+}
+
+impl From<kanban_rs::CardRow> for CardDto {
+    fn from(r: kanban_rs::CardRow) -> Self {
+        Self {
+            id: r.id,
+            column_id: r.column_id,
+            project_id: r.project_id,
+            title: r.title,
+            description: r.description,
+            priority: r.priority,
+            position: r.position,
+            agent_name: r.agent_name,
+            agent_state: r.agent_state.and_then(|s| serde_json::from_str(&s).ok()),
+            pipeline_id: r.pipeline_id,
+            pipeline_name: r.pipeline_name,
+        }
+    }
+}
+
+#[derive(Deserialize, utoipa::ToSchema)]
+struct SetCardPipelineRequest {
+    /// Pipeline to run on this card; null to unassign.
+    pipeline_id: Option<i64>,
+}
+
+#[derive(Deserialize, utoipa::ToSchema)]
+struct SavePipelineRequest {
+    name: String,
+    /// piplines::graph::PipelineSpec: {nodes: [{id, stage, params}], links: [{from, to}]}
+    spec: serde_json::Value,
+}
+
+#[derive(Serialize, utoipa::ToSchema)]
+struct PipelineDto {
+    id: i64,
+    name: String,
+    spec: serde_json::Value,
+}
+
+impl From<kanban_rs::PipelineRow> for PipelineDto {
+    fn from(r: kanban_rs::PipelineRow) -> Self {
+        let spec = serde_json::from_str(&r.spec).unwrap_or(serde_json::Value::Null);
+        Self { id: r.id, name: r.name, spec }
+    }
+}
+
+#[derive(Deserialize, utoipa::ToSchema)]
+struct AgentConfigRequest {
+    name: String,
+    model: Option<String>,
+    persona: Option<String>,
+    prompt: Option<String>,
+    output: Option<String>,
+}
+
+impl AgentConfigRequest {
+    fn into_row(self, id: i64) -> kanban_rs::AgentConfigRow {
+        kanban_rs::AgentConfigRow {
+            id,
+            name: self.name.trim().to_string(),
+            model: self.model.unwrap_or_default(),
+            persona: self.persona.unwrap_or_default(),
+            prompt: self.prompt.unwrap_or_default(),
+            output: self.output.unwrap_or_default(),
+        }
+    }
+
+    fn into_update(self, id: i64) -> kanban_rs::AgentConfigUpdate<'static> {
+        kanban_rs::AgentConfigUpdate {
+            id,
+            name: Box::leak(self.name.trim().to_string().into_boxed_str()),
+            model: Box::leak(self.model.unwrap_or_default().into_boxed_str()),
+            persona: Box::leak(self.persona.unwrap_or_default().into_boxed_str()),
+            prompt: Box::leak(self.prompt.unwrap_or_default().into_boxed_str()),
+            output: Box::leak(self.output.unwrap_or_default().into_boxed_str()),
+        }
+    }
+}
+
+#[derive(Serialize, utoipa::ToSchema)]
+struct AgentConfigDto {
+    id: i64,
+    name: String,
+    model: String,
+    persona: String,
+    prompt: String,
+    output: String,
+}
+
+impl From<kanban_rs::AgentConfigRow> for AgentConfigDto {
+    fn from(r: kanban_rs::AgentConfigRow) -> Self {
+        Self {
+            id: r.id,
+            name: r.name,
+            model: r.model,
+            persona: r.persona,
+            prompt: r.prompt,
+            output: r.output,
+        }
+    }
+}
+
+#[derive(Serialize, utoipa::ToSchema)]
+struct AgentDto {
+    name: String,
+    state: serde_json::Value,
+}
+
+impl From<kanban_rs::AgentState> for AgentDto {
+    fn from(a: kanban_rs::AgentState) -> Self {
+        Self {
+            name: a.name,
+            state: a.state,
+        }
+    }
+}
+
+#[derive(Deserialize, utoipa::ToSchema)]
+struct LoginRequest {
+    username: String,
+    password: String,
+}
+
+#[derive(Serialize, utoipa::ToSchema)]
+struct LoginReply {
+    token: String,
+    username: String,
+    /// "owner" | "super_admin" | "admin" | "editor" | "viewer"
+    role: String,
+    /// True when the account must change its password before any other call.
+    must_change_password: bool,
+}
+
+#[derive(Deserialize, utoipa::ToSchema)]
+struct ChangePasswordRequest {
+    old_password: String,
+    new_password: String,
+}
+
+#[derive(Serialize, utoipa::ToSchema)]
+struct BootstrapReply {
+    needs_setup: bool,
+}
+
+#[derive(Deserialize, utoipa::ToSchema)]
+struct CreateUserRequest {
+    username: String,
+    /// Minimum 8 chars — hashed with argon2, never stored in plain text.
+    password: String,
+    /// "owner" | "super_admin" | "admin" | "editor" | "viewer"
+    role: String,
+}
+
+#[derive(Serialize, utoipa::ToSchema)]
+struct UserDto {
+    id: i64,
+    username: String,
+    role: String,
+    must_change_password: bool,
+}
+
+impl From<kanban_rs::UserRow> for UserDto {
+    fn from(u: kanban_rs::UserRow) -> Self {
+        Self {
+            id: u.id,
+            username: u.username,
+            role: u.role,
+            must_change_password: u.must_change_password,
+        }
+    }
+}
+
+#[derive(Serialize, utoipa::ToSchema)]
+struct WorkspaceDto {
+    id: i64,
+    name: String,
+}
+
+impl From<kanban_rs::WorkspaceRow> for WorkspaceDto {
+    fn from(w: kanban_rs::WorkspaceRow) -> Self {
+        Self { id: w.id, name: w.name }
+    }
+}
+
+#[derive(Serialize, utoipa::ToSchema)]
+struct ProjectDto {
+    id: i64,
+    workspace_id: i64,
+    name: String,
+}
+
+impl From<kanban_rs::ProjectRow> for ProjectDto {
+    fn from(p: kanban_rs::ProjectRow) -> Self {
+        Self {
+            id: p.id,
+            workspace_id: p.workspace_id,
+            name: p.name,
+        }
+    }
+}
+
+#[derive(Deserialize, utoipa::ToSchema)]
+struct CreateWorkspaceRequest {
+    name: String,
+}
+
+#[derive(Deserialize, utoipa::ToSchema)]
+struct CreateProjectRequest {
+    name: String,
+}
+
 struct ApiError(String);
 
 impl ApiError {
+    const NOT_FOUND_MSG: &'static str = "not found";
+
     fn internal(msg: impl Into<String>) -> Self {
         Self(msg.into())
     }
@@ -503,6 +1393,15 @@ impl IntoResponse for ApiError {
         match self {
             Self(msg) if msg.starts_with("no loadable model") => {
                 (StatusCode::NOT_FOUND, msg).into_response()
+            }
+            Self(msg) if msg == Self::NOT_FOUND_MSG => {
+                (StatusCode::NOT_FOUND, msg).into_response()
+            }
+            Self(msg) if msg == UNAUTHORIZED_MSG => {
+                (StatusCode::UNAUTHORIZED, msg).into_response()
+            }
+            Self(msg) if msg == FORBIDDEN_MSG => {
+                (StatusCode::FORBIDDEN, msg).into_response()
             }
             Self(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
         }

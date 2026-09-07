@@ -2,6 +2,7 @@
 name = "claude-cli"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 
 [dependencies]
 ai-interface-layer = { path = "../ai_interface_layer" }

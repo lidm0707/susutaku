@@ -2,6 +2,7 @@
 name = "susutaku-mlx"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 
 [dependencies]
 mlx-rs = { workspace = true }

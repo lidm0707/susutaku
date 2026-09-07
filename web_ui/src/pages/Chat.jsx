@@ -6,6 +6,7 @@ import {
   Check,
   Globe,
   HardDrive,
+  KanbanSquare,
   Puzzle,
   Send,
   Settings,
@@ -144,6 +145,7 @@ export default function Chat() {
         <nav className="nav">
           <CodexLogin />
           <Link to="/models" title="models"><Settings size={16} /></Link>
+          <Link to="/kanban" title="kanban"><KanbanSquare size={16} /></Link>
           <Link to="/sandbox" title="sandbox"><Box size={16} /></Link>
           <Link to="/settings" title="z.ai settings"><SlidersHorizontal size={16} /></Link>
         </nav>
