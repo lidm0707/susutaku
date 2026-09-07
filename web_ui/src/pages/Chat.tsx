@@ -3,19 +3,27 @@ import { Link } from "react-router-dom";
 import {
   Box,
   Brain,
-  Check,
-  Globe,
-  HardDrive,
   KanbanSquare,
-  Puzzle,
   Send,
   Settings,
   SlidersHorizontal,
   Snowflake,
   Zap,
 } from "lucide-react";
-import { API_BASE, chat_codex, chat_zai, fetch_codex_models, fetch_models, pretty_name, select_model, size_label } from "../lib.js";
-import CodexLogin from "../components/CodexLogin.jsx";
+import { API_BASE, chat_codex, chat_zai, fetch_codex_models, fetch_models, pretty_name, select_model, size_label, type ChatReply, type CodexModel, type ModelInfo } from "../lib.js";
+import CodexLogin from "../components/CodexLogin.tsx";
+
+interface Msg {
+  role: "user" | "assistant";
+  text: string;
+  pending?: boolean;
+  thinking?: string;
+  model?: string;
+  prompt_tps?: number;
+  tps?: number;
+  searched?: boolean;
+  tok?: string;
+}
 
 const CODEX = "codex";
 const ZAI = "zai";
@@ -26,7 +34,7 @@ const MAX_TOKENS = 512;
 const THINK_OPEN = "<think>";
 const THINK_CLOSE = "</think>";
 
-function split_thinking(text) {
+function split_thinking(text: string): { thinking: string; reply: string } {
   const open = text.indexOf(THINK_OPEN);
   const close = text.indexOf(THINK_CLOSE);
   if (open === -1) return { thinking: "", reply: text.trim() };
@@ -37,28 +45,23 @@ function split_thinking(text) {
   return { thinking, reply };
 }
 
-export function EngineIcon({ engine }) {
+export function EngineIcon({ engine }: { engine: string }) {
   return engine === "gguf" ? <Snowflake size={14} /> : <Zap size={14} />;
 }
 
 export default function Chat() {
-  const [messages, setMessages] = useState([]);
+  const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [search, setSearch] = useState("auto");
   const [tok, setTok] = useState("normal");
-  const [models, setModels] = useState([]);
+  const [models, setModels] = useState<ModelInfo[]>([]);
   const [model, setModel] = useState("");
-  const [codexModels, setCodexModels] = useState([]);
+  const [codexModels, setCodexModels] = useState<CodexModel[]>([]);
   const [codexModel, setCodexModel] = useState(DEFAULT_CODEX_MODEL);
   const [zaiModel, setZaiModel] = useState("");
   const [error, setError] = useState("");
   const selected = models.find((m) => m.name === model);
-
-  async function pick(name) {
-    await select_model(name);
-    setModel(name);
-  }
 
   useEffect(() => {
     fetch_models()
@@ -82,7 +85,7 @@ export default function Chat() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function pick(next) {
+  async function pick(next: string) {
     if (next === CODEX || next === ZAI) {
       setModel(next);
       return;
@@ -91,7 +94,7 @@ export default function Chat() {
     setModel(next);
   }
 
-  async function send(e) {
+  async function send(e: React.FormEvent) {
     e.preventDefault();
     const text = input.trim();
     if (!text || busy) return;
@@ -100,7 +103,7 @@ export default function Chat() {
     setBusy(true);
     setMessages((m) => [...m, { role: "user", text }, { role: "assistant", text: "", pending: true }]);
     try {
-      const data =
+      const data: ChatReply =
         model === CODEX
           ? await chat_codex(text, codexModel)
           : model === ZAI
@@ -121,8 +124,8 @@ export default function Chat() {
             : msg
         )
       );
-    } catch (err) {
-      setError(String(err.message || err));
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : String(err));
       setMessages((m) => m.filter((msg, i) => !(i === m.length - 1 && msg.pending)));
     } finally {
       setBusy(false);
@@ -132,7 +135,7 @@ export default function Chat() {
   return (
     <main className="chat">
       <header>
-        <h1><Link to="/">susutaku</Link></h1>
+        <h1><Link to="/chat">susutaku</Link></h1>
         <span className="sub">
           {model === CODEX
             ? `codex · ${codexModel}`
@@ -161,7 +164,7 @@ export default function Chat() {
               </details>
             )}
             <p>{m.text || (m.pending ? "…" : "")}</p>
-            {m.tps && <small>{m.model} · prompt {m.prompt_tps.toFixed(1)} tok/s · decode {m.tps.toFixed(1)} tok/s{m.searched ? " · searched" : ""}{m.tok === "katgpt" ? " · katgpt" : ""}</small>}
+            {m.tps && <small>{m.model} · prompt {m.prompt_tps?.toFixed(1)} tok/s · decode {m.tps.toFixed(1)} tok/s{m.searched ? " · searched" : ""}{m.tok === "katgpt" ? " · katgpt" : ""}</small>}
           </div>
         ))}
       </section>
@@ -170,7 +173,7 @@ export default function Chat() {
         <select
           className="search-toggle"
           value={model}
-          onChange={(e) => pick(e.target.value).catch((err) => setError(String(err.message || err)))}
+          onChange={(e) => pick(e.target.value).catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)))}
           title="model"
         >
           <option value={CODEX}>Codex (ChatGPT)</option>
@@ -185,7 +188,7 @@ export default function Chat() {
           <select
             className="search-toggle"
             value={codexModel}
-            onChange={(e) => setCodexModel(e.target.value)}
+            onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setCodexModel(e.target.value)}
             title="codex model"
           >
             {codexModels.map((m) => (
@@ -199,7 +202,7 @@ export default function Chat() {
           <input
             className="search-toggle zai-model"
             value={zaiModel}
-            onChange={(e) => setZaiModel(e.target.value)}
+            onChange={(e: React.ChangeEvent<HTMLInputElement>) => setZaiModel(e.target.value)}
             placeholder="glm-4.6"
             title="z.ai model"
           />
@@ -207,7 +210,7 @@ export default function Chat() {
         <select
           className="search-toggle"
           value={search}
-          onChange={(e) => setSearch(e.target.value)}
+          onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setSearch(e.target.value)}
           title="web search mode"
         >
           <option value="auto">auto</option>
@@ -217,7 +220,7 @@ export default function Chat() {
         <select
           className="search-toggle"
           value={tok}
-          onChange={(e) => setTok(e.target.value)}
+          onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setTok(e.target.value)}
           title="tokenizer"
         >
           <option value="normal">normal</option>
@@ -225,7 +228,7 @@ export default function Chat() {
         </select>
         <input
           value={input}
-          onChange={(e) => setInput(e.target.value)}
+          onChange={(e: React.ChangeEvent<HTMLInputElement>) => setInput(e.target.value)}
           placeholder={busy ? "generating…" : "type a message"}
           disabled={busy}
           autoFocus

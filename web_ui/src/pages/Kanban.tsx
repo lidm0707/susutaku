@@ -15,45 +15,53 @@ import {
   remove_card,
   set_agent,
   set_card_pipeline,
+  type Agent,
+  type Card,
+  type Pipeline,
+  type Project,
+  type Workspace,
 } from "../lib.js";
 
 const COLUMNS = [
   { id: "todo", title: "To Do" },
   { id: "doing", title: "Doing" },
   { id: "done", title: "Done" },
-];
+] as const;
 
-const PRIORITIES = ["low", "normal", "high", "critical"];
+const PRIORITIES = ["low", "normal", "high", "critical"] as const;
+
+type ColumnId = (typeof COLUMNS)[number]["id"];
+type Priority = (typeof PRIORITIES)[number];
 
 export default function Kanban() {
   const nav = useNavigate();
-  const [workspaces, setWorkspaces] = useState([]);
-  const [wsId, setWsId] = useState(null);
-  const [projects, setProjects] = useState([]);
-  const [projectId, setProjectId] = useState(null);
-  const [cards, setCards] = useState([]);
-  const [error, setError] = useState("");
+  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  const [wsId, setWsId] = useState<number | null>(null);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [projectId, setProjectId] = useState<number | null>(null);
+  const [cards, setCards] = useState<Card[]>([]);
+  const [, setError] = useState("");
   const [title, setTitle] = useState("");
-  const [priority, setPriority] = useState(PRIORITIES[1]);
-  const [agentFor, setAgentFor] = useState(null);
+  const [priority, setPriority] = useState<Priority>(PRIORITIES[1]);
+  const [agentFor, setAgentFor] = useState<Card | null>(null);
   const [agentName, setAgentName] = useState("");
   const [agentState, setAgentState] = useState("{}");
-  const [savedAgents, setSavedAgents] = useState([]);
-  const [pipeFor, setPipeFor] = useState(null);
+  const [savedAgents, setSavedAgents] = useState<Agent[]>([]);
+  const [pipeFor, setPipeFor] = useState<Card | null>(null);
   const [pipePick, setPipePick] = useState("");
-  const [pipelines, setPipelines] = useState(null);
+  const [pipelines, setPipelines] = useState<Pipeline[] | null>(null);
 
   useEffect(() => {
     load_workspaces();
   }, []);
 
-  async function handle(err) {
-    if (err.status === 401) {
+  async function handle(err: unknown) {
+    if (err instanceof Object && "status" in err && (err as { status?: number }).status === 401) {
       clear_token();
-      nav("/login");
+      nav("/");
       return;
     }
-    setError(String(err.message || err));
+    setError(err instanceof Error ? err.message : String(err));
   }
 
   async function load_workspaces() {
@@ -75,7 +83,7 @@ export default function Kanban() {
 
   async function load_projects() {
     try {
-      const list = await fetch_projects(wsId);
+      const list = await fetch_projects(wsId as number);
       setProjects(list);
       setProjectId((cur) => (list.some((p) => p.id === cur) ? cur : list[0]?.id ?? null));
     } catch (err) {
@@ -93,13 +101,13 @@ export default function Kanban() {
 
   async function refresh() {
     try {
-      setCards(await fetch_cards(projectId));
+      setCards(await fetch_cards(projectId as number));
     } catch (err) {
       handle(err);
     }
   }
 
-  function pick_workspace(id) {
+  function pick_workspace(id: string) {
     setWsId(Number(id));
     setProjectId(null);
   }
@@ -121,14 +129,14 @@ export default function Kanban() {
     if (!name?.trim()) return;
     setError("");
     try {
-      await create_project(wsId, name.trim());
+      await create_project(wsId as number, name.trim());
       await load_projects();
     } catch (err) {
       handle(err);
     }
   }
 
-  async function add(e) {
+  async function add(e: React.FormEvent) {
     e.preventDefault();
     if (!title.trim() || projectId == null) return;
     setError("");
@@ -141,20 +149,20 @@ export default function Kanban() {
     }
   }
 
-  async function shift(card, dir) {
+  async function shift(card: Card, dir: number) {
     const idx = COLUMNS.findIndex((c) => c.id === card.column_id);
-    const next = COLUMNS[idx + dir];
+    const next: ColumnId | undefined = COLUMNS[idx + dir]?.id;
     if (!next) return;
     setError("");
     try {
-      await move_card(card.id, next.id, 0);
+      await move_card(card.id, next, 0);
       await refresh();
     } catch (err) {
       handle(err);
     }
   }
 
-  async function drop(card, column_id) {
+  async function drop(card: Card, column_id: ColumnId) {
     if (card.column_id === column_id) return;
     setError("");
     try {
@@ -165,7 +173,7 @@ export default function Kanban() {
     }
   }
 
-  async function del(id) {
+  async function del(id: number) {
     setError("");
     try {
       await remove_card(id);
@@ -175,7 +183,7 @@ export default function Kanban() {
     }
   }
 
-  function open_agent_modal(card) {
+  function open_agent_modal(card: Card) {
     setAgentFor(card);
     setAgentName(card.agent_name || "");
     setAgentState(
@@ -184,7 +192,7 @@ export default function Kanban() {
     fetch_agents().then(setSavedAgents).catch(() => setSavedAgents([]));
   }
 
-  function load_saved_agent(id) {
+  function load_saved_agent(id: string) {
     const a = savedAgents.find((x) => x.id === Number(id));
     if (!a) return;
     setAgentName(a.name || agentName);
@@ -197,7 +205,7 @@ export default function Kanban() {
     );
   }
 
-  function open_pipe_modal(card) {
+  function open_pipe_modal(card: Card) {
     setPipeFor(card);
     setPipePick(card.pipeline_id != null ? String(card.pipeline_id) : "");
     if (pipelines == null) {
@@ -205,11 +213,11 @@ export default function Kanban() {
     }
   }
 
-  async function save_pipeline(e) {
+  async function save_pipeline(e: React.FormEvent) {
     e.preventDefault();
     setError("");
     try {
-      await set_card_pipeline(pipeFor.id, pipePick === "" ? null : Number(pipePick));
+      await set_card_pipeline((pipeFor as Card).id, pipePick === "" ? null : Number(pipePick));
       setPipeFor(null);
       await refresh();
     } catch (err) {
@@ -217,10 +225,10 @@ export default function Kanban() {
     }
   }
 
-  async function save_agent(e) {
+  async function save_agent(e: React.FormEvent) {
     e.preventDefault();
     setError("");
-    let state;
+    let state: unknown;
     try {
       state = JSON.parse(agentState);
     } catch {
@@ -228,7 +236,7 @@ export default function Kanban() {
       return;
     }
     try {
-      await set_agent(agentFor.id, agentName.trim(), state);
+      await set_agent((agentFor as Card).id, agentName.trim(), state);
       setAgentFor(null);
       await refresh();
     } catch (err) {
@@ -238,12 +246,12 @@ export default function Kanban() {
 
   const byColumn = Object.fromEntries(
     COLUMNS.map((c) => [c.id, cards.filter((k) => k.column_id === c.id)])
-  );
+  ) as Record<ColumnId, Card[]>;
 
   return (
     <main className="chat kanban-page">
       <header>
-        <h1><Link to="/">kanban</Link></h1>
+        <h1><Link to="/chat">kanban</Link></h1>
         <span className="sub">{cards.length} task{cards.length === 1 ? "" : "s"}</span>
         <nav className="nav">
           <select
@@ -261,7 +269,7 @@ export default function Kanban() {
           <select
             className="kanban-select"
             value={projectId ?? ""}
-            onChange={(e) => setProjectId(e.target.value ? Number(e.target.value) : null)}
+            onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setProjectId(e.target.value ? Number(e.target.value) : null)}
             title="project"
           >
             {projects.length === 0 && <option value="">no project</option>}
@@ -272,11 +280,10 @@ export default function Kanban() {
           <button className="kanban-mini" onClick={add_project} disabled={wsId == null} title="new project">+</button>
           <Link to="/pipelines" title="pipelines"><Workflow size={16} /></Link>
           <Link to="/agents" title="saved agents"><Bot size={16} /></Link>
-          <Link to="/login" title="logout / switch user"><LogOut size={16} /></Link>
-          <Link to="/" title="back to chat"><ArrowLeft size={16} /></Link>
+          <Link to="/" title="logout / switch user"><LogOut size={16} /></Link>
+          <Link to="/chat" title="back to chat"><ArrowLeft size={16} /></Link>
         </nav>
       </header>
-      {error && <p className="error">{error}</p>}
       <form className="kanban-add" onSubmit={add}>
         <input
           value={title}
@@ -284,7 +291,7 @@ export default function Kanban() {
           placeholder={projectId == null ? "create a workspace + project first…" : "new task title…"}
           disabled={projectId == null}
         />
-        <select value={priority} onChange={(e) => setPriority(e.target.value)}>
+        <select value={priority} onChange={(e) => setPriority(e.target.value as Priority)}>
           {PRIORITIES.map((p) => (
             <option key={p} value={p}>{p}</option>
           ))}
@@ -298,8 +305,8 @@ export default function Kanban() {
           <div
             key={col.id}
             className="kanban-col"
-            onDragOver={(e) => e.preventDefault()}
-            onDrop={(e) => {
+            onDragOver={(e: React.DragEvent<HTMLDivElement>) => e.preventDefault()}
+            onDrop={(e: React.DragEvent<HTMLDivElement>) => {
               const id = Number(e.dataTransfer.getData("text/plain"));
               const card = cards.find((k) => k.id === id);
               if (card) drop(card, col.id);
@@ -311,7 +318,7 @@ export default function Kanban() {
                 key={card.id}
                 className="kanban-card"
                 draggable
-                onDragStart={(e) => e.dataTransfer.setData("text/plain", card.id)}
+                onDragStart={(e: React.DragEvent<HTMLDivElement>) => e.dataTransfer.setData("text/plain", String(card.id))}
               >
                 <div className="kanban-card-top">
                   <span className={`kanban-prio prio-${card.priority}`}>{card.priority}</span>

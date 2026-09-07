@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { ArrowLeft, Bot, KeyRound, Workflow } from "lucide-react";
-import { fetch_zai_settings, save_zai_settings } from "../lib.js";
+import { fetch_zai_settings, save_zai_settings, type ZaiSettings } from "../lib.js";
 
 export default function Settings() {
   const [apiKey, setApiKey] = useState("");
@@ -12,25 +12,25 @@ export default function Settings() {
 
   useEffect(() => {
     fetch_zai_settings()
-      .then((s) => {
+      .then((s: ZaiSettings) => {
         setKeySet(s.api_key_set);
         setModel(s.model || "");
       })
-      .catch((err) => setError(String(err.message || err)));
+      .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
   }, []);
 
-  async function save(e) {
+  async function save(e: React.FormEvent) {
     e.preventDefault();
     setStatus("");
     setError("");
     try {
-      const s = await save_zai_settings(apiKey, model);
+      const s: ZaiSettings = await save_zai_settings(apiKey, model);
       setKeySet(s.api_key_set);
       setModel(s.model || "");
       setApiKey("");
       setStatus("saved");
-    } catch (err) {
-      setError(String(err.message || err));
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : String(err));
     }
   }
 
@@ -42,7 +42,7 @@ export default function Settings() {
         <nav className="nav">
           <Link to="/pipelines" title="pipelines"><Workflow size={16} /></Link>
           <Link to="/agents" title="saved agents"><Bot size={16} /></Link>
-          <Link to="/" title="back to chat"><ArrowLeft size={16} /></Link>
+          <Link to="/chat" title="back to chat"><ArrowLeft size={16} /></Link>
         </nav>
       </header>
       <section className="log">
@@ -53,14 +53,14 @@ export default function Settings() {
           <input
             type="password"
             value={apiKey}
-            onChange={(e) => setApiKey(e.target.value)}
+            onChange={(e: React.ChangeEvent<HTMLInputElement>) => setApiKey(e.target.value)}
             placeholder={keySet ? "•••••••• (type to replace)" : "paste your z.ai api key"}
             autoComplete="off"
           />
           <label>model</label>
           <input
             value={model}
-            onChange={(e) => setModel(e.target.value)}
+            onChange={(e: React.ChangeEvent<HTMLInputElement>) => setModel(e.target.value)}
             placeholder="glm-4.6"
           />
           <button type="submit">save</button>

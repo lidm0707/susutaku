@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { ArrowLeft, Box, Trash2 } from "lucide-react";
-import { fetch_sandboxes, purge_sandbox, sweep_sandboxes } from "../lib.js";
+import { fetch_sandboxes, purge_sandbox, sweep_sandboxes, type SandboxDir } from "../lib.js";
 
 export default function Sandbox() {
-  const [dirs, setDirs] = useState([]);
+  const [dirs, setDirs] = useState<SandboxDir[]>([]);
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
 
@@ -15,20 +15,20 @@ export default function Sandbox() {
   async function refresh() {
     try {
       setDirs(await fetch_sandboxes());
-    } catch (err) {
-      setError(String(err.message || err));
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : String(err));
     }
   }
 
-  async function remove(pid) {
+  async function remove(pid: number) {
     setError("");
     setStatus("");
     try {
       const { removed } = await purge_sandbox(pid);
       setStatus(removed ? `removed sandbox ${pid}` : `sandbox ${pid} already gone`);
       await refresh();
-    } catch (err) {
-      setError(String(err.message || err));
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : String(err));
     }
   }
 
@@ -39,8 +39,8 @@ export default function Sandbox() {
       const { removed } = await sweep_sandboxes();
       setStatus(`swept ${removed} stale sandbox${removed === 1 ? "" : "es"}`);
       await refresh();
-    } catch (err) {
-      setError(String(err.message || err));
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : String(err));
     }
   }
 
@@ -54,7 +54,7 @@ export default function Sandbox() {
           <button className="codex-login" onClick={sweep} title="remove dirs of dead backends">
             <Trash2 size={14} /> sweep stale
           </button>
-          <Link to="/" title="back to chat"><ArrowLeft size={16} /></Link>
+          <Link to="/chat" title="back to chat"><ArrowLeft size={16} /></Link>
         </nav>
       </header>
       {status && <p className="saved-mark" style={{ textAlign: "center" }}>{status}</p>}

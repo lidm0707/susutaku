@@ -7,31 +7,37 @@ import {
   fetch_pipelines,
   remove_pipeline,
   update_pipeline,
+  type Pipeline,
 } from "../lib.js";
 
-const STAGES = ["ingest", "parse", "transform", "model_infer", "render", "custom"];
+const STAGES = ["ingest", "parse", "transform", "model_infer", "render", "custom"] as const;
+
+type Stage = (typeof STAGES)[number];
+
+type NodeRow = { id: string; stage: string; params: string };
+type LinkRow = { from: string; to: string };
 
 export default function Pipelines() {
   const nav = useNavigate();
-  const [pipelines, setPipelines] = useState([]);
-  const [selected, setSelected] = useState(null);
+  const [pipelines, setPipelines] = useState<Pipeline[]>([]);
+  const [selected, setSelected] = useState<number | "new" | null>(null);
   const [name, setName] = useState("");
-  const [nodes, setNodes] = useState([]);
-  const [links, setLinks] = useState([]);
-  const [error, setError] = useState("");
+  const [nodes, setNodes] = useState<NodeRow[]>([]);
+  const [links, setLinks] = useState<LinkRow[]>([]);
+  const [, setError] = useState("");
   const [status, setStatus] = useState("");
 
   useEffect(() => {
     load_pipelines();
   }, []);
 
-  async function handle(err) {
-    if (err.status === 401) {
+  async function handle(err: unknown) {
+    if (err instanceof Object && "status" in err && (err as { status?: number }).status === 401) {
       clear_token();
-      nav("/login");
+      nav("/");
       return;
     }
-    setError(String(err.message || err));
+    setError(err instanceof Error ? err.message : String(err));
   }
 
   async function load_pipelines() {
@@ -42,7 +48,7 @@ export default function Pipelines() {
     }
   }
 
-  function pick(p) {
+  function pick(p: Pipeline) {
     setError("");
     setStatus("");
     setSelected(p.id);
@@ -60,15 +66,15 @@ export default function Pipelines() {
     setLinks([]);
   }
 
-  function set_node(i, patch) {
+  function set_node(i: number, patch: Partial<NodeRow>) {
     setNodes(nodes.map((n, j) => (j === i ? { ...n, ...patch } : n)));
   }
 
-  function set_link(i, patch) {
+  function set_link(i: number, patch: Partial<LinkRow>) {
     setLinks(links.map((l, j) => (j === i ? { ...l, ...patch } : l)));
   }
 
-  async function save(e) {
+  async function save(e: React.FormEvent) {
     e.preventDefault();
     setStatus("");
     const trimmed = nodes.map((n) => ({ ...n, id: n.id.trim() }));
@@ -81,7 +87,7 @@ export default function Pipelines() {
       setError("node ids must be unique");
       return;
     }
-    let parsed;
+    let parsed: { id: string; stage: string; params: unknown }[];
     try {
       parsed = trimmed.map((n) => ({ id: n.id, stage: n.stage, params: JSON.parse(n.params || "{}") }));
     } catch {
@@ -100,7 +106,7 @@ export default function Pipelines() {
         setSelected(created.id);
         setName(created.name);
       } else {
-        await update_pipeline(selected, name.trim(), spec);
+        await update_pipeline(selected as number, name.trim(), spec);
       }
       setStatus("saved");
       await load_pipelines();
@@ -132,15 +138,14 @@ export default function Pipelines() {
         <h1><Link to="/pipelines">pipelines</Link></h1>
         <span className="sub">{pipelines.length} saved</span>
         <nav className="nav">
-          <Link to="/" title="back to chat"><ArrowLeft size={16} /></Link>
+          <Link to="/chat" title="back to chat"><ArrowLeft size={16} /></Link>
         </nav>
       </header>
-      {error && <p className="error">{error}</p>}
       <div className="kanban-add">
         <select
           className="kanban-select"
           value={selected ?? ""}
-          onChange={(e) => {
+          onChange={(e: React.ChangeEvent<HTMLSelectElement>) => {
             const p = pipelines.find((x) => x.id === Number(e.target.value));
             if (p) pick(p);
           }}
@@ -167,7 +172,7 @@ export default function Pipelines() {
                 onChange={(e) => set_node(i, { id: e.target.value })}
                 placeholder="node id"
               />
-              <select value={n.stage} onChange={(e) => set_node(i, { stage: e.target.value })}>
+              <select value={n.stage} onChange={(e) => set_node(i, { stage: e.target.value as Stage })}>
                 {STAGES.map((s) => (
                   <option key={s} value={s}>{s}</option>
                 ))}

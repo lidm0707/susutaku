@@ -9,17 +9,21 @@ import {
   pretty_name,
   remove_agent,
   update_agent,
+  type Agent,
+  type ModelInfo,
 } from "../lib.js";
 
 const EMPTY = { name: "", model: "", persona: "", prompt: "", output: "" };
 
+type Fields = typeof EMPTY;
+
 export default function AgentSettings() {
   const nav = useNavigate();
-  const [agents, setAgents] = useState([]);
-  const [models, setModels] = useState([]);
-  const [selected, setSelected] = useState(null);
-  const [fields, setFields] = useState(EMPTY);
-  const [error, setError] = useState("");
+  const [agents, setAgents] = useState<Agent[]>([]);
+  const [models, setModels] = useState<ModelInfo[]>([]);
+  const [selected, setSelected] = useState<number | "new" | null>(null);
+  const [fields, setFields] = useState<Fields>(EMPTY);
+  const [, setError] = useState("");
   const [status, setStatus] = useState("");
 
   useEffect(() => {
@@ -28,23 +32,23 @@ export default function AgentSettings() {
         setAgents(a);
         setModels(m);
       })
-      .catch((err) => handle(err));
+      .catch((err: unknown) => handle(err));
   }, []);
 
-  async function handle(err) {
-    if (err.status === 401) {
+  async function handle(err: unknown) {
+    if (err instanceof Object && "status" in err && (err as { status?: number }).status === 401) {
       clear_token();
-      nav("/login");
+      nav("/");
       return;
     }
-    setError(String(err.message || err));
+    setError(err instanceof Error ? err.message : String(err));
   }
 
-  function set(k, v) {
+  function set(k: keyof Fields, v: string) {
     setFields({ ...fields, [k]: v });
   }
 
-  function pick(a) {
+  function pick(a: Agent) {
     setError("");
     setStatus("");
     setSelected(a.id);
@@ -64,7 +68,7 @@ export default function AgentSettings() {
     setFields(EMPTY);
   }
 
-  async function save(e) {
+  async function save(e: React.FormEvent) {
     e.preventDefault();
     setStatus("");
     const payload = {
@@ -76,12 +80,12 @@ export default function AgentSettings() {
     };
     setError("");
     try {
-      let row;
+      let row: Agent;
       if (selected === "new") {
         row = await create_agent(payload);
       } else {
-        await update_agent(selected, payload);
-        row = { ...payload, id: selected };
+        await update_agent(selected as number, payload);
+        row = { ...payload, id: selected as number };
       }
       setSelected(row.id);
       setStatus("saved");
@@ -117,15 +121,14 @@ export default function AgentSettings() {
         <h1><Link to="/agents">agents</Link></h1>
         <span className="sub">{agents.length} saved</span>
         <nav className="nav">
-          <Link to="/" title="back to chat"><ArrowLeft size={16} /></Link>
+          <Link to="/chat" title="back to chat"><ArrowLeft size={16} /></Link>
         </nav>
       </header>
-      {error && <p className="error">{error}</p>}
       <div className="kanban-add">
         <select
           className="kanban-select"
           value={selected ?? ""}
-          onChange={(e) => {
+          onChange={(e: React.ChangeEvent<HTMLSelectElement>) => {
             const a = agents.find((x) => x.id === Number(e.target.value));
             if (a) pick(a);
           }}

@@ -1,27 +1,27 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { ArrowLeft, Check, HardDrive, Snowflake, Zap } from "lucide-react";
-import { fetch_models, pretty_name, select_model, size_label } from "../lib.js";
+import { fetch_models, pretty_name, select_model, size_label, type ModelInfo } from "../lib.js";
 
-export function EngineIcon({ engine }) {
+export function EngineIcon({ engine }: { engine: string }) {
   return engine === "gguf" ? <Snowflake size={14} /> : <Zap size={14} />;
 }
 
 export default function Models() {
-  const [models, setModels] = useState([]);
+  const [models, setModels] = useState<ModelInfo[]>([]);
   const [error, setError] = useState("");
 
   useEffect(() => {
-    fetch_models().then(setModels).catch((err) => setError(String(err.message || err)));
+    fetch_models().then(setModels).catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
   }, []);
 
-  async function pick(name) {
+  async function pick(name: string) {
     setError("");
     try {
       await select_model(name);
       setModels((list) => list.map((m) => ({ ...m, selected: m.name === name })));
-    } catch (err) {
-      setError(String(err.message || err));
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : String(err));
     }
   }
 
@@ -31,7 +31,7 @@ export default function Models() {
         <h1><Link to="/models">models</Link></h1>
         <span className="sub">{models.length} available</span>
         <nav className="nav">
-          <Link to="/" title="back to chat"><ArrowLeft size={16} /></Link>
+          <Link to="/chat" title="back to chat"><ArrowLeft size={16} /></Link>
         </nav>
       </header>
       {error && <p className="error">{error}</p>}

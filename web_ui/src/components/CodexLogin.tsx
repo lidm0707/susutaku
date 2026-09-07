@@ -1,24 +1,24 @@
 import { useEffect, useRef, useState } from "react";
 import { LogIn, ShieldCheck } from "lucide-react";
-import { codex_start, codex_status } from "../lib.js";
+import { codex_start, codex_status, CodexStatus } from "../lib.js";
 
 const POLL_MS = 2000;
 const MAX_POLLS = 150;
 
 export default function CodexLogin() {
-  const [status, setStatus] = useState("missing");
+  const [status, setStatus] = useState<CodexStatus["status"]>("missing");
   const [cliOk, setCliOk] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const timer = useRef(null);
+  const timer = useRef<ReturnType<typeof setInterval> | null>(null);
   const polls = useRef(0);
 
   useEffect(() => {
     refresh();
-    return () => clearInterval(timer.current);
+    return () => clearInterval(timer.current!);
   }, []);
 
-  async function refresh() {
+  async function refresh(): Promise<void> {
     try {
       apply(await codex_status());
     } catch {
@@ -26,24 +26,24 @@ export default function CodexLogin() {
     }
   }
 
-  function apply(reply) {
+  function apply(reply: CodexStatus): void {
     setStatus(reply.status);
     setCliOk(reply.cli_available !== false);
     setError(reply.error || (reply.cli_available === false ? "codex CLI not found on backend — chat via codex will fail" : ""));
     if (reply.status !== "awaiting_login" || ++polls.current > MAX_POLLS) {
-      clearInterval(timer.current);
+      clearInterval(timer.current!);
       timer.current = null;
       setBusy(false);
     }
   }
 
-  async function login() {
+  async function login(): Promise<void> {
     setError("");
     setBusy(true);
     try {
       const { authorize_url } = await codex_start();
       window.open(authorize_url, "codex-login", "width=520,height=720");
-      clearInterval(timer.current);
+      clearInterval(timer.current!);
       polls.current = 0;
       timer.current = setInterval(async () => {
         try {
@@ -53,7 +53,7 @@ export default function CodexLogin() {
         }
       }, POLL_MS);
     } catch (err) {
-      setError(String(err.message || err));
+      setError(err instanceof Error ? err.message : String(err));
       setBusy(false);
     }
   }

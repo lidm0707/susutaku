@@ -1,33 +1,33 @@
-import { useEffect, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
-import { ArrowLeft, KeyRound, LogIn } from "lucide-react";
-import { change_password, clear_token, get_token, login } from "../lib.js";
+import { useState } from "react";
+import { Navigate, useNavigate } from "react-router-dom";
+import { KeyRound, LogIn } from "lucide-react";
+import { change_password, get_token, login } from "../lib.js";
+
+type Mode = "login" | "change";
 
 export default function Login() {
   const nav = useNavigate();
-  const [mode, setMode] = useState("login"); // "login" | "change"
+  const [mode, setMode] = useState<Mode>("login");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => {
-    if (get_token()) {
-      clear_token();
-    }
-  }, []);
+  if (get_token()) {
+    return <Navigate to="/chat" replace />;
+  }
 
-  async function submit(e) {
+  async function submit(e: React.FormEvent) {
     e.preventDefault();
     setError("");
     setBusy(true);
     if (mode === "change") {
       try {
         await change_password(password, newPassword);
-        nav("/");
-      } catch (err) {
-        setError(String(err.message || err));
+        nav("/chat");
+      } catch (err: unknown) {
+        setError(err instanceof Error ? err.message : String(err));
       } finally {
         setBusy(false);
       }
@@ -40,10 +40,10 @@ export default function Login() {
         setError("this account must set a new password first");
         return;
       }
-      nav("/");
+      nav("/chat");
       return;
-    } catch (err) {
-      setError(String(err.message || err));
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
     }
@@ -56,9 +56,6 @@ export default function Login() {
         <span className="sub">
           {mode === "change" ? "set a new password (min 8 chars) to continue" : "susutaku"}
         </span>
-        <nav className="nav">
-          <Link to="/" title="back to chat"><ArrowLeft size={16} /></Link>
-        </nav>
       </header>
       {error && <p className="error" style={{ textAlign: "center" }}>{error}</p>}
       <form className="login-box" onSubmit={submit}>

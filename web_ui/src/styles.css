@@ -102,6 +102,48 @@ header h1 {
   margin: 0;
 }
 
+.toaster {
+  position: fixed;
+  bottom: 1rem;
+  right: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  z-index: 1000;
+}
+
+.toast {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  max-width: 22rem;
+  padding: 0.55rem 0.8rem;
+  border-radius: 8px;
+  background: #1c1c22;
+  border: 1px solid #333;
+  color: #ddd;
+  font-size: 0.85rem;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+  animation: toast-in 0.15s ease-out;
+}
+
+.toast span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+
+.toast.error svg { color: #ff7b7b; }
+.toast.success svg { color: #7bd88f; }
+.toast.info svg { color: #79b8ff; }
+
+@keyframes toast-in {
+  from { transform: translateY(0.5rem); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
 form {
   display: flex;
   gap: 0.5rem;
