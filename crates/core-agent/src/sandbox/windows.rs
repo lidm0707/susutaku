@@ -289,6 +289,32 @@ impl Sandbox {
         })
     }
 
+    /// Sandbox rooted at an explicit work tree (one per agent), with a
+    /// state file scoped to that tree.
+    pub fn new_in(work_tree: &Path) -> Result<Self, Error> {
+        fs::create_dir_all(work_tree)?;
+        let name = work_tree
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let sandbox_id = new_sandbox_id();
+        let root = work_tree.join("sandbox");
+        create_isolated_workspace(&root)?;
+        write_marker(&root, &sandbox_id)?;
+        let state_path = std::env::temp_dir().join(format!("{STATE_FILE}.{name}"));
+        let state = RwLock::new(SandboxState {
+            cwd: ".".into(),
+            history: Vec::new(),
+        });
+        Ok(Self {
+            root,
+            sandbox_id,
+            state_path,
+            state,
+            purged: AtomicBool::new(false),
+        })
+    }
+
     /// Reload state from the JSON file and recreate the sandbox dir.
     pub fn restore() -> Result<Self, Error> {
         let state_path = state_path();

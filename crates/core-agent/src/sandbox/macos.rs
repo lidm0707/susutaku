@@ -99,8 +99,24 @@ pub struct Sandbox {
 impl Sandbox {
     pub fn new() -> Result<Self, Error> {
         let root = std::env::temp_dir().join(format!("{SANDBOX_PREFIX}{}", std::process::id()));
-        fs::create_dir_all(&root)?;
         let state_path = state_path();
+        Self::open(root, state_path)
+    }
+
+    /// Sandbox rooted at an explicit work tree (one per agent), with a
+    /// state file scoped to that tree instead of the process-global one.
+    pub fn new_in(work_tree: &Path) -> Result<Self, Error> {
+        fs::create_dir_all(work_tree)?;
+        let name = work_tree
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let state_path = std::env::temp_dir().join(format!("{STATE_FILE}.{name}"));
+        Self::open(work_tree.to_path_buf(), state_path)
+    }
+
+    fn open(root: PathBuf, state_path: PathBuf) -> Result<Self, Error> {
+        fs::create_dir_all(&root)?;
         let state = RwLock::new(SandboxState {
             cwd: ".".into(),
             history: Vec::new(),

@@ -191,6 +191,7 @@ dependencies = [
  "core-agent",
  "hostname",
  "kanban-rs",
+ "manager-rs",
  "mockall",
  "piplines",
  "prompt-sys",
@@ -1960,6 +1961,14 @@ name = "macro_rules_attribute-proc_macro"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc04a4c58212d57930a24bf47d3fa87485264a3a054e9c10e042eb373573ad3c"
+
+[[package]]
+name = "manager-rs"
+version = "0.1.0"
+dependencies = [
+ "core-agent",
+ "serde",
+]
 
 [[package]]
 name = "matchit"

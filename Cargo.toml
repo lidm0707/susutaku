@@ -13,6 +13,7 @@ members = [
     "crates/pdf-rs",
     "crates/kanban-rs",
     "crates/queue-rs",
+    "crates/manager-rs",
     "crates/piplines",
     "crates/work",
     "crates/agent_3th_cli/ai_interface_layer",
@@ -32,6 +33,7 @@ gguf-rs = { path = "crates/gguf-rs" }
 pdf-rs = { path = "crates/pdf-rs" }
 kanban-rs = { path = "crates/kanban-rs" }
 queue-rs = { path = "crates/queue-rs" }
+manager-rs = { path = "crates/manager-rs" }
 prompt-sys = { path = "crates/prompt-sys" }
 piplines = { path = "crates/piplines" }
 work = { path = "crates/work" }

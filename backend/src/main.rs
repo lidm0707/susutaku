@@ -5,6 +5,7 @@ use backend::api;
 use backend::app::ChatUseCase;
 use backend::infra::client_node::ClientNode;
 use backend::infra::kanban;
+use manager_rs::ManagerProcess;
 use backend::infra::model_client::RemoteModel;
 use backend::infra::sandbox::AgentSandbox;
 use backend::infra::search::{DuckDuckGo, PageFetcher};
@@ -44,7 +45,13 @@ async fn main() {
     println!("backend listening on http://{addr}");
     axum::serve(
         listener,
-        api::router(use_case, model.clone(), codex_workspace, kanban_store),
+        api::router(
+            use_case,
+            model.clone(),
+            codex_workspace,
+            kanban_store,
+            ManagerProcess::new(),
+        ),
     )
     .with_graceful_shutdown(async {
         let _ = tokio::signal::ctrl_c().await;

@@ -91,6 +91,7 @@ pub const STATE_FILE: &str = "agent-sandbox-state.json";
 
 const WORKSPACE_MOUNT: &str = "workspace"; // inside the sandbox root staging dir
 const ROOTFS_SUBDIR: &str = "rootfs";
+const SANDBOX_SUBDIR: &str = "sandbox";
 const OLD_ROOT: &str = "old_root";
 const METADATA_FILE: &str = "sandbox-metadata.json";
 const URANDOM: &str = "/dev/urandom";
@@ -227,6 +228,25 @@ impl Sandbox {
         purge_stale_state();
         let sandbox_id = random_hex_id()?;
         let root = sandbox_root(&sandbox_id);
+        create_workspace_layout(&root)?;
+        write_metadata(&root, &sandbox_id)?;
+        let state_file = instance_state_dir()?.join(format!("{sandbox_id}.json"));
+        Ok(Self {
+            sandbox_id,
+            root,
+            state_file,
+            state: RwLock::new(SandboxState::default()),
+            lifecycle: RwLock::new(Lifecycle::Idle),
+            run_gate: RwLock::new(()),
+        })
+    }
+
+    /// Sandbox rooted at an explicit work tree (one per agent). The usual
+    /// rootfs/workspace layout is created inside the given tree.
+    pub fn new_in(work_tree: &Path) -> Result<Self, Error> {
+        let sandbox_id = random_hex_id()?;
+        fs::create_dir_all(work_tree)?;
+        let root = work_tree.join(SANDBOX_SUBDIR);
         create_workspace_layout(&root)?;
         write_metadata(&root, &sandbox_id)?;
         let state_file = instance_state_dir()?.join(format!("{sandbox_id}.json"));

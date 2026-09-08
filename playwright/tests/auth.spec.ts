@@ -8,7 +8,7 @@ test.describe("auth", () => {
     await page.fill('input[placeholder="username"]', "wronguser");
     await page.fill('input[placeholder="password"]', "wrongpass");
     await page.click('button[type="submit"]');
-    await expect(page.locator(".error")).toBeVisible();
+    await expect(page.locator("p.error")).toBeVisible();
     // Still on login page.
     await expect(page).toHaveURL(/\/$|\/login/);
   });

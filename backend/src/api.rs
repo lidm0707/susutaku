@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use axum::{
     Json, Router,
-    extract::{DefaultBodyLimit, FromRequestParts, Multipart, Request, State},
+    extract::{DefaultBodyLimit, FromRequestParts, Multipart, Path, Request, State},
     http::{self, StatusCode, request::Parts},
     response::{IntoResponse, Response},
     routing::{delete, get, post, put},
@@ -37,6 +37,7 @@ pub fn router<T: ChatHandling + ModelSwitch + 'static>(
     catalog: Arc<dyn crate::infra::model_client::ModelCatalog>,
     codex_workspace: PathBuf,
     kanban_store: std::sync::Arc<kanban_rs::Store>,
+    manager: Arc<manager_rs::ManagerProcess>,
 ) -> Router {
     let kanban_store_for_sched = kanban_store.clone();
     let core = Router::new()
@@ -51,6 +52,15 @@ pub fn router<T: ChatHandling + ModelSwitch + 'static>(
         .route("/api/models", get(models))
         .with_state(catalog);
     let core = core.merge(models_router);
+    let manager_router = Router::new()
+        .route(
+            "/api/manager/agents",
+            get(manager_list_agents).post(spawn_agent),
+        )
+        .route("/api/manager/agents/{agent}/run", post(run_agent_command))
+        .route("/api/manager/agents/{agent}/finish", post(finish_agent))
+        .with_state(manager);
+    let core = core.merge(manager_router);
     let auth = Router::new()
         .route("/api/auth/codex/start", post(codex_start))
         .route("/api/auth/codex/status", get(codex_status))
@@ -198,13 +208,13 @@ async fn upload_attachment(
     while let Some(field) = form
         .next_field()
         .await
-        .map_err(|e| ApiError(e.to_string()))?
+        .map_err(|e| ApiError::internal(e.to_string()))?
     {
         if field.name() != Some(ATTACHMENT_FIELD) {
             continue;
         }
         let name = sanitize_name(field.file_name().unwrap_or(ATTACHMENT_DEFAULT_NAME));
-        let data = field.bytes().await.map_err(|e| ApiError(e.to_string()))?;
+        let data = field.bytes().await.map_err(|e| ApiError::internal(e.to_string()))?;
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
@@ -212,14 +222,14 @@ async fn upload_attachment(
         let dir = format!("{ATTACHMENTS_DIR}/{ATTACHMENT_UPLOAD_PREFIX}{nanos}");
         tokio::fs::create_dir_all(&dir)
             .await
-            .map_err(|e| ApiError(e.to_string()))?;
+            .map_err(|e| ApiError::internal(e.to_string()))?;
         let path = format!("{dir}/{name}");
         tokio::fs::write(&path, &data)
             .await
-            .map_err(|e| ApiError(e.to_string()))?;
+            .map_err(|e| ApiError::internal(e.to_string()))?;
         return Ok(Json(UploadReply { path }));
     }
-    Err(ApiError("missing upload field".into()))
+    Err(ApiError::bad_request("missing upload field"))
 }
 
 impl FromRequestParts<KanbanStore> for AuthUser {
@@ -256,14 +266,14 @@ fn require_edit(user: &AuthUser) -> Result<(), ApiError> {
     let role = parse_role(&user.0.role)?;
     role.can_edit()
         .then_some(())
-        .ok_or_else(|| ApiError(FORBIDDEN_MSG.into()))
+        .ok_or_else(|| ApiError(FORBIDDEN_MSG.to_string(), StatusCode::FORBIDDEN))
 }
 
 fn require_users(user: &AuthUser) -> Result<(), ApiError> {
     let role = parse_role(&user.0.role)?;
     role.can_manage_users()
         .then_some(())
-        .ok_or_else(|| ApiError(FORBIDDEN_MSG.into()))
+        .ok_or_else(|| ApiError(FORBIDDEN_MSG.to_string(), StatusCode::FORBIDDEN))
 }
 
 fn parse_role(role: &str) -> Result<kanban_rs::Role, ApiError> {
@@ -290,7 +300,7 @@ async fn login(
         Some(t) => state.store.auth(t).await.map_err(store_err)?,
         None => None,
     };
-    let user = user.ok_or(ApiError(UNAUTHORIZED_MSG.into()))?;
+    let user = user.ok_or(ApiError(UNAUTHORIZED_MSG.to_string(), StatusCode::UNAUTHORIZED))?;
     Ok(Json(LoginReply {
         token: token.unwrap_or_default(),
         username: user.username,
@@ -1107,7 +1117,7 @@ async fn get_agent(
         .agent(id)
         .await
         .map_err(kanban_err)?
-        .ok_or(ApiError(ApiError::NOT_FOUND_MSG.into()))?;
+        .ok_or(ApiError(ApiError::NOT_FOUND_MSG.to_string(), StatusCode::NOT_FOUND))?;
     Ok(Json(AgentDto::from(agent)))
 }
 
@@ -1277,7 +1287,7 @@ async fn update_card(
         .card_view(id)
         .await
         .map_err(kanban_err)?
-        .ok_or(ApiError(ApiError::NOT_FOUND_MSG.into()))?;
+        .ok_or(ApiError(ApiError::NOT_FOUND_MSG.to_string(), StatusCode::NOT_FOUND))?;
     Ok(Json(CardDto::from(view)))
 }
 
@@ -1492,7 +1502,7 @@ fn cfg_err(e: kanban_rs::StoreError) -> ApiError {
     match e {
         kanban_rs::StoreError::NoSuchCard
         | kanban_rs::StoreError::NoSuchPipeline
-        | kanban_rs::StoreError::NoSuchAgent => ApiError(ApiError::NOT_FOUND_MSG.into()),
+        | kanban_rs::StoreError::NoSuchAgent => ApiError(ApiError::NOT_FOUND_MSG.to_string(), StatusCode::NOT_FOUND),
         kanban_rs::StoreError::PipelineTaken => {
             ApiError::bad_request("pipeline name already taken")
         }
@@ -1505,7 +1515,7 @@ fn cfg_err(e: kanban_rs::StoreError) -> ApiError {
 fn kanban_err(e: kanban_rs::StoreError) -> ApiError {
     match e {
         kanban_rs::StoreError::NoSuchCard | kanban_rs::StoreError::NoSuchColumn => {
-            ApiError(ApiError::NOT_FOUND_MSG.into())
+            ApiError(ApiError::NOT_FOUND_MSG.to_string(), StatusCode::NOT_FOUND)
         }
         other => ApiError::internal(other.to_string()),
     }
@@ -1564,6 +1574,81 @@ async fn sweep_sandboxes() -> Json<SandboxSweepReply> {
     Json(SandboxSweepReply {
         removed: AgentSandbox::sweep(),
     })
+}
+
+#[derive(Serialize)]
+pub struct AgentListReply {
+    agents: Vec<serde_json::Value>,
+}
+
+#[derive(Deserialize, utoipa::ToSchema)]
+struct AgentSpawnRequest {
+    agent: String,
+}
+
+#[derive(Serialize, utoipa::ToSchema)]
+struct AgentSpawnReply {
+    agent: String,
+    work_tree: String,
+}
+
+#[derive(Deserialize, utoipa::ToSchema)]
+struct AgentRunRequest {
+    cmd: String,
+}
+
+#[derive(Serialize, utoipa::ToSchema)]
+struct AgentRunReply {
+    agent: String,
+    output: String,
+}
+
+async fn manager_list_agents(
+    State(manager): State<Arc<manager_rs::ManagerProcess>>,
+) -> Json<AgentListReply> {
+    Json(AgentListReply {
+        agents: manager
+            .snapshot()
+            .iter()
+            .map(|a| serde_json::to_value(a).unwrap_or_default())
+            .collect(),
+    })
+}
+
+async fn spawn_agent(
+    State(manager): State<Arc<manager_rs::ManagerProcess>>,
+    Json(req): Json<AgentSpawnRequest>,
+) -> Result<Json<AgentSpawnReply>, ApiError> {
+    let work_tree = manager.spawn(&req.agent).map_err(ApiError::bad_request)?;
+    Ok(Json(AgentSpawnReply {
+        agent: req.agent,
+        work_tree: work_tree.display().to_string(),
+    }))
+}
+
+async fn run_agent_command(
+    State(manager): State<Arc<manager_rs::ManagerProcess>>,
+    Path(agent): Path<String>,
+    Json(req): Json<AgentRunRequest>,
+) -> Result<Json<AgentRunReply>, ApiError> {
+    let manager = Arc::clone(&manager);
+    let cmd_agent = agent.clone();
+    let output = tokio::task::spawn_blocking(move || manager.run(&cmd_agent, &req.cmd))
+        .await
+        .map_err(|e| ApiError::bad_request(e.to_string()))?
+        .map_err(ApiError::bad_request)?;
+    Ok(Json(AgentRunReply { agent, output }))
+}
+
+async fn finish_agent(
+    State(manager): State<Arc<manager_rs::ManagerProcess>>,
+    Path(agent): Path<String>,
+) -> Result<Json<manager_rs::TaskOutcome>, ApiError> {
+    let outcome = tokio::task::spawn_blocking(move || manager.finish(&agent))
+        .await
+        .map_err(|e| ApiError::bad_request(e.to_string()))?
+        .map_err(ApiError::bad_request)?;
+    Ok(Json(outcome))
 }
 
 /// Installer for remote sandbox clients; `role` selects auto/model/worker.
@@ -2182,30 +2267,30 @@ struct CreateProjectRequest {
     name: String,
 }
 
-struct ApiError(String);
+struct ApiError(String, StatusCode);
 
 impl ApiError {
     const NOT_FOUND_MSG: &'static str = "not found";
 
     fn internal(msg: impl Into<String>) -> Self {
-        Self(msg.into())
+        Self(msg.into(), StatusCode::INTERNAL_SERVER_ERROR)
     }
 
     fn bad_request(msg: impl Into<String>) -> Self {
-        Self(msg.into())
+        Self(msg.into(), StatusCode::BAD_REQUEST)
     }
 }
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        match self {
-            Self(msg) if msg.starts_with("no loadable model") => {
-                (StatusCode::NOT_FOUND, msg).into_response()
-            }
-            Self(msg) if msg == Self::NOT_FOUND_MSG => (StatusCode::NOT_FOUND, msg).into_response(),
-            Self(msg) if msg == UNAUTHORIZED_MSG => (StatusCode::UNAUTHORIZED, msg).into_response(),
-            Self(msg) if msg == FORBIDDEN_MSG => (StatusCode::FORBIDDEN, msg).into_response(),
-            Self(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
-        }
+        let Self(msg, status) = self;
+        let status = match &*msg {
+            m if m.starts_with("no loadable model") => StatusCode::NOT_FOUND,
+            m if m == Self::NOT_FOUND_MSG => StatusCode::NOT_FOUND,
+            m if m == UNAUTHORIZED_MSG => StatusCode::UNAUTHORIZED,
+            m if m == FORBIDDEN_MSG => StatusCode::FORBIDDEN,
+            _ => status,
+        };
+        (status, msg).into_response()
     }
 }
