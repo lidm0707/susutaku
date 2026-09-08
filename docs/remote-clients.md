@@ -54,7 +54,7 @@ sequenceDiagram
     C->>C: run cmd in sandbox<br/>(macOS: seatbelt · Windows: WSL/restricted token · Linux: namespaces)
     C->>H: Envelope { id, Result { output } }
     H-->>S: 200 { output }
-    Note over C,H: heartbeat ping/pong keeps the link alive;<br/>client reconnects every 3 s if the hub drops
+    Note over C,H: heartbeat ping/pong keeps the link alive,<br/>client reconnects every 3 s if the hub drops
 ```
 
 ## 3. Inference flow (no inline model code anywhere else)
