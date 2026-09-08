@@ -9,3 +9,20 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 ureq = { workspace = true }
 libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+    "Win32_System_JobObjects",
+    "Win32_System_Pipes",
+    "Win32_System_Threading",
+] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Pure-Rust seccomp BPF builder (no system libseccomp needed) — denies
+# mount/unshare/ptrace/kexec/module-loading and friends inside the sandbox.
+seccompiler = "0.5"

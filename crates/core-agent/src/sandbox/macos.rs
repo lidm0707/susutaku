@@ -4,33 +4,12 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::RwLock;
 
-use serde::{Deserialize, Serialize};
-
 pub const SHELL: &str = "/bin/zsh";
 pub const RUN_FLAG: &str = "-c";
 pub const MAX_OUTPUT_BYTES: usize = 1 << 20;
 pub const MAX_HISTORY: usize = 128;
 pub const SANDBOX_PREFIX: &str = "susutaku-agent-sandbox-";
 pub const STATE_FILE: &str = "agent-sandbox-state.json";
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Role {
-    User,
-    Agent,
-    Tool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HistoryEntry {
-    pub role: Role,
-    pub content: String,
-}
-
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
-pub struct SandboxState {
-    pub cwd: String,
-    pub history: Vec<HistoryEntry>,
-}
 
 pub fn run(cmd: &str) -> Result<String, Error> {
     let out = Command::new(SHELL).arg(RUN_FLAG).arg(cmd).output()?;
@@ -261,6 +240,42 @@ fn resolve_cwd(root: &Path, rel: &str) -> PathBuf {
         candidate
     } else {
         root.to_path_buf()
+    }
+}
+
+pub use crate::sandbox_abstract_layer::{
+    Guarantee, HistoryEntry, Role, SandboxLayer, SandboxState,
+};
+
+/// macOS backend today: soft workspace isolation (see module docs above and
+/// `Guarantee::Soft`). Commands must still be treated as untrusted-to-escape.
+impl SandboxLayer for Sandbox {
+    fn guarantee(&self) -> Guarantee {
+        Guarantee::Soft
+    }
+    fn root(&self) -> PathBuf {
+        Sandbox::root(self)
+    }
+    fn run(&self, cmd: &str) -> Result<String, Error> {
+        Sandbox::run(self, cmd)
+    }
+    fn push_context(&self, role: Role, content: impl Into<String>) {
+        Sandbox::push_context(self, role, content)
+    }
+    fn transcript(&self) -> Vec<HistoryEntry> {
+        Sandbox::transcript(self)
+    }
+    fn set_cwd(&self, rel: &str) -> Result<(), Error> {
+        Sandbox::set_cwd(self, rel)
+    }
+    fn purge(&self) {
+        Sandbox::purge(self)
+    }
+    fn purge_stale() {
+        Sandbox::purge_stale()
+    }
+    fn id(&self) -> &str {
+        ""
     }
 }
 
