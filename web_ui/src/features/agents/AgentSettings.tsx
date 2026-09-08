@@ -1,19 +1,50 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Bot, Cpu, Plus, Save, Sparkles, Terminal, Trash2 } from "lucide-react";
 import {
+  Bot,
+  ChevronDown,
+  Cpu,
+  FileText,
+  Play,
+  Plus,
+  Save,
+  Sparkles,
+  Terminal,
+  Trash2,
+} from "lucide-react";
+import {
+  chat_codex,
+  chat_zai,
   clear_token,
   create_agent,
   fetch_agents,
   fetch_codex_models,
   fetch_models,
+  fetch_system_prompt,
   pretty_name,
   remove_agent,
+  render_prompt,
+  save_system_prompt,
   update_agent,
   type Agent,
+  type ChatReply,
   type ModelInfo,
+  type RenderedPrompt,
 } from "../../lib.js";
-import { Button, Field, TextArea, TextInput } from "../../ui/controls.js";
+import { Button, Field, Select, TextArea, TextInput } from "../../ui/controls.js";
+
+const CUSTOM = "__custom__";
+
+const OUTPUT_TEMPLATES: Record<string, string> = {
+  text: "plain text, concise paragraphs",
+  markdown: "## Summary\n\n- point one\n- point two",
+  json: '{\n  "key": "value"\n}',
+  table: "| column | column |\n|--------|--------|\n| cell   | cell   |",
+  code: "```lang\n// code only, no prose\n```",
+  list: "1. first\n2. second\n3. third",
+};
+
+const OUTPUT_TYPES = Object.keys(OUTPUT_TEMPLATES);
 
 const EMPTY = { name: "", model: "", persona: "", prompt: "", output: "" };
 
@@ -23,11 +54,19 @@ export default function AgentSettings() {
   const nav = useNavigate();
   const [agents, setAgents] = useState<Agent[]>([]);
   const [models, setModels] = useState<ModelInfo[]>([]);
-  const [codexModels, setCodexModels] = useState<string[]>([]);
+  const [codexModels, setCodexModels] = useState<{ id: string; label: string }[]>([]);
   const [selected, setSelected] = useState<number | "new" | null>(null);
   const [fields, setFields] = useState<Fields>(EMPTY);
   const [, setError] = useState("");
   const [status, setStatus] = useState("");
+  const [message, setMessage] = useState("");
+  const [reply, setReply] = useState<ChatReply | null>(null);
+  const [preview, setPreview] = useState<RenderedPrompt | null>(null);
+  const [testError, setTestError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [sysPrompt, setSysPrompt] = useState("");
+  const [sysStatus, setSysStatus] = useState("");
+  const [sysOpen, setSysOpen] = useState(false);
 
   useEffect(() => {
     Promise.all([fetch_agents(), fetch_models().catch(() => [])])
@@ -37,8 +76,13 @@ export default function AgentSettings() {
       })
       .catch((err: unknown) => handle(err));
     fetch_codex_models()
-      .then((list) => setCodexModels(list.map((m) => m.id)))
+      .then((list) =>
+        setCodexModels([...new Map(list.map((m) => [m.id, m])).values()])
+      )
       .catch(() => setCodexModels([]));
+    fetch_system_prompt()
+      .then(setSysPrompt)
+      .catch(() => setSysPrompt(""));
   }, []);
 
   async function handle(err: unknown) {
@@ -54,9 +98,82 @@ export default function AgentSettings() {
     setFields({ ...fields, [k]: v });
   }
 
+  function pick_model(v: string) {
+    if (v === CUSTOM) {
+      set("model", "");
+    } else {
+      set("model", v);
+    }
+  }
+
+  function pick_output_type(v: string) {
+    set("output", OUTPUT_TEMPLATES[v] ?? "");
+  }
+
+  function output_type(): string {
+    for (const t of OUTPUT_TYPES) {
+      if (OUTPUT_TEMPLATES[t] === fields.output) return t;
+    }
+    return "custom";
+  }
+
+  function prompt_sections() {
+    const instructions = [fields.persona, fields.prompt]
+      .filter((s) => s.trim())
+      .join("\n\n");
+    return [
+      { role: "system", body: sysPrompt },
+      { role: "instructions", body: instructions },
+      { role: "context", body: fields.output },
+    ].filter((s) => s.body.trim());
+  }
+
+  async function save_sys(e: React.FormEvent) {
+    e.preventDefault();
+    setSysStatus("");
+    try {
+      setSysPrompt(await save_system_prompt(sysPrompt));
+      setSysStatus("saved");
+    } catch (err: unknown) {
+      handle(err);
+    }
+  }
+
+  async function preview_prompt() {
+    setTestError("");
+    setPreview(null);
+    try {
+      setPreview(await render_prompt(prompt_sections()));
+    } catch (err: unknown) {
+      setTestError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function test() {
+    setTestError("");
+    setReply(null);
+    setBusy(true);
+    try {
+      if (codexModels.some((m) => m.id === fields.model)) {
+        setReply(await chat_codex(message, fields.model));
+      } else {
+        setReply(await chat_zai(message, "", prompt_sections()));
+      }
+    } catch (err: unknown) {
+      setTestError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const model_selected =
+    codexModels.some((m) => m.id === fields.model) ||
+    models.some((m) => m.name === fields.model);
+
   function pick(a: Agent) {
     setError("");
     setStatus("");
+    setSysOpen(false);
     setSelected(a.id);
     setFields({
       name: a.name || "",
@@ -70,6 +187,7 @@ export default function AgentSettings() {
   function start_new() {
     setError("");
     setStatus("");
+    setSysOpen(false);
     setSelected("new");
     setFields(EMPTY);
   }
@@ -135,6 +253,17 @@ export default function AgentSettings() {
             <Plus size={14} /> new agent
           </Button>
           <div className="agents-list">
+            <button
+              className={sysOpen ? "agent-item active" : "agent-item"}
+              onClick={() => {
+                setSysOpen(!sysOpen);
+                setSelected(null);
+              }}
+            >
+              <Sparkles size={14} />
+              <span className="agent-item-name">system prompt</span>
+              {!sysPrompt.trim() && <span className="agent-item-model">empty</span>}
+            </button>
             {agents.length === 0 && <span className="agents-empty">no agents yet</span>}
             {agents.map((a) => (
               <button
@@ -149,7 +278,29 @@ export default function AgentSettings() {
             ))}
           </div>
         </aside>
-        {editing ? (
+        {sysOpen ? (
+          <form className="agent-editor" onSubmit={save_sys}>
+            <Field label="global system prompt" icon={<Sparkles size={12} />}>
+              <TextArea
+                className="agent-prompt"
+                value={sysPrompt}
+                onChange={(e) => {
+                  setSysPrompt(e.target.value);
+                  setSysStatus("");
+                }}
+                rows={16}
+                spellCheck={false}
+                placeholder="global system prompt for the whole system…"
+              />
+            </Field>
+            <footer className="agent-editor-foot">
+              <Button variant="primary" type="submit">
+                <Save size={14} /> save
+              </Button>
+              {sysStatus && <span className="saved-mark">{sysStatus}</span>}
+            </footer>
+          </form>
+        ) : editing ? (
           <form className="agent-editor" onSubmit={save}>
             <div className="agent-editor-row">
               <Field label="name" icon={<Bot size={12} />}>
@@ -160,20 +311,37 @@ export default function AgentSettings() {
                 />
               </Field>
               <Field label="model" icon={<Cpu size={12} />}>
-                <TextInput
-                  list="agent-models"
-                  value={fields.model}
-                  onChange={(e) => set("model", e.target.value)}
-                  placeholder="model name or custom"
-                />
-                <datalist id="agent-models">
-                  {codexModels.map((id) => (
-                    <option key={id} value={id}>codex (gpt)</option>
-                  ))}
-                  {models.map((m) => (
-                    <option key={m.name} value={m.name}>{pretty_name(m.name)}</option>
-                  ))}
-                </datalist>
+                <div className="select-wrap">
+                  <Select
+                    value={model_selected ? fields.model : CUSTOM}
+                    onChange={(e) => pick_model(e.target.value)}
+                  >
+                    {!model_selected && fields.model !== "" && (
+                      <option value={fields.model}>{pretty_name(fields.model)}</option>
+                    )}
+                    <optgroup label="codex (gpt)">
+                      {codexModels.map((m) => (
+                        <option key={m.id} value={m.id}>{m.label || m.id}</option>
+                      ))}
+                    </optgroup>
+                    {models.length > 0 && (
+                      <optgroup label="local mlx">
+                        {models.map((m) => (
+                          <option key={m.name} value={m.name}>{pretty_name(m.name)}</option>
+                        ))}
+                      </optgroup>
+                    )}
+                    <option value={CUSTOM}>custom…</option>
+                  </Select>
+                  <ChevronDown size={13} className="select-arrow" />
+                </div>
+                {!model_selected && (
+                  <TextInput
+                    value={fields.model}
+                    onChange={(e) => set("model", e.target.value)}
+                    placeholder="custom model name"
+                  />
+                )}
               </Field>
             </div>
             <Field label="persona" icon={<Sparkles size={12} />}>
@@ -185,7 +353,7 @@ export default function AgentSettings() {
                 placeholder="who the agent is / tone…"
               />
             </Field>
-            <Field label="prompt" icon={<Terminal size={12} />}>
+            <Field label="instruction" icon={<Terminal size={12} />}>
               <TextArea
                 className="agent-prompt"
                 value={fields.prompt}
@@ -196,6 +364,19 @@ export default function AgentSettings() {
               />
             </Field>
             <Field label="output" icon={<Sparkles size={12} />}>
+              <div className="select-wrap">
+                <Select
+                  value={output_type()}
+                  onChange={(e) => pick_output_type(e.target.value)}
+                  aria-label="output type"
+                >
+                  {OUTPUT_TYPES.map((t) => (
+                    <option key={t} value={t}>{t}</option>
+                  ))}
+                  <option value="custom">custom</option>
+                </Select>
+                <ChevronDown size={13} className="select-arrow" />
+              </div>
               <TextArea
                 value={fields.output}
                 onChange={(e) => set("output", e.target.value)}
@@ -204,6 +385,30 @@ export default function AgentSettings() {
                 placeholder="what the output should look like…"
               />
             </Field>
+            <div className="prompt-section">
+              <TextArea
+                value={message}
+                onChange={(e) => setMessage(e.target.value)}
+                placeholder="test message…"
+                rows={3}
+              />
+              {testError && <p className="error">{testError}</p>}
+              {preview && <pre className="prompt-preview">{preview.rendered}</pre>}
+              {reply && <pre className="prompt-preview">{reply.reply}</pre>}
+              <div className="prompt-section-head">
+                <Button variant="ghost" type="button" onClick={preview_prompt}>
+                  <FileText size={14} /> render
+                </Button>
+                <Button
+                  variant="primary"
+                  type="button"
+                  onClick={test}
+                  disabled={busy || !message.trim()}
+                >
+                  <Play size={14} /> {busy ? "…" : "test"}
+                </Button>
+              </div>
+            </div>
             <footer className="agent-editor-foot">
               <Button variant="primary" type="submit" disabled={!fields.name.trim()}>
                 <Save size={14} /> save agent

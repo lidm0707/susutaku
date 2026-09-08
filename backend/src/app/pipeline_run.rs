@@ -67,6 +67,8 @@ pub async fn run_card_pipeline(app: &KanbanApp, card_id: i64) -> Result<RunRecor
         .ok_or(StoreError::NoSuchPipeline)?;
     let spec: PipelineSpec =
         serde_json::from_str(&pipeline.spec).map_err(|e| StoreError::BadSpec(e.to_string()))?;
+    spec.validate()
+        .map_err(|e| StoreError::BadSpec(e.to_string()))?;
 
     let mut payload = Some(seed_payload(&card));
     let outcome = execute(

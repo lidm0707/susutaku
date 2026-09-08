@@ -9,10 +9,11 @@ import Settings from "./pages/Settings.jsx";
 import Sandbox from "./pages/Sandbox.jsx";
 import Pipelines from "./pages/Pipelines.jsx";
 import Cronjobs from "./pages/Cronjobs.jsx";
-import Prompts from "./pages/Prompts.jsx";
 import { get_token } from "./lib.js";
 import { Toaster } from "./ui/Toast.jsx";
 import SideNav from "./components/SideNav.tsx";
+import { WorkspaceProvider } from "./components/WorkspaceContext.tsx";
+import { ProjectProvider } from "./components/ProjectContext.tsx";
 import "./styles.css";
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
@@ -23,13 +24,16 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
 function App() {
   const nav = useNavigate();
   useEffect(() => {
-    const onUnauthorized = () => nav("/", { replace: true });
+    const onUnauthorized = () => {
+      if (window.location.pathname !== "/") nav("/", { replace: true });
+    };
     window.addEventListener("susutaku:unauthorized", onUnauthorized);
     return () => window.removeEventListener("susutaku:unauthorized", onUnauthorized);
   }, [nav]);
   return (
-    <>
-      <Routes>
+    <WorkspaceProvider>
+      <ProjectProvider>
+        <Routes>
         <Route path="/" element={<Login />} />
         <Route path="/login" element={<Navigate to="/" replace />} />
         <Route path="/chat" element={<RequireAuth><Chat /></RequireAuth>} />
@@ -37,15 +41,15 @@ function App() {
         <Route path="/kanban" element={<RequireAuth><Kanban /></RequireAuth>} />
         <Route path="/pipelines" element={<RequireAuth><Pipelines /></RequireAuth>} />
         <Route path="/cronjobs" element={<RequireAuth><Cronjobs /></RequireAuth>} />
-        <Route path="/prompts" element={<RequireAuth><Prompts /></RequireAuth>} />
         <Route path="/agents" element={<RequireAuth><AgentSettings /></RequireAuth>} />
         <Route path="/settings" element={<RequireAuth><Settings /></RequireAuth>} />
         <Route path="/sandbox" element={<RequireAuth><Sandbox /></RequireAuth>} />
         <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
-      <SideNav />
+        </Routes>
+        <SideNav />
+        </ProjectProvider>
       <Toaster />
-    </>
+    </WorkspaceProvider>
   );
 }
 

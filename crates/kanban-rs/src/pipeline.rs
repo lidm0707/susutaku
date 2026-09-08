@@ -14,9 +14,11 @@ pub struct PipelineRow {
 }
 
 fn validate_spec(spec: &str) -> Result<(), StoreError> {
-    let parsed: piplines::graph::PipelineSpec = serde_json::from_str(spec)
-        .map_err(|e| StoreError::BadSpec(e.to_string()))?;
-    parsed.validate().map_err(|e| StoreError::BadSpec(e.to_string()))
+    let parsed: piplines::graph::PipelineSpec =
+        serde_json::from_str(spec).map_err(|e| StoreError::BadSpec(e.to_string()))?;
+    parsed
+        .validate_draft()
+        .map_err(|e| StoreError::BadSpec(e.to_string()))
 }
 
 impl Store {

@@ -5,7 +5,8 @@ import {
   Snowflake,
   Zap,
 } from "lucide-react";
-import { API_BASE, chat_codex, chat_zai, fetch_codex_models, fetch_models, pretty_name, select_model, size_label, type ChatReply, type CodexModel, type ModelInfo } from "../lib.js";
+import { API_BASE, chat_claude, chat_codex, chat_zai, fetch_codex_models, fetch_models, fetch_zai_settings, pretty_name, select_model, size_label, type ChatReply, type CodexModel, type ModelInfo, type ZaiSettings, type ZaiModel } from "../lib.js";
+import ClaudeLogin from "../components/ClaudeLogin.tsx";
 import CodexLogin from "../components/CodexLogin.tsx";
 
 interface Msg {
@@ -21,6 +22,7 @@ interface Msg {
 }
 
 const CODEX = "codex";
+const CLAUDE = "claude";
 const ZAI = "zai";
 const DEFAULT_CODEX_MODEL = "gpt-5-codex"; // used until the account's model list loads
 
@@ -55,6 +57,7 @@ export default function Chat() {
   const [codexModels, setCodexModels] = useState<CodexModel[]>([]);
   const [codexModel, setCodexModel] = useState(DEFAULT_CODEX_MODEL);
   const [zaiModel, setZaiModel] = useState("");
+  const [zaiModels, setZaiModels] = useState<ZaiModel[]>([]);
   const [error, setError] = useState("");
   const selected = models.find((m) => m.name === model);
 
@@ -77,11 +80,17 @@ export default function Chat() {
         }
       })
       .catch(() => {});
+    fetch_zai_settings()
+      .then((s: ZaiSettings) => {
+        setZaiModels(s.models);
+        if (s.model) setZaiModel(s.model);
+      })
+      .catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function pick(next: string) {
-    if (next === CODEX || next === ZAI) {
+    if (next === CODEX || next === ZAI || next === CLAUDE) {
       setModel(next);
       return;
     }
@@ -101,6 +110,8 @@ export default function Chat() {
       const data: ChatReply =
         model === CODEX
           ? await chat_codex(text, codexModel)
+          : model === CLAUDE
+          ? await chat_claude(text)
           : model === ZAI
             ? await chat_zai(text, zaiModel)
             : await (
@@ -134,6 +145,8 @@ export default function Chat() {
         <span className="sub">
           {model === CODEX
             ? `codex · ${codexModel}`
+            : model === CLAUDE
+            ? "claude (claude.ai)"
             : model === ZAI
               ? `z.ai · ${zaiModel || "glm-4.6"}`
               : selected
@@ -141,6 +154,7 @@ export default function Chat() {
               : "—"}
         </span>
         <nav className="nav">
+          <ClaudeLogin />
           <CodexLogin />
         </nav>
       </header>
@@ -168,6 +182,7 @@ export default function Chat() {
           title="model"
         >
           <option value={CODEX}>Codex (ChatGPT)</option>
+          <option value={CLAUDE}>Claude (claude.ai)</option>
           <option value={ZAI}>Z.ai (GLM)</option>
           {models.map((m) => (
             <option key={m.name} value={m.name} disabled={!m.loadable}>
@@ -190,13 +205,19 @@ export default function Chat() {
           </select>
         )}
         {model === ZAI && (
-          <input
+          <select
             className="search-toggle zai-model"
             value={zaiModel}
-            onChange={(e: React.ChangeEvent<HTMLInputElement>) => setZaiModel(e.target.value)}
-            placeholder="glm-4.6"
+            onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setZaiModel(e.target.value)}
             title="z.ai model"
-          />
+          >
+            {zaiModels.length === 0 && <option value="">glm-4.6 (default)</option>}
+            {zaiModels.map((m) => (
+              <option key={m.model} value={m.model}>
+                {m.model}
+              </option>
+            ))}
+          </select>
         )}
         <select
           className="search-toggle"

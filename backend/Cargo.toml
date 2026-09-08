@@ -5,11 +5,12 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-axum = "0.8"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
+axum = { version = "0.8", features = ["multipart"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "fs"] }
 tower-http = { version = "0.6", features = ["cors", "fs"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
+hostname = "0.4"
 hf_loader = { workspace = true }
 susutaku-mlx = { workspace = true }
 gguf-rs = { workspace = true }
@@ -17,6 +18,7 @@ core-agent = { workspace = true }
 tokenizers = { workspace = true }
 ureq = { workspace = true }
 codex-cli = { path = "../crates/agent_3th_cli/codex_cli" }
+claude-cli = { path = "../crates/agent_3th_cli/claude_cli" }
 zai-api = { path = "../crates/agent_3th_cli/zai_api" }
 ai-interface-layer = { path = "../crates/agent_3th_cli/ai_interface_layer" }
 kanban-rs = { workspace = true }

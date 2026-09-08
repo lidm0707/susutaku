@@ -48,6 +48,11 @@ services:
       E2E_ADMIN_PASSWORD: ${E2E_ADMIN_PASSWORD:-e2e-admin-e2e-admin}
       E2E_USER: e2e-tester
       E2E_PASSWORD: e2e-e2e-e2e
+      # Fresh susutaku_e2e DB per run, over the internal network only:
+      # globalSetup drops+creates it on the `postgres` service,
+      # globalTeardown drops it. Set E2E_SKIP_DB_LIFECYCLE to opt out.
+      E2E_PG_HOST: postgres
+      E2E_PG_PORT: "5432"
     volumes:
       # Tests directory writable: playwright writes snapshot baselines next to specs.
       - ../playwright/tests:/work/tests

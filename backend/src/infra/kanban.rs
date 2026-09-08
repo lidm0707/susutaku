@@ -17,9 +17,31 @@ use crate::port::outbound::{
 
 pub const DATABASE_URL_ENV: &str = "DATABASE_URL";
 
+const CONNECT_RETRIES: usize = 5;
+const CONNECT_RETRY_DELAY_SECS: u64 = 2;
+
 pub async fn connect() -> Store {
     let url = std::env::var(DATABASE_URL_ENV).unwrap_or_else(|_| Store::default_url().into());
-    let store = Store::connect(&url).await.expect("kanban postgres connect");
+    let mut store = None;
+    for attempt in 1..=CONNECT_RETRIES {
+        match Store::connect(&url).await {
+            Ok(s) => {
+                store = Some(s);
+                break;
+            }
+            Err(err) => {
+                eprintln!(
+                    "kanban postgres connect (attempt {attempt}/{CONNECT_RETRIES}): {err:?} \
+                     — is the postgres container up? (docker/docker-compose.yml, host port 5434)"
+                );
+                if attempt < CONNECT_RETRIES {
+                    tokio::time::sleep(std::time::Duration::from_secs(CONNECT_RETRY_DELAY_SECS))
+                        .await;
+                }
+            }
+        }
+    }
+    let store = store.expect("kanban postgres connect: gave up");
     store
         .ensure_default_admin()
         .await

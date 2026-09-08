@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 import type { ReactNode } from "react";
 
@@ -22,6 +23,12 @@ function use_overlay(open: boolean, on_close: () => void) {
     if (open) box.current?.focus();
   }, [open]);
   return box;
+}
+
+// transform/filter on an ancestor (e.g. .dock-nav) becomes the containing
+// block for position:fixed — portal to body so overlays always span the viewport
+function Portal({ children }: { children: ReactNode }) {
+  return createPortal(children, document.body);
 }
 
 type HeaderProps = { title: ReactNode; on_close: () => void };
@@ -49,6 +56,7 @@ export function Modal({ open, title, on_close, children, wide }: ModalProps) {
   const box = use_overlay(open, on_close);
   if (!open) return null;
   return (
+    <Portal>
     <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && on_close()}>
       <div
         ref={box}
@@ -61,6 +69,7 @@ export function Modal({ open, title, on_close, children, wide }: ModalProps) {
         {children}
       </div>
     </div>
+    </Portal>
   );
 }
 
@@ -75,6 +84,7 @@ export function SlideOver({ open, title, on_close, children }: SlideOverProps) {
   const box = use_overlay(open, on_close);
   if (!open) return null;
   return (
+    <Portal>
     <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && on_close()}>
       <div
         ref={box}
@@ -87,6 +97,7 @@ export function SlideOver({ open, title, on_close, children }: SlideOverProps) {
         <div className="slideover-body">{children}</div>
       </div>
     </div>
+    </Portal>
   );
 }
 

@@ -137,10 +137,22 @@ export interface SandboxDir {
   alive: boolean;
 }
 
+export interface ZaiModel {
+  model: string;
+  api_key_set: boolean;
+}
+
 export interface ZaiSettings {
   api_key_set: boolean;
   model: string;
+  models: ZaiModel[];
 }
+
+export type ZaiModelAction =
+  | { action: "add"; model: string; api_key: string }
+  | { action: "set_key"; model: string; api_key: string }
+  | { action: "remove"; model: string }
+  | { action: "set_active"; model: string };
 
 export interface ClientEnv {
   reported: boolean;
@@ -150,7 +162,12 @@ export interface ClientEnv {
   timezone: string;
   screen: string;
   workspace_path: string;
+  hostname: string;
+  os: string;
+  arch: string;
 }
+
+export type ClientEnvInput = Pick<ClientEnv, "user_agent" | "platform" | "language" | "timezone" | "screen" | "workspace_path">;
 
 export async function fetch_client_env(): Promise<ClientEnv> {
   const res = await fetch(`${API_BASE}/api/settings/client-env`);
@@ -159,7 +176,7 @@ export async function fetch_client_env(): Promise<ClientEnv> {
 }
 
 export async function save_client_env(
-  env: Omit<ClientEnv, "reported">
+  env: ClientEnvInput
 ): Promise<ClientEnv> {
   const res = await fetch(`${API_BASE}/api/settings/client-env`, {
     method: "POST",
@@ -237,7 +254,7 @@ export async function logout(): Promise<void> {
   }
 }
 
-export async function fetch_bootstrap(): Promise<{ username: string; role: string }> {
+export async function fetch_bootstrap(): Promise<{ needs_setup: boolean }> {
   return (await api("/api/auth/bootstrap")).json();
 }
 
@@ -335,6 +352,37 @@ export async function chat_codex(message: string, model: string): Promise<ChatRe
   return res.json();
 }
 
+export async function claude_start(): Promise<{ authorize_url: string }> {
+  const res = await fetch(`${API_BASE}/api/auth/claude/start`, { method: "POST" });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function claude_callback(code: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/auth/claude/callback`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ code }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+}
+
+export async function claude_status(): Promise<CodexStatus> {
+  const res = await fetch(`${API_BASE}/api/auth/claude/status`);
+  if (!res.ok) throw new ApiError(res.status, await res.text());
+  return res.json();
+}
+
+export async function chat_claude(message: string): Promise<ChatReply> {
+  const res = await fetch(`${API_BASE}/api/chat/claude`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message }),
+  });
+  if (!res.ok) throw new ApiError(res.status, await res.text());
+  return res.json();
+}
+
 export async function fetch_zai_settings(): Promise<ZaiSettings> {
   const res = await fetch(`${API_BASE}/api/settings/zai`);
   if (!res.ok) throw new ApiError(res.status, await res.text());
@@ -346,6 +394,16 @@ export async function save_zai_settings(api_key: string, model: string): Promise
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ api_key, model }),
+  });
+  if (!res.ok) throw new ApiError(res.status, await res.text());
+  return res.json();
+}
+
+export async function zai_model_action(req: ZaiModelAction): Promise<ZaiSettings> {
+  const res = await fetch(`${API_BASE}/api/settings/zai/models`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(req),
   });
   if (!res.ok) throw new ApiError(res.status, await res.text());
   return res.json();
@@ -373,6 +431,22 @@ export async function render_prompt(sections: PromptSection[]): Promise<Rendered
   });
   if (!res.ok) throw new ApiError(res.status, await res.text());
   return res.json();
+}
+
+export async function fetch_system_prompt(): Promise<string> {
+  const res = await fetch(`${API_BASE}/api/settings/system-prompt`);
+  if (!res.ok) throw new ApiError(res.status, await res.text());
+  return (await res.json()).prompt;
+}
+
+export async function save_system_prompt(prompt: string): Promise<string> {
+  const res = await fetch(`${API_BASE}/api/settings/system-prompt`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ prompt }),
+  });
+  if (!res.ok) throw new ApiError(res.status, await res.text());
+  return (await res.json()).prompt;
 }
 
 export async function fetch_sandboxes(): Promise<SandboxDir[]> {
@@ -506,6 +580,17 @@ export async function update_pipeline(
 
 export async function remove_pipeline(id: number): Promise<Response> {
   return api(`/api/pipelines/${id}`, { method: "DELETE" });
+}
+
+export interface UploadReply {
+  path: string;
+}
+
+export async function upload_attachment(file: File): Promise<UploadReply> {
+  const body = new FormData();
+  body.append("file", file);
+  const res = await api("/api/attachments", { method: "POST", body });
+  return res.json();
 }
 
 export async function set_card_pipeline(id: number, pipeline_id: number | null): Promise<Response> {

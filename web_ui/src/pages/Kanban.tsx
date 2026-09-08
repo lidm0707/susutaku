@@ -1,19 +1,15 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ArrowLeft, ArrowRight, Bot, CheckCircle2, Clock, Loader2, Play, Plus, Trash2, User, Workflow, XCircle } from "lucide-react";
+import { ArrowLeft, ArrowRight, Bot, CheckCircle2, Clock, Loader2, Play, Plus, Save, Trash2, User, Workflow, XCircle } from "lucide-react";
 import {
   clear_token,
   add_comment,
   create_card,
-  create_project,
-  create_workspace,
   fetch_agents,
   fetch_cards,
   fetch_comments,
   fetch_pipelines,
-  fetch_projects,
   fetch_users,
-  fetch_workspaces,
   move_card,
   remove_card,
   set_agent,
@@ -27,11 +23,10 @@ import {
   type CardRun,
   type Comment,
   type Pipeline,
-  type Project,
   type UserInfo,
-  type Workspace,
 } from "../lib.js";
-import { Modal, PromptModal, SlideOver } from "../ui/Overlay.js";
+import { Modal, SlideOver } from "../ui/Overlay.js";
+import { use_projects } from "../components/ProjectContext.tsx";
 
 const COLUMNS = [
   { id: "todo", title: "To Do" },
@@ -55,10 +50,7 @@ type Priority = (typeof PRIORITIES)[number];
 
 export default function Kanban() {
   const nav = useNavigate();
-  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
-  const [wsId, setWsId] = useState<number | null>(null);
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [projectId, setProjectId] = useState<number | null>(null);
+  const { project_id } = use_projects();
   const [cards, setCards] = useState<Card[]>([]);
   const [, setError] = useState("");
   const [title, setTitle] = useState("");
@@ -77,14 +69,9 @@ export default function Kanban() {
   const [users, setUsers] = useState<UserInfo[]>([]);
   const [dComments, setDComments] = useState<Comment[]>([]);
   const [dCommentBody, setDCommentBody] = useState("");
-  const [prompting, setPrompting] = useState<null | "workspace" | "project">(null);
   const [dragOver, setDragOver] = useState<ColumnId | null>(null);
   const [draggingId, setDraggingId] = useState<number | null>(null);
   const [runningId, setRunningId] = useState<number | null>(null);
-
-  useEffect(() => {
-    load_workspaces();
-  }, []);
 
   async function handle(err: unknown) {
     if (err instanceof Object && "status" in err && (err as { status?: number }).status === 401) {
@@ -95,71 +82,17 @@ export default function Kanban() {
     setError(err instanceof Error ? err.message : String(err));
   }
 
-  async function load_workspaces() {
-    try {
-      const list = await fetch_workspaces();
-      setWorkspaces(list);
-      if (list.length > 0) {
-        setWsId((cur) => cur ?? list[0].id);
-      }
-    } catch (err) {
-      handle(err);
-    }
-  }
-
   useEffect(() => {
-    if (wsId == null) return;
-    load_projects();
-  }, [wsId]);
-
-  async function load_projects() {
-    try {
-      const list = await fetch_projects(wsId as number);
-      setProjects(list);
-      setProjectId((cur) => (list.some((p) => p.id === cur) ? cur : list[0]?.id ?? null));
-    } catch (err) {
-      handle(err);
-    }
-  }
-
-  useEffect(() => {
-    if (projectId == null) {
+    if (project_id == null) {
       setCards([]);
       return;
     }
     refresh();
-  }, [projectId]);
+  }, [project_id]);
 
   async function refresh() {
     try {
-      setCards(await fetch_cards(projectId as number));
-    } catch (err) {
-      handle(err);
-    }
-  }
-
-  function pick_workspace(id: string) {
-    setWsId(Number(id));
-    setProjectId(null);
-  }
-
-  async function add_workspace(name: string) {
-    setPrompting(null);
-    setError("");
-    try {
-      await create_workspace(name);
-      await load_workspaces();
-    } catch (err) {
-      handle(err);
-    }
-  }
-
-  async function add_project(name: string) {
-    setPrompting(null);
-    setError("");
-    try {
-      await create_project(wsId as number, name);
-      await load_projects();
+      setCards(await fetch_cards(project_id as number));
     } catch (err) {
       handle(err);
     }
@@ -167,10 +100,10 @@ export default function Kanban() {
 
   async function add(e: React.FormEvent) {
     e.preventDefault();
-    if (!title.trim() || projectId == null) return;
+    if (!title.trim() || project_id == null) return;
     setError("");
     try {
-      await create_card(projectId, COLUMNS[0].id, title.trim(), "", priority);
+      await create_card(project_id, COLUMNS[0].id, title.trim(), "", priority);
       setTitle("");
       await refresh();
     } catch (err) {
@@ -363,39 +296,13 @@ export default function Kanban() {
       <header>
         <h1>kanban</h1>
         <span className="sub">{cards.length} task{cards.length === 1 ? "" : "s"}</span>
-        <nav className="nav">
-          <select
-            className="kanban-select"
-            value={wsId ?? ""}
-            onChange={(e) => pick_workspace(e.target.value)}
-            title="workspace"
-          >
-            {workspaces.length === 0 && <option value="">no workspace</option>}
-            {workspaces.map((w) => (
-              <option key={w.id} value={w.id}>{w.name}</option>
-            ))}
-          </select>
-          <button className="kanban-mini" onClick={() => setPrompting("workspace")} title="new workspace">+</button>
-          <select
-            className="kanban-select"
-            value={projectId ?? ""}
-            onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setProjectId(e.target.value ? Number(e.target.value) : null)}
-            title="project"
-          >
-            {projects.length === 0 && <option value="">no project</option>}
-            {projects.map((p) => (
-              <option key={p.id} value={p.id}>{p.name}</option>
-            ))}
-          </select>
-          <button className="kanban-mini" onClick={() => setPrompting("project")} disabled={wsId == null} title="new project">+</button>
-        </nav>
       </header>
       <form className="kanban-add" onSubmit={add}>
         <input
           value={title}
           onChange={(e) => setTitle(e.target.value)}
-          placeholder={projectId == null ? "create a workspace + project first…" : "new task title…"}
-          disabled={projectId == null}
+          placeholder={project_id == null ? "create a workspace + project first…" : "new task title…"}
+          disabled={project_id == null}
         />
         <select value={priority} onChange={(e) => setPriority(e.target.value as Priority)}>
           {PRIORITIES.map((p) => (
@@ -505,13 +412,6 @@ export default function Kanban() {
           </div>
         ))}
       </section>
-      <PromptModal
-        open={prompting != null}
-        title={prompting === "project" ? "new project" : "new workspace"}
-        placeholder="name…"
-        on_close={() => setPrompting(null)}
-        on_submit={(v) => (prompting === "project" ? add_project(v) : add_workspace(v))}
-      />
       <Modal
         open={agentFor != null}
         title={<><Bot size={14} /> agent on card #{agentFor?.id}</>}
@@ -580,9 +480,10 @@ export default function Kanban() {
                 spellCheck={false}
                 placeholder="description…"
               />
-              <div className="kanban-assign-row">
-                <User size={13} />
+              <div className="kanban-detail-field">
+                <label htmlFor="kanban-detail-person"><User size={13} /> assign person</label>
                 <input
+                  id="kanban-detail-person"
                   className="kanban-select"
                   value={dAssignee}
                   onChange={(e) => setDAssignee(e.target.value)}
@@ -594,7 +495,11 @@ export default function Kanban() {
                     <option key={u.username} value={u.username} />
                   ))}
                 </datalist>
+              </div>
+              <div className="kanban-detail-field">
+                <label htmlFor="kanban-detail-bot"><Bot size={13} /> assign bot</label>
                 <select
+                  id="kanban-detail-bot"
                   className="kanban-select"
                   value=""
                   onChange={(e) => pick_detail_bot(e.target.value)}
@@ -606,9 +511,10 @@ export default function Kanban() {
                   ))}
                 </select>
               </div>
-              <div className="kanban-assign-row">
-                <Clock size={13} />
+              <div className="kanban-detail-field">
+                <label htmlFor="kanban-detail-schedule"><Clock size={13} /> schedule</label>
                 <select
+                  id="kanban-detail-schedule"
                   className="kanban-select"
                   value={detail?.cron || ""}
                   onChange={(e) => pick_detail_schedule(e.target.value)}
@@ -623,7 +529,9 @@ export default function Kanban() {
                   )}
                 </select>
               </div>
-              <button type="submit" disabled={!dTitle.trim()}>save</button>
+              <div className="kanban-detail-actions">
+                <button type="submit" disabled={!dTitle.trim()}><Save size={14} /> save</button>
+              </div>
             </form>
             <div className="kanban-comments">
               {dComments.map((c) => (

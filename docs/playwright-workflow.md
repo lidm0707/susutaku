@@ -26,6 +26,8 @@ host: cargo run -p backend        # MLX needs macOS Metal, stays on host :8991
 | `docker/Dockerfile.playwright` | Playwright runner image (browsers + deps baked in) |
 | `docker/docker-compose.playwright.yml` | postgres + web + playwright, zero published ports |
 | `playwright/playwright.config.ts` | baseURL from `PLAYWRIGHT_BASE_URL` env |
+| `playwright/global-setup.ts` | Fresh `susutaku_e2e` DB lifecycle on the internal compose postgres |
+| `playwright/setup.ts` / `playwright/teardown.ts` | globalSetup / globalTeardown hooks |
 | `playwright/tests/helpers.ts` | Seeds the e2e user (bootstrap or admin-created) |
 | `playwright/tests/fixtures.ts` | `login` fixture: fresh logged-in page per test |
 | `crates/kanban-rs/examples/hash_password.rs` | Prints an argon2 hash to seed the e2e admin (one-time) |
@@ -42,6 +44,20 @@ host: cargo run -p backend        # MLX needs macOS Metal, stays on host :8991
 | `BACKEND_PORT` | `8991` | Host backend port the web proxy targets |
 | `E2E_ADMIN_USER` / `E2E_ADMIN_PASSWORD` | `admin` / `adminadmin` | Admin used to create the e2e user when bootstrap is unavailable |
 | `E2E_USER` / `E2E_PASSWORD` | `e2e-tester` / `e2e-e2e-e2e` | Credentials tests log in with |
+| `E2E_SKIP_DB_LIFECYCLE` | unset | Set to `1` to skip the fresh-DB create/drop |
+| `E2E_PG_HOST` | `postgres` | Internal postgres service for the e2e DB |
+| `E2E_PG_PORT` | `5432` | Internal postgres port |
+| `E2E_DB_NAME` | `susutaku_e2e` | Fresh database created then dropped per run |
+
+## Fresh database per run (internal compose network)
+
+`globalSetup` drops + creates a dedicated `susutaku_e2e` database on the
+compose `postgres` service, reachable only over the internal docker network
+(`E2E_PG_HOST=postgres:5432`, no published ports). `globalTeardown` terminates
+connections and drops it. The playwright container talks to postgres directly
+via the `pg` client — no `docker exec`, no host access. Migrations run
+automatically on backend connect, so the DB needs no seeding beyond the
+suite's own API bootstrap.
 
 ## One-time setup: seed the e2e admin (host backend only)
 

@@ -32,6 +32,7 @@ import {
   remove_pipeline,
   update_pipeline,
   fetch_agents,
+  upload_attachment,
   type Pipeline,
   type PipelineSpec,
 } from "../lib.js";
@@ -74,7 +75,7 @@ const STAGE_FIELDS: Partial<Record<Stage, { key: string; hint: string }[]>> = {
     { key: "method", hint: "http method, default GET" },
   ],
   search: [{ key: "query", hint: "web search query" }],
-  ref_image: [{ key: "path", hint: "image path or url to reference" }],
+  ref_image: [{ key: "path", hint: "uploaded image path" }],
   agent: [{ key: "agent", hint: "agent name from Agents settings" }],
   output_resource: [{ key: "name", hint: "resource name to write result to" }],
 };
@@ -88,7 +89,8 @@ const STAGE_DOCS: Record<Stage, string> = {
     "runs params.query as a web search and emits the results as text. " +
     "pair it with a model_infer/raw node to summarize the hits.",
   ref_image:
-    "loads the image at params.path and attaches it to the payload for later nodes. " +
+    "upload an image from this machine; it is stored on the server under attachments/ " +
+    "and the stored path is attached to the payload for later nodes. " +
     "place it before a model_infer/raw node that can read the image.",
   output_resource:
     "writes the incoming payload to the resource named params.name. " +
@@ -200,7 +202,6 @@ export default function Pipelines() {
   const [editStage, setEditStage] = useState<Stage>("fetch");
   const [editParams, setEditParams] = useState("{}");
   const [agentNames, setAgentNames] = useState<string[]>([]);
-  const [draftName, setDraftName] = useState<string | null>(null);
   const [, setError] = useState("");
   const [status, setStatus] = useState("");
 
@@ -240,22 +241,29 @@ export default function Pipelines() {
   function pick(p: Pipeline) {
     setError("");
     setStatus("");
-    setDraftName(null);
     setSelected(p.id);
     setName(p.name);
     setEditId(null);
     load_flow(p);
   }
 
-  function start_new() {
+  async function start_new() {
     setError("");
     setStatus("");
-    setSelected("new");
-    setName("");
-    setDraftName("");
     setEditId(null);
-    setNodes([]);
-    setEdges([]);
+    const taken = new Set(pipelines.map((p) => p.name));
+    let i = 1;
+    while (taken.has(`pipeline ${i}`)) i++;
+    try {
+      const created = await create_pipeline(`pipeline ${i}`, { nodes: [], links: [] });
+      setSelected(created.id);
+      setName(created.name);
+      setNodes([]);
+      setEdges([]);
+      await load_pipelines();
+    } catch (err) {
+      handle(err);
+    }
   }
 
   function spawn_node(stage: Stage = "fetch") {
@@ -342,21 +350,26 @@ export default function Pipelines() {
     apply_edit(undefined, JSON.stringify(p, null, 2));
   }
 
-  async function save(e: React.FormEvent | React.MouseEvent) {
-    e.preventDefault();
+  async function upload_ref_image(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    try {
+      const up = await upload_attachment(file);
+      edit_param("path", up.path);
+      setStatus("uploaded");
+    } catch (err) {
+      handle(err);
+    }
+  }
+
+  async function save() {
     setStatus("");
-    if (!name.trim()) return;
+    if (selected == null || selected === "new") return;
     const spec = to_spec(nodes as FlowNode[], edges);
     setError("");
     try {
-      if (selected === "new") {
-        const created = await create_pipeline(name.trim(), spec);
-        setSelected(created.id);
-        setName(created.name);
-        setDraftName(null);
-      } else {
-        await update_pipeline(selected as number, name.trim(), spec);
-      }
+      await update_pipeline(selected, name.trim(), spec);
       setStatus("saved");
       await load_pipelines();
     } catch (err) {
@@ -369,8 +382,7 @@ export default function Pipelines() {
     setError("");
     try {
       await remove_pipeline(selected);
-      setDraftName(null);
-      start_new();
+      await start_new();
       await load_pipelines();
     } catch (err) {
       handle(err);
@@ -391,22 +403,7 @@ export default function Pipelines() {
             <Plus size={14} /> new pipeline
           </button>
           <div className="agents-list">
-            {draftName !== null && (
-              <div className={selected === "new" ? "agent-item draft active" : "agent-item draft"}>
-                <Workflow size={14} />
-                <input
-                  className="agent-item-name draft-name"
-                  value={draftName}
-                  autoFocus
-                  placeholder="untitled pipeline"
-                  onChange={(e) => {
-                    setDraftName(e.target.value);
-                    setName(e.target.value);
-                  }}
-                />
-              </div>
-            )}
-            {pipelines.length === 0 && draftName === null && (
+            {pipelines.length === 0 && (
               <span className="agents-empty">no pipelines yet</span>
             )}
             {pipelines.map((p) => (
@@ -424,23 +421,12 @@ export default function Pipelines() {
         {editor ? (
           <div className="pipeline-main">
             <div className="pipeline-toolbar">
-              <input
-                className="pipeline-name"
-                value={name}
-                onChange={(e) => {
-                  setName(e.target.value);
-                  if (draftName !== null) setDraftName(e.target.value);
-                }}
-                placeholder="pipeline name"
-              />
+              <span className="pipeline-name">{name}</span>
               <button className="kanban-mini" onClick={() => spawn_node()} title="add node">
                 <Plus size={13} /> node
               </button>
               <button className="kanban-mini" onClick={del} disabled={selected == null || selected === "new"} title="delete pipeline">
                 <Trash2 size={13} />
-              </button>
-              <button className="pipeline-save" onClick={save} disabled={!name.trim()}>
-                <Save size={13} /> save
               </button>
               {status && <span className="saved-mark">{status}</span>}
             </div>
@@ -468,6 +454,9 @@ export default function Pipelines() {
                     <X size={14} />
                   </button>
                 </div>
+                <button type="button" className="pipeline-save" onClick={save}>
+                  <Save size={13} /> save pipeline
+                </button>
                 <div className="inspector-id">
                   <label>id</label>
                   <input
@@ -509,7 +498,15 @@ export default function Pipelines() {
                     </div>
                     <span className="stage-hint">{STAGE_DOCS[editStage]}</span>
                     {STAGE_FIELDS[editStage]!.map(({ key, hint }) =>
-                      editStage === "agent" && key === "agent" && agentNames.length > 0 ? (
+                      editStage === "ref_image" && key === "path" ? (
+                        <div key={key} className="stage-field">
+                          <label>image</label>
+                          <input type="file" accept="image/*" onChange={upload_ref_image} />
+                          {String(parse_params(editParams).path ?? "") && (
+                            <span className="stage-path">{String(parse_params(editParams).path)}</span>
+                          )}
+                        </div>
+                      ) : editStage === "agent" && key === "agent" && agentNames.length > 0 ? (
                         <div key={key} className="stage-field">
                           <label>{key}</label>
                           <select

@@ -71,6 +71,15 @@ impl PipelineSpec {
         self.validate_acyclic()
     }
 
+    /// Like validate, but permits an empty node set: the UI persists a draft
+    /// pipeline with no nodes before the user places any on the canvas.
+    pub fn validate_draft(&self) -> Result<(), GraphError> {
+        if self.nodes.is_empty() {
+            return Ok(());
+        }
+        self.validate()
+    }
+
     fn validate_nodes(&self) -> Result<(), GraphError> {
         if self.nodes.is_empty() {
             return Err(GraphError::Empty);

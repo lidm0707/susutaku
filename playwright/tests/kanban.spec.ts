@@ -31,5 +31,7 @@ test.describe("kanban", () => {
     await page.goto("/kanban");
     await page.reload();
     await expect(page.locator("main")).toBeVisible();
+    const del = await request.delete(`/api/workspaces/${ws.id}`, { headers });
+    expect(del.ok()).toBeTruthy();
   });
 });

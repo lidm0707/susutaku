@@ -11,6 +11,7 @@ import {
   type CronJob,
 } from "../lib.js";
 import { Modal } from "../ui/Overlay.js";
+import { Button } from "../ui/controls.js";
 
 const CRON_PRESETS = [
   { expr: "* * * * *", label: "every minute" },
@@ -37,6 +38,7 @@ export default function Cronjobs() {
   const nav = useNavigate();
   const [jobs, setJobs] = useState<CronJob[]>([]);
   const [cards, setCards] = useState<Card[]>([]);
+  const [selected, setSelected] = useState<number | null>(null);
   const [adding, setAdding] = useState(false);
   const [cardPick, setCardPick] = useState("");
   const [cronPick, setCronPick] = useState<string>(CRON_PRESETS[1].expr);
@@ -67,11 +69,16 @@ export default function Cronjobs() {
     refresh();
   }, [refresh]);
 
+  useEffect(() => {
+    if (selected != null && !jobs.some((j) => j.card_id === selected)) setSelected(null);
+  }, [jobs, selected]);
+
   async function save_schedule(card_id: number, cron: string | null) {
     try {
       await set_card_schedule(card_id, cron);
       setAdding(false);
       setCardPick("");
+      if (cron === null) setSelected(null);
       refresh();
     } catch (err) {
       handle(err);
@@ -88,52 +95,83 @@ export default function Cronjobs() {
   }
 
   const schedulable = cards.filter((c) => c.pipeline_id != null && !c.cron);
+  const active = jobs.find((j) => j.card_id === selected) ?? null;
 
   return (
-    <main className="page">
-      <header className="page-head">
-        <h1>
-          <Clock size={16} /> cronjobs
-        </h1>
-        <button type="button" onClick={() => setAdding(true)}>
-          schedule a card
-        </button>
+    <main className="chat kanban-page agents-page">
+      <header>
+        <h1>cronjobs</h1>
+        <span className="sub">{jobs.length} scheduled</span>
       </header>
-
-      <section aria-label="scheduled cards">
-        {jobs.length === 0 ? (
-          <p className="empty">no scheduled cards — attach a pipeline to a card, then schedule it</p>
-        ) : (
-          <ul className="cron-list">
+      <div className="agents-layout">
+        <aside className="agents-side">
+          <Button variant="ghost" className="agents-new" onClick={() => setAdding(true)}>
+            <Clock size={14} /> schedule a card
+          </Button>
+          <div className="agents-list">
+            {jobs.length === 0 && (
+              <span className="agents-empty">no scheduled cards yet</span>
+            )}
             {jobs.map((job) => (
-              <li key={job.card_id}>
-                <div>
-                  <strong>{job.title}</strong>
-                  <span className="cron-meta">
-                    <code>{job.cron}</code>
-                    {job.pipeline_name ? ` · ${job.pipeline_name}` : ""}
-                  </span>
-                </div>
-                <div className="cron-actions">
-                  <span title="next run">
-                    <Timer size={14} /> {next_run_label(job.next_run)}
-                  </span>
-                  <button type="button" title="run now" onClick={() => run_now(job.card_id)}>
-                    <Play size={14} />
-                  </button>
-                  <button
-                    type="button"
-                    title="unschedule"
-                    onClick={() => save_schedule(job.card_id, null)}
-                  >
-                    <Trash2 size={14} />
-                  </button>
-                </div>
-              </li>
+              <button
+                key={job.card_id}
+                className={selected === job.card_id ? "agent-item active" : "agent-item"}
+                onClick={() => setSelected(job.card_id)}
+              >
+                <Clock size={14} />
+                <span className="agent-item-name">{job.title}</span>
+                <span className="agent-item-model">{job.cron}</span>
+              </button>
             ))}
-          </ul>
+          </div>
+        </aside>
+        {active ? (
+          <section className="agent-editor" aria-label={`schedule for ${active.title}`}>
+            <header className="agent-editor-row">
+              <h2>{active.title}</h2>
+            </header>
+            <div className="agent-editor-row">
+              <div>
+                <span className="agent-item-name">schedule</span>
+                <p className="cron-meta">
+                  <code>{active.cron}</code>
+                  {active.pipeline_name ? ` · ${active.pipeline_name}` : ""}
+                </p>
+              </div>
+              <div>
+                <span className="agent-item-name">next run</span>
+                <p className="cron-meta">
+                  <Timer size={14} /> {next_run_label(active.next_run)}
+                </p>
+              </div>
+            </div>
+            <footer className="agent-editor-foot">
+              <Button variant="primary" type="button" onClick={() => run_now(active.card_id)}>
+                <Play size={14} /> run now
+              </Button>
+              <Button
+                variant="danger"
+                type="button"
+                onClick={() => save_schedule(active.card_id, null)}
+              >
+                <Trash2 size={14} /> unschedule
+              </Button>
+            </footer>
+          </section>
+        ) : (
+          <div className="agent-editor agent-editor-empty">
+            <Clock size={28} />
+            <p>
+              select a scheduled card on the left,
+              <br />
+              or schedule a new one.
+            </p>
+            <Button variant="ghost" onClick={() => setAdding(true)}>
+              <Clock size={14} /> schedule a card
+            </Button>
+          </div>
         )}
-      </section>
+      </div>
 
       <Modal open={adding} title="schedule a card" on_close={() => setAdding(false)}>
         <form
@@ -145,28 +183,37 @@ export default function Cronjobs() {
             if (cron) save_schedule(Number(cardPick), cron);
           }}
         >
-          <select value={cardPick} onChange={(e) => setCardPick(e.target.value)}>
-            <option value="">pick a card with a pipeline…</option>
-            {schedulable.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.title}
-              </option>
-            ))}
-          </select>
-          <select value={cronPick} onChange={(e) => setCronPick(e.target.value)}>
-            {CRON_PRESETS.map((p) => (
-              <option key={p.expr} value={p.expr}>
-                {p.label} ({p.expr})
-              </option>
-            ))}
-            <option value={CUSTOM}>custom…</option>
-          </select>
+          <label className="modal-label">
+            card
+            <select value={cardPick} onChange={(e) => setCardPick(e.target.value)}>
+              <option value="">pick a card with a pipeline…</option>
+              {schedulable.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.title}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="modal-label">
+            schedule
+            <select value={cronPick} onChange={(e) => setCronPick(e.target.value)}>
+              {CRON_PRESETS.map((p) => (
+                <option key={p.expr} value={p.expr}>
+                  {p.label} ({p.expr})
+                </option>
+              ))}
+              <option value={CUSTOM}>custom…</option>
+            </select>
+          </label>
           {cronPick === CUSTOM && (
-            <input
-              placeholder="cron expression, e.g. 30 4 * * 1-5"
-              value={customCron}
-              onChange={(e) => setCustomCron(e.target.value)}
-            />
+            <label className="modal-label">
+              cron expression
+              <input
+                placeholder="30 4 * * 1-5"
+                value={customCron}
+                onChange={(e) => setCustomCron(e.target.value)}
+              />
+            </label>
           )}
           <button type="submit">schedule</button>
         </form>

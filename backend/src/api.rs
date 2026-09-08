@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use axum::{
     Json, Router,
-    extract::{FromRequestParts, Request, State},
+    extract::{DefaultBodyLimit, FromRequestParts, Multipart, Request, State},
     http::{self, StatusCode, request::Parts},
     response::{IntoResponse, Response},
     routing::{delete, get, post, put},
@@ -14,11 +14,13 @@ use utoipa::OpenApi;
 
 use crate::app::kanban::{CardView, KanbanApp};
 use crate::domain::SearchMode;
+use crate::infra::claude_auth::{ClaudeAuth, LoginStatus as ClaudeLoginStatus};
+use crate::infra::claude_chat;
 use crate::infra::codex_auth;
 use crate::infra::codex_auth::{CodexAuth, LoginStatus};
 use crate::infra::codex_chat;
 use crate::infra::sandbox::AgentSandbox;
-use crate::infra::zai_settings::SettingsState;
+use crate::infra::zai_settings::{SettingsState, ZaiSettings};
 use crate::port::inbound::{ChatCmd, ChatHandling};
 use crate::port::outbound::ModelSwitch;
 use crate::port::outbound::{
@@ -50,22 +52,35 @@ pub fn router<T: ChatHandling + ModelSwitch + 'static>(
         .route("/api/auth/codex/status", get(codex_status))
         .route("/api/auth/codex/models", get(codex_models))
         .route("/api/chat/codex", post(chat_codex))
-        .with_state(Arc::new(CodexAuth::new(codex_workspace)));
+        .with_state(Arc::new(CodexAuth::new(codex_workspace.clone())));
+    let claude = Router::new()
+        .route("/api/auth/claude/start", post(claude_start))
+        .route("/api/auth/claude/callback", post(claude_callback))
+        .route("/api/auth/claude/status", get(claude_status))
+        .route("/api/chat/claude", post(chat_claude))
+        .with_state(Arc::new(ClaudeAuth::new(codex_workspace.clone())));
     let settings = Router::new()
         .route(
             "/api/settings/zai",
             get(get_zai_settings).post(set_zai_settings),
         )
+        .route("/api/settings/zai/models", post(zai_model_action))
         .route(
             "/api/settings/client-env",
             get(get_client_env).post(set_client_env),
+        )
+        .route(
+            "/api/settings/system-prompt",
+            get(get_system_prompt).post(set_system_prompt),
         )
         .route("/api/chat/zai", post(chat_zai))
         .route("/api/sandbox", get(list_sandboxes))
         .route("/api/sandbox/purge", post(purge_sandbox))
         .route("/api/sandbox/sweep", post(sweep_sandboxes))
+        .route("/install.sh", get(install_script))
         .with_state(Arc::new(SettingsState::load()));
     core.merge(auth)
+        .merge(claude)
         .merge(settings)
         .merge(kanban_router(kanban_state(
             kanban_store,
@@ -110,6 +125,10 @@ fn kanban_router(state: KanbanStore) -> Router {
         .route("/api/kanban/cards/{id}/run", post(run_card))
         .route("/api/kanban/cards/{id}/schedule", put(set_card_schedule))
         .route("/api/cronjobs", get(list_cronjobs))
+        .route(
+            "/api/attachments",
+            post(upload_attachment).layer(DefaultBodyLimit::max(ATTACHMENT_MAX_BYTES)),
+        )
         .route("/api/pipelines", get(list_pipelines).post(create_pipeline))
         .route(
             "/api/pipelines/{id}",
@@ -132,6 +151,72 @@ const FORBIDDEN_MSG: &str = "forbidden";
 const PASSWORD_CHANGE_REQUIRED_MSG: &str = "password change required";
 const CHANGE_PASSWORD_PATH: &str = "/api/auth/change-password";
 const LOGOUT_PATH: &str = "/api/auth/logout";
+const ATTACHMENTS_DIR: &str = "attachments";
+const ATTACHMENT_UPLOAD_PREFIX: &str = "upload-";
+const ATTACHMENT_FIELD: &str = "file";
+const ATTACHMENT_DEFAULT_NAME: &str = "image";
+const ATTACHMENT_MAX_BYTES: usize = 32 * 1024 * 1024;
+
+#[derive(serde::Serialize, utoipa::ToSchema)]
+struct UploadReply {
+    path: String,
+}
+
+fn sanitize_name(raw: &str) -> String {
+    let clean: String = raw
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || matches!(c, '.' | '_' | '-') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if clean.is_empty() {
+        ATTACHMENT_DEFAULT_NAME.to_string()
+    } else {
+        clean
+    }
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/attachments",
+    responses((status = 200, body = UploadReply), (status = 400, body = str), (status = 403, body = str))
+)]
+async fn upload_attachment(
+    State(_state): State<KanbanStore>,
+    user: AuthUser,
+    mut form: Multipart,
+) -> Result<Json<UploadReply>, ApiError> {
+    require_edit(&user)?;
+    while let Some(field) = form
+        .next_field()
+        .await
+        .map_err(|e| ApiError(e.to_string()))?
+    {
+        if field.name() != Some(ATTACHMENT_FIELD) {
+            continue;
+        }
+        let name = sanitize_name(field.file_name().unwrap_or(ATTACHMENT_DEFAULT_NAME));
+        let data = field.bytes().await.map_err(|e| ApiError(e.to_string()))?;
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or_default();
+        let dir = format!("{ATTACHMENTS_DIR}/{ATTACHMENT_UPLOAD_PREFIX}{nanos}");
+        tokio::fs::create_dir_all(&dir)
+            .await
+            .map_err(|e| ApiError(e.to_string()))?;
+        let path = format!("{dir}/{name}");
+        tokio::fs::write(&path, &data)
+            .await
+            .map_err(|e| ApiError(e.to_string()))?;
+        return Ok(Json(UploadReply { path }));
+    }
+    Err(ApiError("missing upload field".into()))
+}
 
 impl FromRequestParts<KanbanStore> for AuthUser {
     type Rejection = Response;
@@ -491,11 +576,7 @@ async fn chat_codex(
     responses((status = 200, body = ZaiSettingsReply))
 )]
 async fn get_zai_settings(State(state): State<Arc<SettingsState>>) -> Json<ZaiSettingsReply> {
-    let zai = state.zai();
-    Json(ZaiSettingsReply {
-        api_key_set: zai.api_key.is_some(),
-        model: zai.model.unwrap_or_default(),
-    })
+    Json(zai_reply(&state.zai()))
 }
 
 #[utoipa::path(
@@ -511,10 +592,80 @@ async fn set_zai_settings(
     state
         .set_zai(req.api_key, req.model)
         .map_err(ApiError::internal)?;
-    let zai = state.zai();
-    Ok(Json(ZaiSettingsReply {
+    Ok(Json(zai_reply(&state.zai())))
+}
+
+fn zai_reply(zai: &ZaiSettings) -> ZaiSettingsReply {
+    ZaiSettingsReply {
         api_key_set: zai.api_key.is_some(),
-        model: zai.model.unwrap_or_default(),
+        model: zai.model.clone().unwrap_or_default(),
+        models: zai
+            .models
+            .iter()
+            .map(|m| ZaiModelReply {
+                model: m.model.clone(),
+                api_key_set: m.key().is_some(),
+            })
+            .collect(),
+    }
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/settings/zai/models",
+    request_body = ZaiModelAction,
+    responses((status = 200, body = ZaiSettingsReply), (status = 400, body = str))
+)]
+async fn zai_model_action(
+    State(state): State<Arc<SettingsState>>,
+    Json(action): Json<ZaiModelAction>,
+) -> Result<Json<ZaiSettingsReply>, ApiError> {
+    let res = match action {
+        ZaiModelAction::Add { model, api_key } => state.zai_add_model(&model, &api_key),
+        ZaiModelAction::SetKey { model, api_key } => state.zai_set_key(&model, &api_key),
+        ZaiModelAction::Remove { model } => state.zai_remove_model(&model),
+        ZaiModelAction::SetActive { model } => state.zai_set_active(&model),
+    };
+    res.map_err(ApiError::bad_request)?;
+    Ok(Json(zai_reply(&state.zai())))
+}
+
+#[derive(Deserialize, utoipa::ToSchema)]
+struct SystemPromptRequest {
+    prompt: String,
+}
+
+#[derive(Serialize, utoipa::ToSchema)]
+struct SystemPromptReply {
+    prompt: String,
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/settings/system-prompt",
+    responses((status = 200, body = SystemPromptReply))
+)]
+async fn get_system_prompt(State(state): State<Arc<SettingsState>>) -> Json<SystemPromptReply> {
+    Json(SystemPromptReply {
+        prompt: state.system_prompt(),
+    })
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/settings/system-prompt",
+    request_body = SystemPromptRequest,
+    responses((status = 200, body = SystemPromptReply), (status = 500, body = str))
+)]
+async fn set_system_prompt(
+    State(state): State<Arc<SettingsState>>,
+    Json(req): Json<SystemPromptRequest>,
+) -> Result<Json<SystemPromptReply>, ApiError> {
+    state
+        .set_system_prompt(&req.prompt)
+        .map_err(ApiError::internal)?;
+    Ok(Json(SystemPromptReply {
+        prompt: state.system_prompt(),
     }))
 }
 
@@ -524,17 +675,20 @@ async fn set_zai_settings(
     responses((status = 200, body = ClientEnvReply))
 )]
 async fn get_client_env(State(state): State<Arc<SettingsState>>) -> Json<ClientEnvReply> {
-    let env = state.client_env();
-    let default = crate::infra::client_env::ClientEnv::default();
-    let env = env.unwrap_or(default);
+    let reported = state.client_env().is_some();
+    let mut env = state.client_env().unwrap_or_default();
+    stamp_host(&mut env);
     Json(ClientEnvReply {
-        reported: state.client_env().is_some(),
+        reported,
         user_agent: env.user_agent,
         platform: env.platform,
         language: env.language,
         timezone: env.timezone,
         screen: env.screen,
         workspace_path: env.workspace_path,
+        hostname: env.hostname,
+        os: env.os,
+        arch: env.arch,
     })
 }
 
@@ -548,14 +702,16 @@ async fn set_client_env(
     State(state): State<Arc<SettingsState>>,
     Json(req): Json<ClientEnvRequest>,
 ) -> Result<Json<ClientEnvReply>, ApiError> {
-    let env = crate::infra::client_env::ClientEnv {
+    let mut env = crate::infra::client_env::ClientEnv {
         user_agent: req.user_agent,
         platform: req.platform,
         language: req.language,
         timezone: req.timezone,
         screen: req.screen,
         workspace_path: req.workspace_path,
+        ..crate::infra::client_env::ClientEnv::default()
     };
+    stamp_host(&mut env);
     state.set_client_env(&env).map_err(ApiError::internal)?;
     Ok(Json(ClientEnvReply {
         reported: true,
@@ -565,7 +721,17 @@ async fn set_client_env(
         timezone: env.timezone,
         screen: env.screen,
         workspace_path: env.workspace_path,
+        hostname: env.hostname,
+        os: env.os,
+        arch: env.arch,
     }))
+}
+
+fn stamp_host(env: &mut crate::infra::client_env::ClientEnv) {
+    let (hostname, os, arch) = crate::infra::client_env::host_fingerprint();
+    env.hostname = hostname;
+    env.os = os;
+    env.arch = arch;
 }
 
 #[utoipa::path(
@@ -604,6 +770,98 @@ async fn chat_zai(
     Ok(Json(ChatReply {
         model: Some(zai_api::client::DEFAULT_MODEL.to_string()),
         reply: reply.content,
+        searched: false,
+        tokenizer: TOKENIZER,
+        prompt_tokens: 0,
+        prompt_tps: ZERO_TPS,
+        decode_tokens: 0,
+        decode_tps: ZERO_TPS,
+    }))
+}
+
+#[derive(Deserialize, utoipa::ToSchema)]
+struct ClaudeCodeRequest {
+    code: String,
+}
+
+#[derive(Deserialize, utoipa::ToSchema)]
+struct ClaudeChatRequest {
+    message: String,
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/auth/claude/start",
+    responses((status = 200, body = CodexStartReply), (status = 500, body = str))
+)]
+async fn claude_start(
+    State(auth): State<Arc<ClaudeAuth>>,
+) -> Result<Json<CodexStartReply>, ApiError> {
+    let authorize_url = auth.start().map_err(ApiError::bad_request)?;
+    Ok(Json(CodexStartReply { authorize_url }))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/auth/claude/callback",
+    request_body = ClaudeCodeRequest,
+    responses((status = 200, body = ()), (status = 400, body = str))
+)]
+async fn claude_callback(
+    State(auth): State<Arc<ClaudeAuth>>,
+    Json(req): Json<ClaudeCodeRequest>,
+) -> Result<Json<()>, ApiError> {
+    const MISSING_CODE: &str = "missing code";
+    if req.code.trim().is_empty() {
+        return Err(ApiError::bad_request(MISSING_CODE));
+    }
+    auth.callback(req.code.trim())
+        .await
+        .map_err(ApiError::bad_request)?;
+    Ok(Json(()))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/auth/claude/status",
+    responses((status = 200, body = CodexStatusReply))
+)]
+async fn claude_status(State(auth): State<Arc<ClaudeAuth>>) -> Json<CodexStatusReply> {
+    let (status, error) = match auth.status() {
+        ClaudeLoginStatus::LoggedIn => (CodexTokenStatus::LoggedIn, None),
+        ClaudeLoginStatus::Expired => (CodexTokenStatus::Expired, None),
+        ClaudeLoginStatus::Missing => (CodexTokenStatus::Missing, None),
+        ClaudeLoginStatus::AwaitingLogin => (CodexTokenStatus::AwaitingLogin, None),
+        ClaudeLoginStatus::Failed(e) => (CodexTokenStatus::Failed, Some(e)),
+    };
+    let cli_available = claude_cli::check_available().is_ok();
+    Json(CodexStatusReply {
+        status,
+        cli_available,
+        error,
+    })
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/chat/claude",
+    request_body = ClaudeChatRequest,
+    responses((status = 200, body = ChatReply), (status = 500, body = str))
+)]
+async fn chat_claude(
+    State(_auth): State<Arc<ClaudeAuth>>,
+    Json(req): Json<ClaudeChatRequest>,
+) -> Result<Json<ChatReply>, ApiError> {
+    const TOKENIZER: &str = "claude";
+    const ZERO_TPS: f64 = 0.0;
+    const MODEL: &str = "claude";
+    let reply = tokio::task::spawn_blocking(move || claude_chat::chat(&req.message))
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .map_err(ApiError::internal)?;
+    Ok(Json(ChatReply {
+        model: Some(MODEL.to_string()),
+        reply,
         searched: false,
         tokenizer: TOKENIZER,
         prompt_tokens: 0,
@@ -1302,6 +1560,42 @@ async fn sweep_sandboxes() -> Json<SandboxSweepReply> {
     })
 }
 
+/// Installer for remote sandbox clients; `role` selects auto/model/worker.
+/// Unauthenticated by design — it only probes the downloading machine.
+async fn install_script(
+    axum::extract::Query(q): axum::extract::Query<crate::infra::install::InstallQuery>,
+) -> Response {
+    use crate::infra::install;
+    let role = match q.role.as_deref().map(install::parse_role) {
+        None => install::Role::default(),
+        Some(Some(r)) => r,
+        Some(None) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                "invalid role: use auto | model | worker",
+            )
+                .into_response();
+        }
+    };
+    let server = q
+        .server
+        .unwrap_or_else(|| "http://localhost:3334".to_owned());
+    (
+        [
+            (
+                http::header::CONTENT_TYPE,
+                "text/x-shellscript; charset=utf-8",
+            ),
+            (
+                http::header::HeaderName::from_static("content-disposition"),
+                "attachment; filename=\"install.sh\"",
+            ),
+        ],
+        install::render_install_script(role, &server),
+    )
+        .into_response()
+}
+
 #[derive(OpenApi)]
 #[openapi(
     info(
@@ -1317,8 +1611,14 @@ async fn sweep_sandboxes() -> Json<SandboxSweepReply> {
         codex_status,
         codex_models,
         chat_codex,
+        claude_start,
+        claude_callback,
+        claude_status,
+        chat_claude,
         get_zai_settings,
         set_zai_settings,
+        get_system_prompt,
+        set_system_prompt,
         get_client_env,
         set_client_env,
         chat_zai,
@@ -1360,8 +1660,14 @@ async fn sweep_sandboxes() -> Json<SandboxSweepReply> {
         CodexStatusReply,
         CodexModelInfo,
         CodexChatRequest,
+        ClaudeCodeRequest,
+        ClaudeChatRequest,
         ZaiSettingsReply,
         ZaiSettingsRequest,
+        ZaiModelReply,
+        ZaiModelAction,
+        SystemPromptReply,
+        SystemPromptRequest,
         ClientEnvReply,
         ClientEnvRequest,
         ZaiChatRequest,
@@ -1483,6 +1789,34 @@ struct CodexChatRequest {
 struct ZaiSettingsReply {
     api_key_set: bool,
     model: String,
+    models: Vec<ZaiModelReply>,
+}
+
+#[derive(Serialize, utoipa::ToSchema)]
+struct ZaiModelReply {
+    model: String,
+    api_key_set: bool,
+}
+
+#[derive(Deserialize, utoipa::ToSchema)]
+#[serde(tag = "action", rename_all = "snake_case")]
+enum ZaiModelAction {
+    /// Create a model entry; it must carry its own api key.
+    Add {
+        model: String,
+        api_key: String,
+    },
+    /// Replace the stored key of an existing model.
+    SetKey {
+        model: String,
+        api_key: String,
+    },
+    Remove {
+        model: String,
+    },
+    SetActive {
+        model: String,
+    },
 }
 
 #[derive(Deserialize, utoipa::ToSchema)]
@@ -1501,6 +1835,9 @@ struct ClientEnvReply {
     timezone: String,
     screen: String,
     workspace_path: String,
+    hostname: String,
+    os: String,
+    arch: String,
 }
 
 #[derive(Deserialize, utoipa::ToSchema)]

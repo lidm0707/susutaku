@@ -1,0 +1,21 @@
+{
+  "client_env": {
+    "arch": "aarch64",
+    "hostname": "macmoos-MacBook-Pro.local",
+    "language": "en-US",
+    "os": "macos",
+    "platform": "MacIntel",
+    "screen": "1512x982",
+    "timezone": "Asia/Bangkok",
+    "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:154.0) Gecko/20100101 Firefox/154.0",
+    "workspace_path": ""
+  },
+  "zai": {
+    "api_key": "",
+    "model": "glm4.6",
+    "models": [
+      "glm-4.6",
+      "glm4.6"
+    ]
+  }
+}
