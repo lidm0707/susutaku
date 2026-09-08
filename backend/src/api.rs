@@ -34,19 +34,23 @@ const DEFAULT_MAX_TOKENS: usize = 512;
 
 pub fn router<T: ChatHandling + ModelSwitch + 'static>(
     use_case: Arc<T>,
+    catalog: Arc<dyn crate::infra::model_client::ModelCatalog>,
     codex_workspace: PathBuf,
     kanban_store: std::sync::Arc<kanban_rs::Store>,
 ) -> Router {
     let kanban_store_for_sched = kanban_store.clone();
     let core = Router::new()
         .route("/api/health", get(health))
-        .route("/api/models", get(models))
         .route("/api/models/select", post(select_model))
         .route("/api/chat", post(chat))
         .route("/api/prompts/render", post(render_prompt))
         .route("/api-docs/openapi.json", get(openapi_json))
         .fallback(not_found)
-        .with_state(use_case);
+        .with_state(use_case.clone());
+    let models_router = Router::new()
+        .route("/api/models", get(models))
+        .with_state(catalog);
+    let core = core.merge(models_router);
     let auth = Router::new()
         .route("/api/auth/codex/start", post(codex_start))
         .route("/api/auth/codex/status", get(codex_status))
@@ -424,20 +428,22 @@ async fn openapi_json() -> Json<utoipa::openapi::OpenApi> {
 }
 
 #[utoipa::path(get, path = "/api/models", responses((status = 200, body = [ModelInfo])))]
-async fn models<T: ModelSwitch>(State(use_case): State<Arc<T>>) -> Json<Vec<ModelInfo>> {
-    let selected = use_case.selected();
-    Json(
-        hf_loader::loadable_models(std::path::Path::new(crate::infra::engine::MODELS_ROOT))
+async fn models(
+    State(catalog): State<Arc<dyn crate::infra::model_client::ModelCatalog>>,
+) -> Result<Json<Vec<ModelInfo>>, ApiError> {
+    let models = catalog.list().map_err(ApiError::internal)?;
+    Ok(Json(
+        models
             .iter()
             .map(|m| ModelInfo {
                 name: m.name.clone(),
-                loadable: m.is_loadable(),
+                loadable: m.loadable,
                 bytes: m.bytes,
-                engine: m.engine(),
-                selected: selected.as_deref() == Some(m.name.as_str()),
+                engine: m.engine.clone(),
+                selected: m.selected,
             })
             .collect(),
-    )
+    ))
 }
 
 #[utoipa::path(
@@ -1735,7 +1741,7 @@ struct ModelInfo {
     name: String,
     loadable: bool,
     bytes: u64,
-    engine: &'static str,
+    engine: String,
     selected: bool,
 }
 

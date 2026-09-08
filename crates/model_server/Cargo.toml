@@ -1,0 +1,18 @@
+[package]
+name = "model-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+proto-rs = { workspace = true }
+hf_loader = { workspace = true }
+susutaku-mlx = { workspace = true }
+gguf-rs = { workspace = true }
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "net", "time"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

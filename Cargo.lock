@@ -189,17 +189,15 @@ dependencies = [
  "claude-cli",
  "codex-cli",
  "core-agent",
- "gguf-rs",
- "hf_loader",
  "hostname",
  "kanban-rs",
  "mockall",
  "piplines",
  "prompt-sys",
+ "proto-rs",
  "serde",
  "serde_json",
  "susutaku-mlx",
- "tokenizers",
  "tokio",
  "tower-http",
  "ureq",
@@ -2127,6 +2125,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "model-server"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "gguf-rs",
+ "hf_loader",
+ "proto-rs",
+ "serde",
+ "serde_json",
+ "susutaku-mlx",
+ "tokio",
+]
+
+[[package]]
 name = "monostate"
 version = "0.1.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2570,6 +2582,15 @@ dependencies = [
 [[package]]
 name = "prompt-sys"
 version = "0.1.0"
+
+[[package]]
+name = "proto-rs"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tokio",
+]
 
 [[package]]
 name = "pulp"

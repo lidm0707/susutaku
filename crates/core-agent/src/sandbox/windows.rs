@@ -64,6 +64,7 @@ use std::fs;
 use std::io::Error;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
+use std::sync::OnceLock;
 use std::sync::RwLock;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
@@ -115,6 +116,15 @@ pub const TASKLIST_ARG_NOHEADER: &str = "/NH";
 
 const POWERSHELL_REL: &str = r"WindowsPowerShell\v1.0\powershell.exe";
 const PS_FLAGS: &str = "-NoProfile -NonInteractive -NoLogo";
+const WSL_EXE: &str = "wsl.exe";
+const WSL_STATUS_FLAG: &str = "--status";
+const WSL_RUN_FLAG: &str = "-e";
+const WSL_SHELL: &str = "/bin/sh";
+const WSL_SHELL_FLAG: &str = "-c";
+const WSL_MNT_ROOT: &str = "/mnt/";
+const WSL_CD: &str = "cd";
+const SYSTEM32_REL: &str = "System32";
+const WIN_ROOT_COLON: char = ':';
 const SANDBOX_ID_FILE: &str = "sandbox-id";
 const WORKSPACE_TMP: &str = "tmp";
 const SE_GROUP_LOGON_ID_MASK: u32 = 0xC000_0000;
@@ -136,6 +146,50 @@ const PIPE_READ_BUF: usize = 8192;
 pub use crate::sandbox_abstract_layer::{
     Guarantee, HistoryEntry, Role, SandboxLayer, SandboxState,
 };
+
+/// Execution backend for sandboxed commands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowsExec {
+    /// Native hardening: powershell under restricted token + Job Object.
+    RestrictedToken,
+    /// Commands run via `wsl.exe -e /bin/sh -c ...` inside WSL; the
+    /// `wsl.exe` launch itself still runs under the restricted token + job.
+    Wsl,
+}
+
+/// Default execution mode when detection has not picked `Wsl`.
+pub const DEFAULT_EXEC: WindowsExec = WindowsExec::RestrictedToken;
+
+static EXEC_CACHE: OnceLock<WindowsExec> = OnceLock::new();
+
+/// Pick the execution mode: `Wsl` when `wsl.exe --status` succeeds,
+/// otherwise [`DEFAULT_EXEC`]. Result is cached for the process lifetime.
+pub fn detect() -> WindowsExec {
+    *EXEC_CACHE.get_or_init(|| {
+        let ok = Command::new(WSL_EXE)
+            .arg(WSL_STATUS_FLAG)
+            .output()
+            .is_ok_and(|o| o.status.success());
+        if ok { WindowsExec::Wsl } else { DEFAULT_EXEC }
+    })
+}
+
+/// Translate `C:\a\b` to `/mnt/c/a/b`; pass through anything else.
+pub fn windows_path_to_wsl(path: &Path) -> String {
+    let text = path.to_string_lossy().replace('\\', "/");
+    let (drive, rest) = match text.split_once(WIN_ROOT_COLON) {
+        Some((d, r)) if d.len() == 1 && d.chars().all(|c| c.is_ascii_alphabetic()) => (d, r),
+        _ => return text,
+    };
+    format!(
+        "{WSL_MNT_ROOT}{}{rest}",
+        drive
+            .chars()
+            .next()
+            .unwrap_or_default()
+            .to_ascii_lowercase()
+    )
+}
 
 /// Windows backend: restricted token + Job Object + protected DACL.
 /// Kernel-enforced for filesystem/process/resources; network access is
@@ -288,7 +342,7 @@ impl Sandbox {
         }
         ensure_no_reparse_points(&self.root)?;
         let cwd = resolve_cwd(&self.root, &self.cwd_snapshot());
-        let out = spawn_restricted(cmd, &cwd, limits)?;
+        let out = spawn_restricted(detect(), cmd, &cwd, limits)?;
         let text = out.stdout_text(limits.max_output_bytes);
         self.record(HistoryEntry {
             role: Role::Tool,
@@ -406,16 +460,47 @@ fn truncate_bytes(text: &mut String, max_bytes: usize) {
 /// Run `cmd` under a restricted token inside a fresh Job Object, bounded by
 /// `limits`. Every error path terminates the job, so the process tree never
 /// outlives this function.
-fn spawn_restricted(cmd: &str, cwd: &Path, limits: &SandboxLimits) -> Result<RunOutput, Error> {
+fn build_command(mode: WindowsExec, cmd: &str, cwd: &Path) -> (String, String) {
+    match mode {
+        WindowsExec::RestrictedToken => {
+            let exe = system_root()
+                .join(POWERSHELL_REL)
+                .to_string_lossy()
+                .into_owned();
+            let cmdline = format!("\"{exe}\" {PS_FLAGS} {RUN_FLAG} {}", ps_quote(cmd));
+            (exe, cmdline)
+        }
+        WindowsExec::Wsl => {
+            let exe = system_root()
+                .join(SYSTEM32_REL)
+                .join(WSL_EXE)
+                .to_string_lossy()
+                .into_owned();
+            let remote = format!("{WSL_CD} '{}' && {}", windows_path_to_wsl(cwd), cmd);
+            let cmdline = format!(
+                "\"{exe}\" {WSL_RUN_FLAG} {WSL_SHELL} {WSL_SHELL_FLAG} {}",
+                sh_quote(&remote)
+            );
+            (exe, cmdline)
+        }
+    }
+}
+
+fn sh_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', r"'\''"))
+}
+
+fn spawn_restricted(
+    mode: WindowsExec,
+    cmd: &str,
+    cwd: &Path,
+    limits: &SandboxLimits,
+) -> Result<RunOutput, Error> {
     let token = restricted_token()?;
     let token_guard = HandleGuard(token);
     let job = create_limited_job(limits)?;
 
-    let exe = system_root()
-        .join(POWERSHELL_REL)
-        .to_string_lossy()
-        .into_owned();
-    let cmdline = format!("\"{exe}\" {PS_FLAGS} {RUN_FLAG} {}", ps_quote(cmd));
+    let (_exe, cmdline) = build_command(mode, cmd, cwd);
     let mut cmdline_w = to_wide(&cmdline);
     let cwd_w = to_wide(&cwd.to_string_lossy());
     let env = sandbox_env(cwd);

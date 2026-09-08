@@ -1,14 +1,13 @@
 //! Dedicated inference thread owning the non-Send MLX model.
-//! The rest of the app talks to it through the clonable [`Engine`] handle.
+//! The rest of the server talks to it through the clonable [`Engine`] handle.
 
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, RwLock};
 
-use crate::port::outbound::{GenReply, Inference, ModelSwitch, ReplyRx};
+use crate::MODELS_ROOT;
+use crate::ports::{GenReply, Inference, ModelSwitch, ReplyRx};
 use susutaku_mlx::tok::{ChatTok, TokKind};
-
-pub const MODELS_ROOT: &str = "models";
 
 /// Which inference backend runs a model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -168,7 +167,7 @@ fn fail_all(rx: &Receiver<Job>, err: String) {
     }
 }
 
-/// Holds the active engine; [`select`](ModelSwitch::select) swaps it without restart.
+/// Holds the active engine; [`ModelSwitch::select`] swaps it without restart.
 #[derive(Clone)]
 pub struct ModelPool {
     active: Arc<RwLock<Engine>>,

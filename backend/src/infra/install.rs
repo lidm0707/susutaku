@@ -19,6 +19,15 @@ pub const SANDBOX_SHELL_LINUX: &str = "/bin/bash";
 pub const SANDBOX_SHELL_WINDOWS: &str = "powershell";
 pub const PROBE_TOOL_MACOS: &str = "sysctl";
 pub const PROBE_TOOL_LINUX: &str = "awk";
+pub const REPO_URL: &str = "https://github.com/lidm0707/susutaku.git";
+pub const INSTALL_ROOT: &str = "$HOME/.susutaku";
+pub const RUSTUP_URL: &str = "https://sh.rustup.rs";
+pub const HTTP_PORT_ENV: &str = "MODEL_SERVER_HTTP_PORT";
+pub const TCP_PORT_ENV: &str = "MODEL_SERVER_TCP_PORT";
+pub const DEFAULT_HTTP_PORT: u16 = 8992;
+pub const DEFAULT_TCP_PORT: u16 = 8993;
+pub const SERVER_URL_ENV: &str = "SUSUTAKU_MODEL_SERVER_URL";
+pub const HUB_ADDR_ENV: &str = "SUSUTAKU_HUB_ADDR";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Role {
@@ -134,9 +143,38 @@ fi
 echo "machine probe: $os/$arch, ${{ram_gib}} GiB RAM"
 echo "role: $role ($([ "$role" = model ] && echo model+worker || echo provider jobs only))"
 echo "server: {server_url}"
-echo
-echo "the sandbox client binary is not published yet (plan 29)."
-echo "this machine will register as role=$role once the client ships."
+
+# prepare: rust toolchain (the binaries are pure rust; no other runtime deps)
+if ! command -v cargo >/dev/null 2>&1; then
+    echo "installing rust toolchain…"
+    curl --proto '=https' --tlsv1.2 -sSf {RUSTUP_URL} | sh -s -- -y --default-toolchain stable
+    . "$HOME/.cargo/env"
+fi
+
+# prepare: source + release build (one checkout builds both binaries)
+mkdir -p {INSTALL_ROOT}
+if [ ! -d {INSTALL_ROOT}/src ]; then
+    git clone --depth 1 {REPO_URL} {INSTALL_ROOT}/src
+fi
+cd {INSTALL_ROOT}/src
+git pull --ff-only || echo "keeping existing checkout"
+cargo build --release -p model-server -p backend
+
+# launch: model hosts run the model server (inference + command hub);
+# workers run the backend client node, which registers with the hub.
+server_host="$(printf '%s\n' '{server_url}' | sed -E 's#^https?://##; s#[:/].*$##')"
+if [ "$role" = model ]; then
+    export {HTTP_PORT_ENV}={DEFAULT_HTTP_PORT} {TCP_PORT_ENV}={DEFAULT_TCP_PORT}
+    echo "model host: fetch a checkpoint first if none is under models/ (see Makefile download-model)"
+    nohup ./target/release/model-server >{INSTALL_ROOT}/model-server.log 2>&1 &
+    echo "model-server started (pid $!), logs: {INSTALL_ROOT}/model-server.log"
+else
+    export {SERVER_URL_ENV}="http://$server_host:{DEFAULT_HTTP_PORT}"
+    export {HUB_ADDR_ENV}="$server_host:{DEFAULT_TCP_PORT}"
+    nohup ./target/release/backend >{INSTALL_ROOT}/backend.log 2>&1 &
+    echo "backend started (pid $!), registers with hub $server_host:{DEFAULT_TCP_PORT}"
+    echo "logs: {INSTALL_ROOT}/backend.log"
+fi
 "#
     )
 }

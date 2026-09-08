@@ -1,3 +1,11 @@
+//! macOS sandbox backend.
+//!
+//! Commands execute through `/usr/bin/sandbox-exec` with a seatbelt profile
+//! that denies filesystem writes outside the sandbox root. Requires macOS;
+//! if `sandbox-exec` cannot be spawned, falls back to plain `zsh` (see
+//! [`ExecutionMode`]). With seatbelt active the layer reports
+//! [`Guarantee::Kernel`].
+
 use std::fs;
 use std::io::Error;
 use std::path::{Path, PathBuf};
@@ -10,17 +18,76 @@ pub const MAX_OUTPUT_BYTES: usize = 1 << 20;
 pub const MAX_HISTORY: usize = 128;
 pub const SANDBOX_PREFIX: &str = "susutaku-agent-sandbox-";
 pub const STATE_FILE: &str = "agent-sandbox-state.json";
+const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
+const PROFILE_FLAG: &str = "-p";
+const PROFILE_TEMPLATE: &str =
+    "(version 1)\n(allow default)\n(deny file-write*)\n(allow file-write* (subpath \"{root}\"))\n";
+const ROOT_PLACEHOLDER: &str = "{root}";
 
-pub fn run(cmd: &str) -> Result<String, Error> {
-    let out = Command::new(SHELL).arg(RUN_FLAG).arg(cmd).output()?;
+static MODE_CACHE: RwLock<Option<ExecutionMode>> = RwLock::new(None);
+
+/// How commands are actually spawned: seatbelt-wrapped or plain fallback.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExecutionMode {
+    Seatbelt,
+    Plain,
+}
+
+/// Detect once per process whether `sandbox-exec` is usable.
+fn detect() -> ExecutionMode {
+    match Command::new(SANDBOX_EXEC).arg("-h").output() {
+        Ok(_) => ExecutionMode::Seatbelt,
+        Err(_) => ExecutionMode::Plain,
+    }
+}
+
+pub fn execution_mode() -> ExecutionMode {
+    MODE_CACHE.read().ok().and_then(|m| *m).unwrap_or_else(|| {
+        let mode = detect();
+        if let Ok(mut m) = MODE_CACHE.write() {
+            *m = Some(mode);
+        }
+        mode
+    })
+}
+
+pub fn seatbelt_profile(root: &Path) -> String {
+    PROFILE_TEMPLATE.replace(ROOT_PLACEHOLDER, &root.to_string_lossy())
+}
+
+/// Build the command for `cmd`: seatbelt-wrapped when available, plain zsh otherwise.
+pub fn seatbelt_command(mode: ExecutionMode, root: &Path, cwd: &Path, cmd: &str) -> Command {
+    let mut command = match mode {
+        ExecutionMode::Seatbelt => {
+            let mut c = Command::new(SANDBOX_EXEC);
+            c.arg(PROFILE_FLAG).arg(seatbelt_profile(root));
+            c
+        }
+        ExecutionMode::Plain => Command::new(SHELL),
+    };
+    command.arg(SHELL).arg(RUN_FLAG).arg(cmd).current_dir(cwd);
+    command
+}
+
+/// Check whether a spawn error means the executable was not found.
+fn is_not_found(err: &Error) -> bool {
+    matches!(err.kind(), std::io::ErrorKind::NotFound)
+}
+
+fn output_text(out: &std::process::Output) -> Result<String, Error> {
     if !out.status.success() {
-        return Err(std::io::Error::other(
+        return Err(Error::other(
             String::from_utf8_lossy(&out.stderr).into_owned(),
         ));
     }
     let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
     text.truncate(MAX_OUTPUT_BYTES);
     Ok(text)
+}
+
+pub fn run(cmd: &str) -> Result<String, Error> {
+    let out = Command::new(SHELL).arg(RUN_FLAG).arg(cmd).output()?;
+    output_text(&out)
 }
 
 pub struct Sandbox {
@@ -93,18 +160,20 @@ impl Sandbox {
             .map(|s| s.cwd.clone())
             .unwrap_or_else(|_| ".".into());
         let cwd = resolve_cwd(&root, &cwd_rel);
-        let out = Command::new(SHELL)
-            .arg(RUN_FLAG)
-            .arg(cmd)
-            .current_dir(&cwd)
-            .output()?;
-        if !out.status.success() {
-            return Err(std::io::Error::other(
-                String::from_utf8_lossy(&out.stderr).into_owned(),
-            ));
-        }
-        let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
-        text.truncate(MAX_OUTPUT_BYTES);
+        let mode = execution_mode();
+        let mut command = seatbelt_command(mode, &root, &cwd, cmd);
+        let out = match command.output() {
+            Ok(out) => out,
+            Err(e) if mode == ExecutionMode::Seatbelt && is_not_found(&e) => {
+                if let Ok(mut m) = MODE_CACHE.write() {
+                    *m = Some(ExecutionMode::Plain);
+                }
+                command = seatbelt_command(ExecutionMode::Plain, &root, &cwd, cmd);
+                command.output()?
+            }
+            Err(e) => return Err(e),
+        };
+        let text = output_text(&out)?;
         drop(root);
         self.record(HistoryEntry {
             role: Role::Tool,
@@ -247,11 +316,14 @@ pub use crate::sandbox_abstract_layer::{
     Guarantee, HistoryEntry, Role, SandboxLayer, SandboxState,
 };
 
-/// macOS backend today: soft workspace isolation (see module docs above and
-/// `Guarantee::Soft`). Commands must still be treated as untrusted-to-escape.
+/// Kernel-enforced via seatbelt when `sandbox-exec` is available; Plain is
+/// advisory only.
 impl SandboxLayer for Sandbox {
     fn guarantee(&self) -> Guarantee {
-        Guarantee::Soft
+        match execution_mode() {
+            ExecutionMode::Seatbelt => Guarantee::Kernel,
+            ExecutionMode::Plain => Guarantee::BestEffort,
+        }
     }
     fn root(&self) -> PathBuf {
         Sandbox::root(self)
