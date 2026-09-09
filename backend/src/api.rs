@@ -214,7 +214,10 @@ async fn upload_attachment(
             continue;
         }
         let name = sanitize_name(field.file_name().unwrap_or(ATTACHMENT_DEFAULT_NAME));
-        let data = field.bytes().await.map_err(|e| ApiError::internal(e.to_string()))?;
+        let data = field
+            .bytes()
+            .await
+            .map_err(|e| ApiError::internal(e.to_string()))?;
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
@@ -300,7 +303,10 @@ async fn login(
         Some(t) => state.store.auth(t).await.map_err(store_err)?,
         None => None,
     };
-    let user = user.ok_or(ApiError(UNAUTHORIZED_MSG.to_string(), StatusCode::UNAUTHORIZED))?;
+    let user = user.ok_or(ApiError(
+        UNAUTHORIZED_MSG.to_string(),
+        StatusCode::UNAUTHORIZED,
+    ))?;
     Ok(Json(LoginReply {
         token: token.unwrap_or_default(),
         username: user.username,
@@ -1117,7 +1123,10 @@ async fn get_agent(
         .agent(id)
         .await
         .map_err(kanban_err)?
-        .ok_or(ApiError(ApiError::NOT_FOUND_MSG.to_string(), StatusCode::NOT_FOUND))?;
+        .ok_or(ApiError(
+            ApiError::NOT_FOUND_MSG.to_string(),
+            StatusCode::NOT_FOUND,
+        ))?;
     Ok(Json(AgentDto::from(agent)))
 }
 
@@ -1279,6 +1288,8 @@ async fn update_card(
             title: req.title,
             description: req.description,
             assignee: req.assignee,
+            deadline: req.deadline,
+            priority: req.priority,
         })
         .await
         .map_err(kanban_err)?;
@@ -1287,7 +1298,10 @@ async fn update_card(
         .card_view(id)
         .await
         .map_err(kanban_err)?
-        .ok_or(ApiError(ApiError::NOT_FOUND_MSG.to_string(), StatusCode::NOT_FOUND))?;
+        .ok_or(ApiError(
+            ApiError::NOT_FOUND_MSG.to_string(),
+            StatusCode::NOT_FOUND,
+        ))?;
     Ok(Json(CardDto::from(view)))
 }
 
@@ -1502,7 +1516,9 @@ fn cfg_err(e: kanban_rs::StoreError) -> ApiError {
     match e {
         kanban_rs::StoreError::NoSuchCard
         | kanban_rs::StoreError::NoSuchPipeline
-        | kanban_rs::StoreError::NoSuchAgent => ApiError(ApiError::NOT_FOUND_MSG.to_string(), StatusCode::NOT_FOUND),
+        | kanban_rs::StoreError::NoSuchAgent => {
+            ApiError(ApiError::NOT_FOUND_MSG.to_string(), StatusCode::NOT_FOUND)
+        }
         kanban_rs::StoreError::PipelineTaken => {
             ApiError::bad_request("pipeline name already taken")
         }
@@ -2022,6 +2038,7 @@ struct CardDto {
     pipeline_id: Option<i64>,
     pipeline_name: Option<String>,
     cron: Option<String>,
+    deadline: Option<String>,
 }
 
 impl From<kanban_rs::CardRow> for CardDto {
@@ -2040,6 +2057,7 @@ impl From<kanban_rs::CardRow> for CardDto {
             pipeline_id: r.pipeline_id,
             pipeline_name: None,
             cron: r.cron,
+            deadline: r.deadline,
         }
     }
 }
@@ -2058,6 +2076,10 @@ struct UpdateCardRequest {
     description: String,
     /// Person assigned to this card; null to unassign.
     assignee: Option<String>,
+    /// Target date (ISO `YYYY-MM-DD`); empty string clears it.
+    deadline: Option<String>,
+    /// "low" | "normal" | "high" | "critical"; null leaves unchanged.
+    priority: Option<String>,
 }
 
 #[derive(Serialize, utoipa::ToSchema)]

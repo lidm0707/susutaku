@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ArrowLeft, ArrowRight, Bot, CheckCircle2, Clock, Loader2, Play, Plus, Save, Trash2, User, Workflow, XCircle } from "lucide-react";
+import { ArrowLeft, ArrowRight, Bot, CalendarClock, CheckCircle2, Clock, Flag, Loader2, Play, Plus, Save, Trash2, User, Workflow, XCircle } from "lucide-react";
 import {
   clear_token,
   add_comment,
+  chat,
   create_card,
   fetch_agents,
   fetch_cards,
@@ -69,6 +70,11 @@ export default function Kanban() {
   const [users, setUsers] = useState<UserInfo[]>([]);
   const [dComments, setDComments] = useState<Comment[]>([]);
   const [dCommentBody, setDCommentBody] = useState("");
+  const [dTab, setDTab] = useState<"comments" | "history">("comments");
+  const [dPriority, setDPriority] = useState<Priority>(PRIORITIES[1]);
+  const [dDeadline, setDDeadline] = useState("");
+  const [dThinking, setDThinking] = useState(false);
+  const commentsEnd = useRef<HTMLDivElement | null>(null);
   const [dragOver, setDragOver] = useState<ColumnId | null>(null);
   const [draggingId, setDraggingId] = useState<number | null>(null);
   const [runningId, setRunningId] = useState<number | null>(null);
@@ -159,10 +165,17 @@ export default function Kanban() {
     setDTitle(card.title);
     setDDesc(card.description);
     setDAssignee(card.assignee || "");
+    setDPriority((card.priority as Priority) || PRIORITIES[1]);
+    setDDeadline(card.deadline || "");
     setDComments([]);
     setDCommentBody("");
+    setDTab("comments");
+    setDThinking(false);
     fetch_agents().then(setSavedAgents).catch(() => setSavedAgents([]));
     fetch_users().then(setUsers).catch(() => setUsers([]));
+    if (pipelines == null) {
+      fetch_pipelines().then(setPipelines).catch(() => setPipelines([]));
+    }
     try {
       setDComments(await fetch_comments(card.id));
     } catch (err) {
@@ -175,7 +188,14 @@ export default function Kanban() {
     if (!detail || !dTitle.trim()) return;
     setError("");
     try {
-      await update_card(detail.id, dTitle.trim(), dDesc, dAssignee.trim() || null);
+      await update_card(
+        detail.id,
+        dTitle.trim(),
+        dDesc,
+        dAssignee.trim() || null,
+        dPriority,
+        dDeadline
+      );
       setDetail(null);
       await refresh();
     } catch (err) {
@@ -183,42 +203,120 @@ export default function Kanban() {
     }
   }
 
+  /// Names of agents that can be mentioned in comments.
+  function mentionable_agents(): string[] {
+    const names = savedAgents.map((a) => a.name).filter(Boolean);
+    if (detail?.agent_name) names.push(detail.agent_name);
+    return [...new Set(names)];
+  }
+
+  function mentioned_agent(body: string): string | null {
+    const found = body.match(/@([\w.-]+)/g);
+    if (!found) return null;
+    const lower = found.map((m) => m.slice(1).toLowerCase());
+    return mentionable_agents().find((n) => lower.includes(n.toLowerCase())) || null;
+  }
+
   async function comment(e: React.FormEvent) {
     e.preventDefault();
     if (!detail || !dCommentBody.trim()) return;
     setError("");
+    const body = dCommentBody.trim();
+    const agent = mentioned_agent(body);
     try {
-      await add_comment(detail.id, dCommentBody.trim());
+      await add_comment(detail.id, body);
       setDCommentBody("");
       setDComments(await fetch_comments(detail.id));
+      if (agent) {
+        setDThinking(true);
+        try {
+          const reply = await chat(`Card "${detail.title}": ${body.replace(new RegExp(`@${agent}`, "gi"), "").trim()}`);
+          const text = String(reply.reply || "").trim();
+          if (text) {
+            await add_comment(detail.id, `${agent}: ${text}`);
+          }
+        } finally {
+          setDThinking(false);
+        }
+      }
+      setDComments(await fetch_comments(detail.id));
+      commentsEnd.current?.scrollIntoView({ behavior: "smooth" });
     } catch (err) {
+      setDThinking(false);
       handle(err);
     }
   }
 
-  async function pick_detail_schedule(expr: string) {
-    if (!detail) return;
+  async function patch_detail(fields: {
+    priority?: string;
+    deadline?: string | null;
+    pipeline_id?: number | null;
+    agent_name?: string;
+    agent_state?: unknown;
+    cron?: string | null;
+  }) {
+    if (!detail) return null;
     setError("");
     try {
-      await set_card_schedule(detail.id, expr || null);
+      if (fields.pipeline_id !== undefined) {
+        await set_card_pipeline(detail.id, fields.pipeline_id);
+      }
+      if (fields.agent_name !== undefined) {
+        await set_agent(detail.id, fields.agent_name, fields.agent_state ?? {});
+      }
+      if (fields.cron !== undefined) {
+        await set_card_schedule(detail.id, fields.cron);
+      }
+      if (fields.priority !== undefined || fields.deadline !== undefined) {
+        await update_card(
+          detail.id,
+          detail.title,
+          detail.description,
+          detail.assignee ?? null,
+          fields.priority,
+          fields.deadline
+        );
+      }
       await refresh();
-      setDetail({ ...detail, cron: expr || null });
+      const updated = cards.find((c) => c.id === detail.id);
+      return updated || null;
     } catch (err) {
       handle(err);
+      return null;
     }
+  }
+
+  async function pick_detail_priority(p: Priority) {
+    setDPriority(p);
+    const updated = await patch_detail({ priority: p });
+    if (updated) setDetail({ ...detail!, priority: p });
+  }
+
+  async function pick_detail_deadline(value: string) {
+    setDDeadline(value);
+    const updated = await patch_detail({ deadline: value });
+    if (updated) setDetail({ ...detail!, deadline: value || null });
+  }
+
+  async function pick_detail_pipeline(id: string) {
+    const pipe_id = id === "" ? null : Number(id);
+    const updated = await patch_detail({ pipeline_id: pipe_id });
+    if (updated) setDetail({ ...detail!, pipeline_id: pipe_id });
+  }
+
+  async function pick_detail_schedule(expr: string) {
+    const updated = await patch_detail({ cron: expr || null });
+    if (updated) setDetail({ ...detail!, cron: expr || null });
   }
 
   function pick_detail_bot(id: string) {
     const a = savedAgents.find((x) => x.id === Number(id));
     if (!a || !detail) return;
-    setError("");
-    set_agent(
-      detail.id,
-      a.name,
-      { model: a.model, persona: a.persona, prompt: a.prompt, output: a.output }
-    )
-      .then(refresh)
-      .then(() => setDetail(null))
+    set_agent(detail.id, a.name, { model: a.model, persona: a.persona, prompt: a.prompt, output: a.output })
+      .then(async () => {
+        await refresh();
+        setDetail({ ...detail, agent_name: a.name });
+      })
       .catch(handle);
   }
 
@@ -467,6 +565,8 @@ export default function Kanban() {
         title={<>card #{detail?.id}</>}
         on_close={() => setDetail(null)}
       >
+        <div className="kanban-detail">
+          <section className="kanban-detail-left">
             <form className="kanban-detail-form" onSubmit={save_detail}>
               <input
                 value={dTitle}
@@ -476,84 +576,169 @@ export default function Kanban() {
               <textarea
                 value={dDesc}
                 onChange={(e) => setDDesc(e.target.value)}
-                rows={4}
+                rows={6}
                 spellCheck={false}
                 placeholder="description…"
               />
-              <div className="kanban-detail-field">
-                <label htmlFor="kanban-detail-person"><User size={13} /> assign person</label>
-                <input
-                  id="kanban-detail-person"
-                  className="kanban-select"
-                  value={dAssignee}
-                  onChange={(e) => setDAssignee(e.target.value)}
-                  placeholder="assign person…"
-                  list="kanban-user-list"
-                />
-                <datalist id="kanban-user-list">
-                  {users.map((u) => (
-                    <option key={u.username} value={u.username} />
-                  ))}
-                </datalist>
-              </div>
-              <div className="kanban-detail-field">
-                <label htmlFor="kanban-detail-bot"><Bot size={13} /> assign bot</label>
-                <select
-                  id="kanban-detail-bot"
-                  className="kanban-select"
-                  value=""
-                  onChange={(e) => pick_detail_bot(e.target.value)}
-                  title="assign bot (saved agent)"
-                >
-                  <option value="">assign bot…</option>
-                  {savedAgents.map((a) => (
-                    <option key={a.id} value={a.id}>{a.name}</option>
-                  ))}
-                </select>
-              </div>
-              <div className="kanban-detail-field">
-                <label htmlFor="kanban-detail-schedule"><Clock size={13} /> schedule</label>
-                <select
-                  id="kanban-detail-schedule"
-                  className="kanban-select"
-                  value={detail?.cron || ""}
-                  onChange={(e) => pick_detail_schedule(e.target.value)}
-                  title="schedule pipeline runs (cron)"
-                >
-                  <option value="">no schedule…</option>
-                  {CRON_PRESETS.map((p) => (
-                    <option key={p.expr} value={p.expr}>{p.label}</option>
-                  ))}
-                  {detail?.cron && !CRON_PRESETS.some((p) => p.expr === detail.cron) && (
-                    <option value={detail.cron}>{detail.cron}</option>
-                  )}
-                </select>
-              </div>
               <div className="kanban-detail-actions">
                 <button type="submit" disabled={!dTitle.trim()}><Save size={14} /> save</button>
               </div>
             </form>
-            <div className="kanban-comments">
-              {dComments.map((c) => (
-                <div key={c.id} className="kanban-comment">
-                  <span className="kanban-comment-meta">
-                    <strong>{c.author}</strong> {new Date(c.created_at).toLocaleString()}
-                  </span>
-                  <span>{c.body}</span>
-                </div>
-              ))}
-              <form className="kanban-add" onSubmit={comment}>
-                <input
-                  value={dCommentBody}
-                  onChange={(e) => setDCommentBody(e.target.value)}
-                  placeholder="write a comment…"
-                />
-                <button type="submit" disabled={!dCommentBody.trim()}>
-                  <Plus size={14} />
-                </button>
-              </form>
+            <div className="kanban-tabs" role="tablist">
+              <button
+                role="tab"
+                aria-selected={dTab === "comments"}
+                className={dTab === "comments" ? "active" : ""}
+                onClick={() => setDTab("comments")}
+              >
+                comments
+              </button>
+              <button
+                role="tab"
+                aria-selected={dTab === "history"}
+                className={dTab === "history" ? "active" : ""}
+                onClick={() => setDTab("history")}
+              >
+                history
+              </button>
             </div>
-            <RunTimeline run={detail ? run_of(cards.find((c) => c.id === detail.id) || detail) : null} />
+            {dTab === "comments" ? (
+              <div className="kanban-comments">
+                {dComments.map((c) => (
+                  <div
+                    key={c.id}
+                    className={
+                      mentionable_agents().some((n) => c.body.startsWith(`${n}: `))
+                        ? "kanban-comment kanban-comment-agent"
+                        : "kanban-comment"
+                    }
+                  >
+                    <span className="kanban-comment-meta">
+                      <strong>{c.author}</strong> {new Date(c.created_at).toLocaleString()}
+                    </span>
+                    <span>{c.body}</span>
+                  </div>
+                ))}
+                {dThinking && (
+                  <div className="kanban-comment kanban-comment-agent kanban-thinking">
+                    <Loader2 size={13} className="spin" /> agent is thinking…
+                  </div>
+                )}
+                <div ref={commentsEnd} />
+                <form className="kanban-add" onSubmit={comment}>
+                  <input
+                    value={dCommentBody}
+                    onChange={(e) => setDCommentBody(e.target.value)}
+                    placeholder={`write a comment… (mention @${detail?.agent_name || "agent"} to chat)`}
+                  />
+                  <button type="submit" disabled={!dCommentBody.trim() || dThinking}>
+                    <Plus size={14} />
+                  </button>
+                </form>
+              </div>
+            ) : (
+              <RunTimeline run={detail ? run_of(cards.find((c) => c.id === detail.id) || detail) : null} />
+            )}
+          </section>
+          <section className="kanban-detail-right">
+            <div className="kanban-detail-field">
+              <label htmlFor="kanban-detail-priority"><Flag size={13} /> priority</label>
+              <select
+                id="kanban-detail-priority"
+                className="kanban-select"
+                value={dPriority}
+                onChange={(e) => pick_detail_priority(e.target.value as Priority)}
+              >
+                {PRIORITIES.map((p) => (
+                  <option key={p} value={p}>{p}</option>
+                ))}
+              </select>
+            </div>
+            <div className="kanban-detail-field">
+              <label htmlFor="kanban-detail-bot"><Bot size={13} /> agent</label>
+              <select
+                id="kanban-detail-bot"
+                className="kanban-select"
+                value=""
+                onChange={(e) => pick_detail_bot(e.target.value)}
+                title="assign bot (saved agent)"
+              >
+                <option value="">{detail?.agent_name || "assign bot…"}</option>
+                {savedAgents.map((a) => (
+                  <option key={a.id} value={a.id}>{a.name}</option>
+                ))}
+              </select>
+            </div>
+            <div className="kanban-detail-field">
+              <label htmlFor="kanban-detail-pipeline"><Workflow size={13} /> pipeline</label>
+              <select
+                id="kanban-detail-pipeline"
+                className="kanban-select"
+                value={detail?.pipeline_id != null ? String(detail.pipeline_id) : ""}
+                onChange={(e) => pick_detail_pipeline(e.target.value)}
+              >
+                <option value="">no pipeline</option>
+                {(pipelines || []).map((p) => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+              {detail?.pipeline_id != null && (
+                <button
+                  type="button"
+                  className="kanban-run-inline"
+                  onClick={() => run(detail)}
+                  disabled={runningId != null}
+                >
+                  {runningId === detail.id ? <Loader2 size={13} className="spin" /> : <Play size={13} />} run now
+                </button>
+              )}
+            </div>
+            <div className="kanban-detail-field">
+              <label htmlFor="kanban-detail-person"><User size={13} /> assignee</label>
+              <input
+                id="kanban-detail-person"
+                className="kanban-select"
+                value={dAssignee}
+                onChange={(e) => setDAssignee(e.target.value)}
+                placeholder="assign person…"
+                list="kanban-user-list"
+              />
+              <datalist id="kanban-user-list">
+                {users.map((u) => (
+                  <option key={u.username} value={u.username} />
+                ))}
+              </datalist>
+            </div>
+            <div className="kanban-detail-field">
+              <label htmlFor="kanban-detail-deadline"><CalendarClock size={13} /> deadline</label>
+              <input
+                id="kanban-detail-deadline"
+                type="date"
+                className="kanban-select"
+                value={dDeadline}
+                onChange={(e) => pick_detail_deadline(e.target.value)}
+              />
+            </div>
+            <div className="kanban-detail-field">
+              <label htmlFor="kanban-detail-schedule"><Clock size={13} /> time trigger</label>
+              <select
+                id="kanban-detail-schedule"
+                className="kanban-select"
+                value={detail?.cron || ""}
+                onChange={(e) => pick_detail_schedule(e.target.value)}
+                title="schedule pipeline runs (cron)"
+              >
+                <option value="">no schedule…</option>
+                {CRON_PRESETS.map((p) => (
+                  <option key={p.expr} value={p.expr}>{p.label}</option>
+                ))}
+                {detail?.cron && !CRON_PRESETS.some((p) => p.expr === detail.cron) && (
+                  <option value={detail.cron}>{detail.cron}</option>
+                )}
+              </select>
+            </div>
+          </section>
+        </div>
       </SlideOver>
     </main>
   );

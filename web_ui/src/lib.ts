@@ -67,6 +67,7 @@ export interface Card {
   pipeline_id?: number | null;
   pipeline_name?: string;
   cron?: string | null;
+  deadline?: string | null;
 }
 
 export type RunStatus = "ok" | "failed";
@@ -530,12 +531,14 @@ export async function update_card(
   id: number,
   title: string,
   description: string,
-  assignee: string | null
+  assignee: string | null,
+  priority?: string,
+  deadline?: string | null
 ): Promise<Card> {
   const res = await api(`/api/kanban/cards/${id}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ title, description, assignee }),
+    body: JSON.stringify({ title, description, assignee, priority, deadline }),
   });
   return res.json();
 }
@@ -550,6 +553,19 @@ export async function add_comment(card_id: number, body: string): Promise<Commen
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ body }),
   });
+  return res.json();
+}
+
+const CHAT_MAX_TOKENS = 1024;
+
+/// Ask the agent engine a question (same backend as the Chat page).
+export async function chat(message: string): Promise<ChatReply> {
+  const res = await fetch(`${API_BASE}/api/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message, max_tokens: CHAT_MAX_TOKENS, search: "auto" }),
+  });
+  if (!res.ok) throw new ApiError(res.status, await res.text());
   return res.json();
 }
 

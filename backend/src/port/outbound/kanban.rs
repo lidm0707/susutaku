@@ -41,6 +41,8 @@ pub struct CardPatch {
     pub title: String,
     pub description: String,
     pub assignee: Option<String>,
+    pub deadline: Option<String>,
+    pub priority: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

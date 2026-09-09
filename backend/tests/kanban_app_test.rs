@@ -34,6 +34,7 @@ fn card_row(id: i64, pipeline_id: Option<i64>) -> CardRow {
         assignee: None,
         pipeline_id,
         cron: None,
+        deadline: None,
     }
 }
 

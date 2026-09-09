@@ -88,6 +88,8 @@ fn as_patch(patch: &CardPatch) -> UpdateCard<'_> {
         title: &patch.title,
         description: &patch.description,
         assignee: patch.assignee.as_deref(),
+        deadline: patch.deadline.as_deref(),
+        priority: patch.priority.as_deref(),
     }
 }
 

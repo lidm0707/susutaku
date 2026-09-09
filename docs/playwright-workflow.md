@@ -33,6 +33,7 @@ host: cargo run -p backend        # MLX needs macOS Metal, stays on host :8991
 | `crates/kanban-rs/examples/hash_password.rs` | Prints an argon2 hash to seed the e2e admin (one-time) |
 | `playwright/tests/auth.spec.ts` | Login redirect / bad-credential flows |
 | `playwright/tests/kanban.spec.ts` | Board loads; workspace+project API round-trip |
+| `playwright/tests/card-detail.spec.ts` | Card detail: two-pane layout, priority/deadline, tabs, agent mention chat, run history |
 | `playwright/tests/ux-snapshots.spec.ts` | Full-page screenshots of every route |
 | `playwright/screenshots/` | UX review images (bind-mounted from the container) |
 

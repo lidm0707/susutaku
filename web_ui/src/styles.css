@@ -1252,6 +1252,95 @@ button {
   color: #6fcf7c;
 }
 
+/* two-pane card detail */
+
+.kanban-detail {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+  gap: 1.2rem;
+  align-items: start;
+}
+
+@media (max-width: 720px) {
+  .kanban-detail {
+    grid-template-columns: 1fr;
+  }
+}
+
+.kanban-detail-left {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  min-width: 0;
+}
+
+.kanban-detail-right {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+  min-width: 0;
+  border-left: 1px solid #2a2a32;
+  padding-left: 1.2rem;
+}
+
+@media (max-width: 720px) {
+  .kanban-detail-right {
+    border-left: none;
+    padding-left: 0;
+  }
+}
+
+.kanban-tabs {
+  display: flex;
+  gap: 0.25rem;
+  border-bottom: 1px solid #2a2a32;
+}
+
+.kanban-tabs button {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: #8a8a94;
+  font-size: 0.78rem;
+  padding: 0.4rem 0.7rem;
+  cursor: pointer;
+}
+
+.kanban-tabs button.active {
+  color: white;
+  border-bottom-color: #3b6fd4;
+}
+
+.kanban-comment-agent {
+  border-color: #34523a;
+  background: #1c241e;
+}
+
+.kanban-thinking {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: #8a8a94;
+}
+
+.kanban-run-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  align-self: flex-start;
+  background: none;
+  border: 1px solid #2a2a32;
+  border-radius: 6px;
+  color: #c9c9d1;
+  font-size: 0.74rem;
+  padding: 0.3rem 0.6rem;
+  cursor: pointer;
+}
+
+.kanban-run-inline:hover:not(:disabled) {
+  border-color: #3b6fd4;
+}
+
 /* pipeline run badge + timeline */
 
 .run-badge {

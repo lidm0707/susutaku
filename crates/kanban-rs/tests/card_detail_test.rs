@@ -26,7 +26,15 @@ async fn card_update_and_comments_roundtrip() {
         .await
         .expect("add");
 
-    assert!(store.get(id).await.expect("get").expect("row").assignee.is_none());
+    assert!(
+        store
+            .get(id)
+            .await
+            .expect("get")
+            .expect("row")
+            .assignee
+            .is_none()
+    );
 
     store
         .update_card(UpdateCard {
@@ -34,6 +42,8 @@ async fn card_update_and_comments_roundtrip() {
             title: NEW_TITLE,
             description: NEW_DESC,
             assignee: Some(ASSIGNEE),
+            deadline: None,
+            priority: None,
         })
         .await
         .expect("update");
@@ -43,8 +53,14 @@ async fn card_update_and_comments_roundtrip() {
     assert_eq!(row.assignee.as_deref(), Some(ASSIGNEE));
 
     assert!(store.list_comments(id).await.expect("list").is_empty());
-    store.add_comment(id, AUTHOR, COMMENT_BODY).await.expect("add comment");
-    store.add_comment(id, AUTHOR, "second").await.expect("add comment");
+    store
+        .add_comment(id, AUTHOR, COMMENT_BODY)
+        .await
+        .expect("add comment");
+    store
+        .add_comment(id, AUTHOR, "second")
+        .await
+        .expect("add comment");
     let comments = store.list_comments(id).await.expect("list");
     assert_eq!(comments.len(), 2);
     assert_eq!(comments[0].author, AUTHOR);
@@ -52,10 +68,19 @@ async fn card_update_and_comments_roundtrip() {
     assert_eq!(comments[0].card_id, id);
 
     assert!(store.add_comment(999_999_999, AUTHOR, "x").await.is_err());
-    assert!(store
-        .update_card(UpdateCard { id: 999_999_999, title: "x", description: "", assignee: None })
-        .await
-        .is_err());
+    assert!(
+        store
+            .update_card(UpdateCard {
+                id: 999_999_999,
+                title: "x",
+                description: "",
+                assignee: None,
+                deadline: None,
+                priority: None,
+            })
+            .await
+            .is_err()
+    );
 
     store.remove(id).await.expect("remove");
     assert!(store.list_comments(id).await.expect("list").is_empty());

@@ -64,6 +64,7 @@ pub struct CardRow {
     pub assignee: Option<String>,
     pub pipeline_id: Option<i64>,
     pub cron: Option<String>,
+    pub deadline: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -92,6 +93,10 @@ pub struct UpdateCard<'a> {
     pub title: &'a str,
     pub description: &'a str,
     pub assignee: Option<&'a str>,
+    /// Empty string clears the deadline; NULL keeps it unset.
+    pub deadline: Option<&'a str>,
+    /// None leaves the priority unchanged.
+    pub priority: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -197,6 +202,9 @@ CREATE INDEX IF NOT EXISTS kanban_comments_card_idx ON kanban_comments (card_id,
     r#"
 ALTER TABLE kanban_cards ADD COLUMN IF NOT EXISTS cron TEXT;
 "#,
+    r#"
+ALTER TABLE kanban_cards ADD COLUMN IF NOT EXISTS deadline TEXT;
+"#,
 ];
 
 impl Store {
@@ -216,7 +224,7 @@ impl Store {
         let rows = sqlx::query_as!(
             CardRow,
             r#"SELECT id, column_id, project_id, title, description,
-                      priority, position, agent_name, agent_state, assignee, pipeline_id, cron
+                      priority, position, agent_name, agent_state, assignee, pipeline_id, cron, deadline
                FROM kanban_cards
                WHERE ($1::bigint IS NULL OR project_id = $1)
                ORDER BY column_id, position, id"#,
@@ -249,7 +257,7 @@ impl Store {
         let row = sqlx::query_as!(
             CardRow,
             r#"SELECT id, column_id, project_id, title, description,
-                      priority, position, agent_name, agent_state, assignee, pipeline_id, cron
+                      priority, position, agent_name, agent_state, assignee, pipeline_id, cron, deadline
                FROM kanban_cards WHERE id = $1"#,
             id
         )
@@ -346,12 +354,15 @@ impl Store {
     pub async fn update_card(&self, u: UpdateCard<'_>) -> Result<(), StoreError> {
         let res = sqlx::query!(
             r#"UPDATE kanban_cards
-               SET title = $2, description = $3, assignee = $4
+               SET title = $2, description = $3, assignee = $4,
+                   deadline = NULLIF($5, ''), priority = COALESCE($6, priority)
                WHERE id = $1"#,
             u.id,
             u.title,
             u.description,
             u.assignee,
+            u.deadline,
+            u.priority,
         )
         .execute(&self.pool)
         .await?;
@@ -418,7 +429,7 @@ impl Store {
         let row = sqlx::query_as!(
             CardRow,
             r#"SELECT id, column_id, project_id, title, description,
-                      priority, position, agent_name, agent_state, assignee, pipeline_id, cron
+                      priority, position, agent_name, agent_state, assignee, pipeline_id, cron, deadline
                FROM kanban_cards WHERE id = $1"#,
             id
         )
@@ -430,12 +441,15 @@ impl Store {
     pub async fn update_card_tx(&self, tx: &mut DbTx, u: UpdateCard<'_>) -> Result<(), StoreError> {
         let res = sqlx::query!(
             r#"UPDATE kanban_cards
-               SET title = $2, description = $3, assignee = $4
+               SET title = $2, description = $3, assignee = $4,
+                   deadline = NULLIF($5, ''), priority = COALESCE($6, priority)
                WHERE id = $1"#,
             u.id,
             u.title,
             u.description,
             u.assignee,
+            u.deadline,
+            u.priority,
         )
         .execute(&mut **tx)
         .await?;
