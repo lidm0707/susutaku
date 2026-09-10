@@ -12,3 +12,4 @@ screenshots/
 playwright/test-results/
 playwright/node_modules/
 playwright/screenshots/
+log/

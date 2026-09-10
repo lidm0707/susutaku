@@ -69,7 +69,7 @@ pub struct CommandReply {
     pub output: String,
 }
 
-fn stats_dto(stats: &susutaku_mlx::engine::GenStats) -> GenStatsDto {
+fn stats_dto(stats: &susutaku_mlx::stats::GenStats) -> GenStatsDto {
     GenStatsDto {
         prompt_tokens: stats.prompt_tokens,
         prompt_tps: stats.prompt_tps(),

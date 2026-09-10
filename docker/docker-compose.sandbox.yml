@@ -1,0 +1,48 @@
+# Backend-in-container sandbox stack: postgres + backend, private only.
+#
+# Fresh everything: dedicated postgres instance with its own database, and a
+# backend that runs agents inside the container via the Linux rootless sandbox
+# (crates/core-agent/src/sandbox/linux.rs). The sandbox refuses to run
+# unsandboxed, so namespace creation must be allowed (security_opt below).
+#
+# No service publishes a port to the host — everything stays on the internal
+# docker network. API tests run inside the container (image ships curl):
+#
+#   docker compose -f docker/docker-compose.sandbox.yml up --build -d
+#   docker compose -f docker/docker-compose.sandbox.yml exec backend \
+#     curl -s http://127.0.0.1:8991/api/health
+#
+# Inference stays remote: SUSUTAKU_LOCAL_MODEL_URL points at the host MLX
+# model server; without it, chat/model endpoints fail but the agent sandbox
+# (POST /api/manager/agents...) works standalone.
+name: susutaku-sandbox
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: susutaku
+      POSTGRES_PASSWORD: susutaku
+      POSTGRES_DB: susutaku_sandbox
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.backend
+      extra_hosts:
+        - "host.docker.internal:host-gateway"
+    environment:
+      DATABASE_URL: postgres://susutaku:susutaku@postgres:5432/susutaku_sandbox
+      # MLX needs Metal -> the model server stays on the host.
+      SUSUTAKU_LOCAL_MODEL_URL: http://host.docker.internal:${MODEL_PORT:-8992}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    # The rootless sandbox needs userns/mount namespaces inside the container;
+    # without these the sandbox refuses to run (by design, no fallback).
+    security_opt:
+      - seccomp=unconfined
+      - apparmor=unconfined
+    depends_on:
+      - postgres
+    restart: unless-stopped

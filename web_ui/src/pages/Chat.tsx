@@ -1,30 +1,21 @@
 import { useEffect, useState } from "react";
+import { Brain, Bot, Send } from "lucide-react";
 import {
-  Brain,
-  Send,
-  Snowflake,
-  Zap,
-} from "lucide-react";
-import { API_BASE, chat_claude, chat_codex, chat_zai, fetch_codex_models, fetch_models, fetch_zai_settings, pretty_name, select_model, size_label, type ChatReply, type CodexModel, type ModelInfo, type ZaiSettings, type ZaiModel } from "../lib.js";
-import ClaudeLogin from "../components/ClaudeLogin.tsx";
-import CodexLogin from "../components/CodexLogin.tsx";
-
-interface Msg {
-  role: "user" | "assistant";
-  text: string;
-  pending?: boolean;
-  thinking?: string;
-  model?: string;
-  prompt_tps?: number;
-  tps?: number;
-  searched?: boolean;
-  tok?: string;
-}
-
-const CODEX = "codex";
-const CLAUDE = "claude";
-const ZAI = "zai";
-const DEFAULT_CODEX_MODEL = "gpt-5-codex"; // used until the account's model list loads
+  API_BASE,
+  chat_codex,
+  chat_zai,
+  fetch_agents,
+  fetch_codex_models,
+  fetch_models,
+  fetch_system_prompt,
+  pretty_name,
+  select_model,
+  type Agent,
+  type ChatReply,
+  type CodexModel,
+  type ModelInfo,
+  type PromptSection,
+} from "../lib.js";
 
 const MAX_TOKENS = 512;
 
@@ -42,91 +33,94 @@ function split_thinking(text: string): { thinking: string; reply: string } {
   return { thinking, reply };
 }
 
-export function EngineIcon({ engine }: { engine: string }) {
-  return engine === "gguf" ? <Snowflake size={14} /> : <Zap size={14} />;
+interface Msg {
+  role: "user" | "assistant";
+  text: string;
+  pending?: boolean;
+  thinking?: string;
+  model?: string;
+  prompt_tps?: number;
+  tps?: number;
 }
 
 export default function Chat() {
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
-  const [search, setSearch] = useState("auto");
-  const [tok, setTok] = useState("normal");
   const [models, setModels] = useState<ModelInfo[]>([]);
-  const [model, setModel] = useState("");
   const [codexModels, setCodexModels] = useState<CodexModel[]>([]);
-  const [codexModel, setCodexModel] = useState(DEFAULT_CODEX_MODEL);
-  const [zaiModel, setZaiModel] = useState("");
-  const [zaiModels, setZaiModels] = useState<ZaiModel[]>([]);
+  const [agents, setAgents] = useState<Agent[]>([]);
+  const [agentId, setAgentId] = useState<number | null>(null);
+  const [sysPrompt, setSysPrompt] = useState("");
   const [error, setError] = useState("");
-  const selected = models.find((m) => m.name === model);
+  const agent = agents.find((a) => a.id === agentId) ?? null;
 
   useEffect(() => {
-    fetch_models()
-      .then(async (list) => {
-        setModels(list);
-        const sel = list.find((m) => m.selected) || list[0];
-        if (sel) {
-          setModel(sel.name);
-          if (!sel.selected && sel.loadable) await pick(sel.name).catch(() => {});
-        }
+    fetch_models().then(setModels).catch(() => {});
+    fetch_codex_models().then(setCodexModels).catch(() => {});
+    fetch_agents()
+      .then((list: Agent[]) => {
+        const real = list.filter((a) => a.id !== "new");
+        setAgents(real);
+        if (real.length && agentId == null) setAgentId(real[0].id as number);
       })
       .catch(() => {});
-    fetch_codex_models()
-      .then((list) => {
-        setCodexModels(list);
-        if (list.length && !list.some((m) => m.id === codexModel)) {
-          setCodexModel(list[0].id);
-        }
-      })
-      .catch(() => {});
-    fetch_zai_settings()
-      .then((s: ZaiSettings) => {
-        setZaiModels(s.models);
-        if (s.model) setZaiModel(s.model);
-      })
-      .catch(() => {});
+    fetch_system_prompt().then(setSysPrompt).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function pick(next: string) {
-    if (next === CODEX || next === ZAI || next === CLAUDE) {
-      setModel(next);
-      return;
+  function agent_sections(a: Agent): PromptSection[] {
+    const instructions = [a.persona, a.prompt].filter((s) => s.trim()).join("\n\n");
+    return [
+      { role: "system", body: sysPrompt },
+      { role: "instructions", body: instructions },
+    ].filter((s) => s.body.trim());
+  }
+
+  async function send_agent(a: Agent, text: string): Promise<ChatReply> {
+    // The model lists load async — a send before they arrive must not fall
+    // through to the wrong provider, so re-check codex once if still empty.
+    let codex = codexModels;
+    if (!codex.length) {
+      codex = await fetch_codex_models().catch(() => []);
+      setCodexModels(codex);
     }
-    await select_model(next);
-    setModel(next);
+    if (codex.some((m) => m.id === a.model)) return chat_codex(text, a.model);
+    const local = models.find((m) => m.name === a.model);
+    if (local) {
+      if (!local.selected) await select_model(a.model);
+      const res = await fetch(`${API_BASE}/api/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: text, max_tokens: MAX_TOKENS }),
+      });
+      return res.json();
+    }
+    // Like the agents-page test: let the backend resolve the model/key and
+    // report a real error instead of guessing from the async settings list.
+    return chat_zai(text, a.model, agent_sections(a));
   }
 
   async function send(e: React.FormEvent) {
     e.preventDefault();
     const text = input.trim();
     if (!text || busy) return;
+    if (!agent) {
+      setError("no agent — create one under agents");
+      return;
+    }
     setInput("");
     setError("");
     setBusy(true);
     setMessages((m) => [...m, { role: "user", text }, { role: "assistant", text: "", pending: true }]);
     try {
-      const data: ChatReply =
-        model === CODEX
-          ? await chat_codex(text, codexModel)
-          : model === CLAUDE
-          ? await chat_claude(text)
-          : model === ZAI
-            ? await chat_zai(text, zaiModel)
-            : await (
-              await fetch(`${API_BASE}/api/chat`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ message: text, max_tokens: MAX_TOKENS, search, tokenizer: tok }),
-              })
-            ).json();
+      const data: ChatReply = await send_agent(agent, text);
       if (data.reply === undefined) throw new Error(`${data.status || ""} ${JSON.stringify(data)}`);
       const { thinking, reply } = split_thinking(data.reply);
       setMessages((m) =>
         m.map((msg, i) =>
           i === m.length - 1
-            ? { role: "assistant", text: reply, thinking, model: data.model, prompt_tps: data.prompt_tps, tps: data.decode_tps, searched: data.searched, tok: data.tokenizer }
+            ? { role: "assistant", text: reply, thinking, model: data.model, prompt_tps: data.prompt_tps, tps: data.decode_tps }
             : msg
         )
       );
@@ -141,25 +135,18 @@ export default function Chat() {
   return (
     <main className="chat">
       <header>
-        <h1>susutaku</h1>
+        <h1>
+          <img className="title-icon" src="/susutaku_jibi.png" alt="" />
+          susutaku
+        </h1>
         <span className="sub">
-          {model === CODEX
-            ? `codex · ${codexModel}`
-            : model === CLAUDE
-            ? "claude (claude.ai)"
-            : model === ZAI
-              ? `z.ai · ${zaiModel || "glm-4.6"}`
-              : selected
-              ? `${pretty_name(selected.name)} · ${selected.engine.toUpperCase()} · ${size_label(selected.bytes)} · inline`
-              : "—"}
+          {agent
+            ? `${agent.name}${agent.model ? ` · ${pretty_name(agent.model)}` : ""}`
+            : "no agent"}
         </span>
-        <nav className="nav">
-          <ClaudeLogin />
-          <CodexLogin />
-        </nav>
       </header>
       <section className="log">
-        {messages.length === 0 && <p className="empty">Say something to the model.</p>}
+        {messages.length === 0 && <p className="empty">Say something to the agent.</p>}
         {messages.map((m, i) => (
           <div key={i} className={`bubble ${m.role}`}>
             {m.thinking && (
@@ -169,7 +156,7 @@ export default function Chat() {
               </details>
             )}
             <p>{m.text || (m.pending ? "…" : "")}</p>
-            {m.tps && <small>{m.model} · prompt {m.prompt_tps?.toFixed(1)} tok/s · decode {m.tps.toFixed(1)} tok/s{m.searched ? " · searched" : ""}{m.tok === "katgpt" ? " · katgpt" : ""}</small>}
+            {!!m.tps && m.tps > 0 && <small>{m.model} · prompt {m.prompt_tps?.toFixed(1)} tok/s · decode {m.tps.toFixed(1)} tok/s</small>}
           </div>
         ))}
       </section>
@@ -177,75 +164,24 @@ export default function Chat() {
       <form onSubmit={send}>
         <select
           className="search-toggle"
-          value={model}
-          onChange={(e) => pick(e.target.value).catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)))}
-          title="model"
+          value={agentId ?? ""}
+          onChange={(e) => setAgentId(e.target.value === "" ? null : Number(e.target.value))}
+          title="agent"
         >
-          <option value={CODEX}>Codex (ChatGPT)</option>
-          <option value={CLAUDE}>Claude (claude.ai)</option>
-          <option value={ZAI}>Z.ai (GLM)</option>
-          {models.map((m) => (
-            <option key={m.name} value={m.name} disabled={!m.loadable}>
-              {m.selected ? "★ " : ""}{pretty_name(m.name)} ({m.engine.toUpperCase()})
+          {agents.length === 0 && <option value="">no agents yet</option>}
+          {agents.map((a) => (
+            <option key={a.id} value={a.id}>
+              <Bot size={12} />
+              {a.name}{a.model ? ` · ${pretty_name(a.model)}` : ""}
             </option>
           ))}
         </select>
-        {model === CODEX && (
-          <select
-            className="search-toggle"
-            value={codexModel}
-            onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setCodexModel(e.target.value)}
-            title="codex model"
-          >
-            {codexModels.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.label}
-              </option>
-            ))}
-          </select>
-        )}
-        {model === ZAI && (
-          <select
-            className="search-toggle zai-model"
-            value={zaiModel}
-            onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setZaiModel(e.target.value)}
-            title="z.ai model"
-          >
-            {zaiModels.length === 0 && <option value="">glm-4.6 (default)</option>}
-            {zaiModels.map((m) => (
-              <option key={m.model} value={m.model}>
-                {m.model}
-              </option>
-            ))}
-          </select>
-        )}
-        <select
-          className="search-toggle"
-          value={search}
-          onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setSearch(e.target.value)}
-          title="web search mode"
-        >
-          <option value="auto">auto</option>
-          <option value="on">always</option>
-          <option value="off">off</option>
-        </select>
-        <select
-          className="search-toggle"
-          value={tok}
-          onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setTok(e.target.value)}
-          title="tokenizer"
-        >
-          <option value="normal">normal</option>
-          <option value="katgpt">katgpt</option>
-        </select>
         <input
           value={input}
-          onChange={(e: React.ChangeEvent<HTMLInputElement>) => setInput(e.target.value)}
+          onChange={(e) => setInput(e.target.value)}
           placeholder={busy ? "generating…" : "type a message"}
-          disabled={busy}
-          autoFocus
         />
-        <button type="submit" disabled={busy || !input.trim()} title="send">
+        <button type="submit" disabled={busy || !agent}>
           <Send size={16} />
         </button>
       </form>

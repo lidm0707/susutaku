@@ -1,6 +1,6 @@
 //! Inference ports, equivalent to the backend outbound ports.
 
-use susutaku_mlx::engine::GenStats;
+use susutaku_mlx::stats::GenStats;
 use susutaku_mlx::tok::TokKind;
 
 pub struct GenReply {

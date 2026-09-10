@@ -33,6 +33,7 @@ function App() {
   return (
     <WorkspaceProvider>
       <ProjectProvider>
+        <div className="bg-art" aria-hidden="true" />
         <Routes>
         <Route path="/" element={<Login />} />
         <Route path="/login" element={<Navigate to="/" replace />} />

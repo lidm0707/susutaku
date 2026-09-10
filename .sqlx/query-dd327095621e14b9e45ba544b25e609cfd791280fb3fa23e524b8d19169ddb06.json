@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, column_id, project_id, title, description,\n                      priority, position, agent_name, agent_state, assignee, pipeline_id, cron\n               FROM kanban_cards\n               WHERE ($1::bigint IS NULL OR project_id = $1)\n               ORDER BY column_id, position, id",
+  "query": "SELECT id, column_id, project_id, title, description,\n                      priority, position, agent_name, agent_state, assignee, pipeline_id, cron, deadline\n               FROM kanban_cards\n               WHERE ($1::bigint IS NULL OR project_id = $1)\n               ORDER BY column_id, position, id",
   "describe": {
     "columns": [
       {
@@ -62,6 +62,11 @@
         "ordinal": 11,
         "name": "cron",
         "type_info": "Text"
+      },
+      {
+        "ordinal": 12,
+        "name": "deadline",
+        "type_info": "Text"
       }
     ],
     "parameters": {
@@ -81,8 +86,9 @@
       true,
       true,
       true,
+      true,
       true
     ]
   },
-  "hash": "15d6712cb7d5c4ee9711ddeaf356482d079dfb7264ee796a307d057d53f81d65"
+  "hash": "dd327095621e14b9e45ba544b25e609cfd791280fb3fa23e524b8d19169ddb06"
 }

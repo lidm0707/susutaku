@@ -39,6 +39,18 @@ pub struct ZaiSettings {
     pub api_key: Option<String>,
 }
 
+pub fn validate_api_key(raw_key: &str) -> Result<(), String> {
+    const MAX_KEY_LEN: usize = 256;
+    let key = zai_api::client::strip_bearer_scheme(raw_key);
+    if key.chars().any(char::is_whitespace) {
+        return Err("api key must not contain whitespace or newlines".into());
+    }
+    if key.len() > MAX_KEY_LEN {
+        return Err(format!("api key longer than {MAX_KEY_LEN} bytes"));
+    }
+    Ok(())
+}
+
 pub struct SettingsState {
     zai: RwLock<ZaiSettings>,
     client_env: RwLock<Option<ClientEnv>>,
@@ -95,7 +107,8 @@ impl SettingsState {
     pub fn set_zai(&self, api_key: Option<String>, model: Option<String>) -> Result<(), String> {
         let mut zai = self.zai.write().unwrap_or_else(|e| e.into_inner());
         if let Some(k) = api_key.filter(|k| !k.is_empty()) {
-            zai.api_key = Some(k);
+            validate_api_key(&k)?;
+            zai.api_key = Some(k.to_owned());
         }
         if let Some(m) = model.filter(|m| !m.is_empty()) {
             zai.model = Some(m);
@@ -111,6 +124,7 @@ impl SettingsState {
         if api_key.trim().is_empty() {
             return Err("api key is required for a new model".into());
         }
+        validate_api_key(api_key.trim())?;
         let mut zai = self.zai.write().unwrap_or_else(|e| e.into_inner());
         if zai.models.iter().any(|m| m.model == name) {
             return Err(format!("{name} already exists"));
@@ -129,6 +143,7 @@ impl SettingsState {
         if api_key.trim().is_empty() {
             return Err("api key is empty".into());
         }
+        validate_api_key(api_key.trim())?;
         let mut zai = self.zai.write().unwrap_or_else(|e| e.into_inner());
         let entry = zai
             .models

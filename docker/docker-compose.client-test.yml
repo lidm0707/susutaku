@@ -1,0 +1,60 @@
+# Hub + backend + client-node integration test, fully private (no published
+# ports). The hub is a tiny proto-rs stub (crates/proto-rs/examples/hub_stub.rs)
+# that auto-dispatches a probe command to every registering sandbox client and
+# logs the result — no model server needed.
+#
+#   docker compose -f docker/docker-compose.client-test.yml up --build -d
+#   docker compose -f docker/docker-compose.client-test.yml logs hub | grep RESULT
+#
+# Expected: two registrations (backend's worker node + the client container),
+# each with a RESULT showing real sandbox output (uid 0, /workspace).
+name: susutaku-client-test
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: susutaku
+      POSTGRES_PASSWORD: susutaku
+      POSTGRES_DB: susutaku_sandbox
+    restart: unless-stopped
+
+  hub:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.backend
+      target: hub-runtime
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.backend
+      target: backend-runtime
+    environment:
+      DATABASE_URL: postgres://susutaku:susutaku@postgres:5432/susutaku_sandbox
+      SUSUTAKU_HUB_ADDR: hub:8993
+    # Rootless sandbox needs userns/mount namespaces inside the container.
+    security_opt:
+      - seccomp=unconfined
+      - apparmor=unconfined
+    depends_on:
+      - postgres
+      - hub
+    restart: unless-stopped
+
+  client:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.client
+    environment:
+      SUSUTAKU_HUB_ADDR: hub:8993
+      # Worker-only node still inits kanban storage at boot.
+      DATABASE_URL: postgres://susutaku:susutaku@postgres:5432/susutaku_sandbox
+    security_opt:
+      - seccomp=unconfined
+      - apparmor=unconfined
+    depends_on:
+      - postgres
+      - hub
+    restart: unless-stopped

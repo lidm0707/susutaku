@@ -37,6 +37,25 @@ body {
   color: #e6e6ea;
 }
 
+.bg-art {
+  position: fixed;
+  left: 0;
+  bottom: 0;
+  width: 52vw;
+  height: 100vh;
+  background: url("/bg.png") left bottom / contain no-repeat;
+  pointer-events: none;
+  z-index: -1;
+}
+
+.title-icon {
+  width: 1.5em;
+  height: 1.5em;
+  object-fit: contain;
+  border-radius: 0.3em;
+  vertical-align: -0.25em;
+}
+
 .chat {
   max-width: 720px;
   margin: 0 auto;
@@ -959,7 +978,7 @@ header a {
 }
 
 .kanban-col {
-  background: #16161b;
+  background: rgba(22, 22, 27, 0.5);
   border: 1px solid #2a2a32;
   border-radius: 10px;
   padding: 0.6rem;
@@ -977,7 +996,7 @@ header a {
   display: flex;
   flex-direction: column;
   gap: 0.35rem;
-  background: #1c1c22;
+  background: rgba(28, 28, 34, 0.5);
   border: 1px solid #333;
   border-radius: 8px;
   padding: 0.5rem 0.6rem;
@@ -998,7 +1017,7 @@ header a {
 
 .kanban-col.drag-over {
   border-color: #3b6fd4;
-  background: #1a1f2b;
+  background: rgba(26, 31, 43, 0.5);
 }
 
 .kanban-card.dragging {
@@ -1766,7 +1785,7 @@ button {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
-  background: #16161b;
+  background: rgba(22, 22, 27, 0.5);
   border: 1px solid #2a2a32;
   border-radius: 10px;
   padding: 0.6rem;
@@ -1874,7 +1893,7 @@ button {
   flex-direction: column;
   align-items: stretch;
   gap: 0.7rem;
-  background: #16161b;
+  background: rgba(22, 22, 27, 0.5);
   border: 1px solid #2a2a32;
   border-radius: 10px;
   padding: 1rem;

@@ -22,11 +22,11 @@ pub const PROBE_TOOL_LINUX: &str = "awk";
 pub const REPO_URL: &str = "https://github.com/lidm0707/susutaku.git";
 pub const INSTALL_ROOT: &str = "$HOME/.susutaku";
 pub const RUSTUP_URL: &str = "https://sh.rustup.rs";
-pub const HTTP_PORT_ENV: &str = "MODEL_SERVER_HTTP_PORT";
-pub const TCP_PORT_ENV: &str = "MODEL_SERVER_TCP_PORT";
+pub const HTTP_PORT_ENV: &str = "LOCAL_MODEL_HTTP_PORT";
+pub const TCP_PORT_ENV: &str = "LOCAL_MODEL_TCP_PORT";
 pub const DEFAULT_HTTP_PORT: u16 = 8992;
 pub const DEFAULT_TCP_PORT: u16 = 8993;
-pub const SERVER_URL_ENV: &str = "SUSUTAKU_MODEL_SERVER_URL";
+pub const SERVER_URL_ENV: &str = "SUSUTAKU_LOCAL_MODEL_URL";
 pub const HUB_ADDR_ENV: &str = "SUSUTAKU_HUB_ADDR";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -158,7 +158,7 @@ if [ ! -d {INSTALL_ROOT}/src ]; then
 fi
 cd {INSTALL_ROOT}/src
 git pull --ff-only || echo "keeping existing checkout"
-cargo build --release -p model-server -p backend
+cargo build --release -p local-model -p backend
 
 # launch: model hosts run the model server (inference + command hub);
 # workers run the backend client node, which registers with the hub.
@@ -166,8 +166,8 @@ server_host="$(printf '%s\n' '{server_url}' | sed -E 's#^https?://##; s#[:/].*$#
 if [ "$role" = model ]; then
     export {HTTP_PORT_ENV}={DEFAULT_HTTP_PORT} {TCP_PORT_ENV}={DEFAULT_TCP_PORT}
     echo "model host: fetch a checkpoint first if none is under models/ (see Makefile download-model)"
-    nohup ./target/release/model-server >{INSTALL_ROOT}/model-server.log 2>&1 &
-    echo "model-server started (pid $!), logs: {INSTALL_ROOT}/model-server.log"
+    nohup ./target/release/local-model >{INSTALL_ROOT}/local-model.log 2>&1 &
+    echo "local-model started (pid $!), logs: {INSTALL_ROOT}/local-model.log"
 else
     export {SERVER_URL_ENV}="http://$server_host:{DEFAULT_HTTP_PORT}"
     export {HUB_ADDR_ENV}="$server_host:{DEFAULT_TCP_PORT}"

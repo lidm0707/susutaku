@@ -4,7 +4,7 @@ members = [
     "backend",
     "crates/core-agent",
     "crates/proto-rs",
-    "crates/model_server",
+    "crates/local_model",
     "crates/hf_loader",
     "crates/mlx-rs",
     "crates/gguf-rs",
@@ -39,7 +39,7 @@ piplines = { path = "crates/piplines" }
 work = { path = "crates/work" }
 core-agent = { path = "crates/core-agent" }
 proto-rs = { path = "crates/proto-rs" }
-model-server = { path = "crates/model_server" }
+local-model = { path = "crates/local_model" }
 ureq = "2"
 serde_json = "1"
 pdf-extract = "0.7"

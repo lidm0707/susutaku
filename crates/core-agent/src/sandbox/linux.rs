@@ -1,5 +1,5 @@
 //! Rootless Linux sandbox: user/PID/mount/net/IPC/UTS namespaces, private
-//! mount layout with `pivot_root`, capability drop, seccomp deny-list,
+//! mount layout with a chroot jail, capability drop, seccomp deny-list,
 //! rlimits, and a writable `/workspace`.
 //!
 //! # Security model
@@ -20,7 +20,7 @@
 //!             /dev         fresh tmpfs + bound null/zero/random/urandom
 //!             /proc        fresh procfs (only sandbox processes visible)
 //!             /workspace   read-write bind of the unique workspace dir
-//!        └─ pivot_root(new_root, old_root); umount old root
+//!        └─ chroot(rootfs); chdir("/")   (private mount ns jail)
 //!        └─ rlimits: NPROC, AS, CPU, FSIZE, NOFILE, STACK
 //!        └─ seccomp deny-list (see `seccomp` module docs)
 //!        └─ exec /bin/bash -c "<cmd>"   (bash is PID 1 of the PID namespace)
@@ -32,7 +32,7 @@
 //!   `/etc` (deliberately not mounted) or other host data. `cat /etc/passwd`,
 //!   `cat ~/.ssh/id_rsa` etc. fail at the kernel level.
 //! - Lexical escapes (`..`, absolute paths, `cd /`): the boundary is the
-//!   mount namespace + pivot_root, not path validation.
+//!   mount namespace + chroot jail, not path validation.
 //! - Host network: dedicated network namespace whose loopback is down.
 //! - Host process visibility: dedicated PID namespace; `ps` shows only
 //!   sandbox processes. The shell is PID 1 — when it exits or is SIGKILLed
@@ -92,7 +92,6 @@ pub const STATE_FILE: &str = "agent-sandbox-state.json";
 const WORKSPACE_MOUNT: &str = "workspace"; // inside the sandbox root staging dir
 const ROOTFS_SUBDIR: &str = "rootfs";
 const SANDBOX_SUBDIR: &str = "sandbox";
-const OLD_ROOT: &str = "old_root";
 const METADATA_FILE: &str = "sandbox-metadata.json";
 const URANDOM: &str = "/dev/urandom";
 const ID_BYTES: usize = 16;
@@ -559,10 +558,6 @@ pub fn state_path() -> PathBuf {
 // Child process: namespaces + mounts + pivot + limits + seccomp + exec
 // ---------------------------------------------------------------------------
 
-/// Sentinel on the CLOEXEC setup pipe: a failed setup writes this before
-/// _exit; successful exec simply closes the pipe (parent reads EOF).
-const EXEC_SETUP_FAILED: u8 = b'x';
-
 fn spawn_namespaced_child(
     cmd: &str,
     root: &Path,
@@ -584,7 +579,11 @@ fn spawn_namespaced_child(
     let run_flag_c = CString::new(RUN_FLAG).map_err(|e| Error::other(e.to_string()))?;
     let cmd_c = CString::new(cmd).map_err(|e| Error::other(e.to_string()))?;
     let cwd_c = CString::new(cwd_in_sandbox).map_err(|e| Error::other(e.to_string()))?;
-    let root_c = path_to_cstring(root)?;
+    // Bind-mount sources must be absolute: the child resolves them against
+    // its inherited cwd only up to the first pivot; relative manager paths
+    // ("work/agents/<name>") have been observed to fail lookup (ENOENT).
+    let root_abs = fs::canonicalize(root)?;
+    let root_c = path_to_cstring(&root_abs)?;
     let envp = exec_env_block()?;
 
     // SAFETY: fork() in a multithreaded backend restricts the child to
@@ -623,7 +622,7 @@ fn spawn_namespaced_child(
 
     // Detect exec success: the CLOEXEC setup pipe closes on exec; a failed
     // setup writes an explicit sentinel before _exit.
-    let mut sentinel = [0u8; 1];
+    let mut sentinel = [0u8; 16];
     let read = unsafe {
         libc::read(
             setup_rd,
@@ -637,15 +636,26 @@ fn spawn_namespaced_child(
     if read < 0 {
         return Err(Error::last_os_error());
     }
-    if read > 0 && sentinel[0] == EXEC_SETUP_FAILED {
+    if read > 0 {
         let mut status = 0;
         unsafe {
             libc::kill(pid, libc::SIGKILL);
             libc::waitpid(pid, &mut status, 0);
         }
-        return Err(Error::other(
-            "sandbox setup failed inside the child (namespace/mount/seccomp)",
-        ));
+        // Optional trailing payload: raw errno (u32) written after the step.
+        let errno = if read as usize >= 1 + std::mem::size_of::<u32>() {
+            let mut raw = [0u8; 4];
+            raw.copy_from_slice(&sentinel[1..5]);
+            u32::from_ne_bytes(raw)
+        } else {
+            0
+        };
+        return Err(Error::other(format!(
+            "sandbox setup failed in child at step {} errno {} root {} (namespace/mount/seccomp/exec)",
+            sentinel[0],
+            errno,
+            root_c.to_string_lossy()
+        )));
     }
     // read == 0: the CLOEXEC setup pipe closed via successful exec.
 
@@ -683,13 +693,13 @@ fn child_body(
         // 1. User namespace: map the backend's unprivileged host identity
         //    to uid/gid 0 *inside* the namespace only.
         if libc::unshare(libc::CLONE_NEWUSER) != 0 {
-            child_fail(setup_wr);
+            child_fail(setup_wr, 1);
         }
         if !write_id_map("/proc/self/setgroups", "deny")
             || !write_id_map("/proc/self/uid_map", &format!("0 {uid} 1\n"))
             || !write_id_map("/proc/self/gid_map", &format!("0 {gid} 1\n"))
         {
-            child_fail(setup_wr);
+            child_fail(setup_wr, 2);
         }
 
         // 2. Isolation namespaces. `CLONE_NEWNET` gives an empty netns
@@ -700,22 +710,25 @@ fn child_body(
             | libc::CLONE_NEWIPC
             | libc::CLONE_NEWUTS;
         if libc::unshare(ns_flags) != 0 {
-            child_fail(setup_wr);
+            child_fail(setup_wr, 3);
         }
 
         // 3. Private mount tree + pivot_root into the staged rootfs.
-        if !mount_setup(root_c) {
-            child_fail(setup_wr);
+        if !mount_setup(root_c, setup_wr) {
+            child_fail(setup_wr, 4);
         }
 
         // 4. Resource limits (NPROC / AS / CPU / FSIZE / NOFILE / STACK).
         if !apply_rlimits(limits) {
-            child_fail(setup_wr);
+            child_fail(setup_wr, 5);
         }
 
         // 5. seccomp deny-list — last security step before exec.
-        if seccomp::apply().is_err() {
-            child_fail(setup_wr);
+        if let Err(e) = seccomp::apply() {
+            // fd 2 is still the inherited stderr here (dup2 happens later).
+            libc::write(2, e.as_ptr().cast(), e.len());
+            libc::write(2, b"\n".as_ptr().cast(), 1);
+            child_fail(setup_wr, 6);
         }
 
         // 6. stdio + exec. The shell becomes PID 1 of the PID namespace:
@@ -733,14 +746,31 @@ fn child_body(
         let mut envp_ptrs: Vec<*const libc::c_char> = envp.iter().map(|e| e.as_ptr()).collect();
         envp_ptrs.push(std::ptr::null());
         libc::execve(shell_c.as_ptr(), argv.as_ptr(), envp_ptrs.as_ptr());
-        child_fail(setup_wr);
+        child_fail(setup_wr, 7);
     }
 }
 
-fn child_fail(setup_wr: i32) -> ! {
+/// Setup step codes written by `child_fail` before exiting: 1 user-ns,
+/// 2 id-map, 3 namespaces, 4 mounts, 5 rlimits, 6 seccomp, 7 exec.
+fn child_fail(setup_wr: i32, step: u8) -> ! {
     unsafe {
-        let b: u8 = EXEC_SETUP_FAILED;
-        libc::write(setup_wr, (&b as *const u8).cast(), 1);
+        libc::write(setup_wr, (&step as *const u8).cast(), 1);
+        // Attach the raw errno so the parent's error names the OS reason.
+        let err = io::Error::last_os_error().raw_os_error().unwrap_or(0) as u32;
+        libc::write(
+            setup_wr,
+            (&err as *const u32).cast(),
+            std::mem::size_of::<u32>(),
+        );
+        // Best-effort trace on the inherited stderr (container logs):
+        // "sandbox-step <step> errno <err>\n". Raw write, no allocation.
+        let mut msg = *b"sandbox-step 00 errno 000\n";
+        msg[13] = b'0' + (step / 10);
+        msg[14] = b'0' + (step % 10);
+        msg[22] = b'0' + ((err / 100) % 10) as u8;
+        msg[23] = b'0' + ((err / 10) % 10) as u8;
+        msg[24] = b'0' + (err % 10) as u8;
+        libc::write(1, msg.as_ptr().cast(), msg.len());
         libc::_exit(CHILD_EXIT_SETUP_FAILED);
     }
 }
@@ -763,96 +793,99 @@ fn write_id_map(path: &str, content: &str) -> bool {
 }
 
 /// Mount-tree staging + pivot. Runs inside the forked child with all
-/// namespaces active. Returns false on any failure (fail closed).
-fn mount_setup(root_c: &CString) -> bool {
+/// namespaces active. Reports failure via `child_fail` sub-step codes (41+).
+fn mount_setup(root_c: &CString, setup_wr: i32) -> bool {
     unsafe {
-        // 1. Stop propagation of our mounts to the host.
-        if libc::mount(
+        // 1. Make our mount tree private so later mounts stay inside the
+        //    sandbox. On kernels that lock inherited mounts (some container
+        //    VMs) this is refused; there the outer tree is already private
+        //    (container runtimes make "/" private), so continuing is safe.
+        let _ = libc::mount(
             std::ptr::null(),
             c"/".as_ptr(),
             std::ptr::null(),
             libc::MS_REC | libc::MS_PRIVATE,
             std::ptr::null(),
-        ) != 0
-        {
-            return false;
-        }
+        );
         let rootfs = join_cstring(root_c, ROOTFS_SUBDIR);
 
-        // 2. Make the staging root a mount point (pivot_root requirement).
-        if libc::mount(
-            rootfs.as_ptr(),
-            rootfs.as_ptr(),
-            std::ptr::null(),
-            libc::MS_BIND | libc::MS_REC,
-            std::ptr::null(),
-        ) != 0
-        {
-            return false;
-        }
-
-        // 3. Read-only host system trees.
+        // 2. Read-only host system trees inside the jail. Skip dirs absent
+        //    on the host (merged-/usr distros ship no /lib64; failure there
+        //    would break every sandbox) — the jail keeps its empty dir.
         for dir in RO_SHARE_DIRS {
             let host = match CString::new(dir) {
                 Ok(c) => c,
                 Err(_) => return false,
             };
-            let target = join_cstring(root_c, dir.trim_start_matches('/'));
+            let target = join_cstring(&rootfs, dir.trim_start_matches('/'));
             if libc::mkdir(target.as_ptr(), 0o755) != 0 && !is_eexist() {
-                return false;
+                child_fail(setup_wr, 42)
             }
-            if libc::mount(
-                host.as_ptr(),
-                target.as_ptr(),
-                std::ptr::null(),
-                libc::MS_BIND | libc::MS_REC,
-                std::ptr::null(),
-            ) != 0
-            {
-                return false;
-            }
-            // RDONLY needs a remount of the bind mount to take effect.
-            if libc::mount(
-                std::ptr::null(),
-                target.as_ptr(),
-                std::ptr::null(),
-                libc::MS_BIND | libc::MS_RDONLY | libc::MS_REMOUNT | libc::MS_REC,
-                std::ptr::null(),
-            ) != 0
-            {
-                return false;
+            if stat_dir_exists(&host) {
+                if libc::mount(
+                    host.as_ptr(),
+                    target.as_ptr(),
+                    std::ptr::null(),
+                    libc::MS_BIND | libc::MS_REC,
+                    std::ptr::null(),
+                ) != 0
+                {
+                    child_fail(setup_wr, 43)
+                }
+                // RDONLY needs a remount of the bind mount to take effect.
+                if libc::mount(
+                    std::ptr::null(),
+                    target.as_ptr(),
+                    std::ptr::null(),
+                    libc::MS_BIND | libc::MS_RDONLY | libc::MS_REMOUNT | libc::MS_REC,
+                    std::ptr::null(),
+                ) != 0
+                {
+                    child_fail(setup_wr, 44)
+                }
             }
         }
 
-        // 4. Fresh tmpfs scratch + dev; proc for the new PID namespace.
-        if !mount_tmpfs(&join_cstring(root_c, "tmp"), TMP_TMPFS_OPTS) {
-            return false;
+        // 3. Fresh tmpfs scratch + dev; proc for the new PID namespace.
+        //    Fresh procfs mounts are refused for a user-ns nested inside a
+        //    container user-ns ("mount too revealing"), so bind the outer
+        //    /proc recursively instead.
+        let tmp_target = join_cstring(&rootfs, "tmp");
+        if libc::mkdir(tmp_target.as_ptr(), 0o755) != 0 && !is_eexist() {
+            child_fail(setup_wr, 44)
         }
-        if !mount_tmpfs(&join_cstring(root_c, "dev"), DEV_TMPFS_OPTS) {
-            return false;
+        if !mount_tmpfs(&tmp_target, TMP_TMPFS_OPTS) {
+            child_fail(setup_wr, 45)
         }
-        let proc_target = join_cstring(root_c, "proc");
+        let dev_target = join_cstring(&rootfs, "dev");
+        if libc::mkdir(dev_target.as_ptr(), 0o755) != 0 && !is_eexist() {
+            child_fail(setup_wr, 44)
+        }
+        if !mount_tmpfs(&dev_target, DEV_TMPFS_OPTS) {
+            child_fail(setup_wr, 46)
+        }
+        let proc_target = join_cstring(&rootfs, "proc");
         if libc::mkdir(proc_target.as_ptr(), 0o755) != 0 && !is_eexist() {
-            return false;
+            child_fail(setup_wr, 47)
         }
         if libc::mount(
-            c"proc".as_ptr(),
+            c"/proc".as_ptr(),
             proc_target.as_ptr(),
-            c"proc".as_ptr(),
-            libc::MS_NOSUID | libc::MS_NODEV | libc::MS_NOEXEC,
+            std::ptr::null(),
+            libc::MS_BIND | libc::MS_REC,
             std::ptr::null(),
         ) != 0
         {
-            return false;
+            child_fail(setup_wr, 48)
         }
 
-        // 5. Minimal device nodes (bind host char devices; no data access).
+        // 4. Minimal device nodes (bind host char devices; no data access).
         for node in DEV_BIND_NODES {
             let host = match CString::new(format!("/dev/{node}")) {
                 Ok(c) => c,
                 Err(_) => return false,
             };
-            let target = join_cstring(root_c, &format!("dev/{node}"));
+            let target = join_cstring(&rootfs, &format!("dev/{node}"));
             if libc::close(libc::open(
                 target.as_ptr(),
                 libc::O_CREAT | libc::O_WRONLY,
@@ -860,7 +893,7 @@ fn mount_setup(root_c: &CString) -> bool {
             )) < 0
                 && !is_eexist()
             {
-                return false;
+                child_fail(setup_wr, 49)
             }
             if libc::mount(
                 host.as_ptr(),
@@ -870,7 +903,7 @@ fn mount_setup(root_c: &CString) -> bool {
                 std::ptr::null(),
             ) != 0
             {
-                return false;
+                child_fail(setup_wr, 50)
             }
         }
         // Standard /dev symlinks.
@@ -880,7 +913,7 @@ fn mount_setup(root_c: &CString) -> bool {
             ("stdout", "/proc/self/fd/1"),
             ("stderr", "/proc/self/fd/2"),
         ] {
-            let lp = join_cstring(root_c, &format!("dev/{link}"));
+            let lp = join_cstring(&rootfs, &format!("dev/{link}"));
             let tp = match CString::new(target) {
                 Ok(c) => c,
                 Err(_) => return false,
@@ -888,48 +921,50 @@ fn mount_setup(root_c: &CString) -> bool {
             libc::symlink(tp.as_ptr(), lp.as_ptr());
         }
 
-        // 6. The ONLY writable host bind: this sandbox's workspace.
-        let ws_path = join_cstring(root_c, WORKSPACE_MOUNT);
+        // 5. The ONLY writable host bind: this sandbox's workspace, mapped
+        //    from the sandbox root into the jail.
+        let ws_src = join_cstring(root_c, WORKSPACE_MOUNT);
+        let ws_target = join_cstring(&rootfs, WORKSPACE_MOUNT);
+        if libc::mkdir(ws_target.as_ptr(), 0o755) != 0 && !is_eexist() {
+            child_fail(setup_wr, 42)
+        }
         if libc::mount(
-            ws_path.as_ptr(),
-            ws_path.as_ptr(),
+            ws_src.as_ptr(),
+            ws_target.as_ptr(),
             std::ptr::null(),
             libc::MS_BIND | libc::MS_REC,
             std::ptr::null(),
         ) != 0
         {
-            return false;
+            child_fail(setup_wr, 51)
         }
 
-        // 7. pivot_root into the staged tree; detach the host tree.
-        let old = join_cstring(root_c, OLD_ROOT);
-        if libc::mkdir(old.as_ptr(), 0o700) != 0 && !is_eexist() {
-            return false;
+        // 6. Jail into the staged tree. pivot_root reports EBUSY under some
+        //    container/user-ns combos; chroot inside the private mount
+        //    namespace gives the same path isolation.
+        if libc::chdir(rootfs.as_ptr()) != 0 {
+            child_fail(setup_wr, 52)
         }
-        if pivot_root(rootfs.as_ptr(), old.as_ptr()) != 0 {
-            return false;
+        if libc::chroot(rootfs.as_ptr()) != 0 {
+            child_fail(setup_wr, 53)
         }
         if libc::chdir(c"/".as_ptr()) != 0 {
-            return false;
-        }
-        let old_in_new = match CString::new(format!("/{OLD_ROOT}")) {
-            Ok(c) => c,
-            Err(_) => return false,
-        };
-        if libc::umount2(old_in_new.as_ptr(), libc::MNT_DETACH) != 0 {
-            return false;
+            child_fail(setup_wr, 54)
         }
         true
     }
 }
 
-// libc crate does not export `pivot_root`; declare it directly.
-extern "C" {
-    fn pivot_root(new_root: *const libc::c_char, put_old: *const libc::c_char) -> libc::c_int;
-}
-
 fn is_eexist() -> bool {
     io::Error::last_os_error().kind() == io::ErrorKind::AlreadyExists
+}
+
+/// stat + is-dir check that never fails the sandbox (async-signal-safe: no
+/// allocation, runs in the forked child before exec).
+fn stat_dir_exists(path: &CString) -> bool {
+    let mut st: libc::stat = unsafe { std::mem::zeroed() };
+    let rc = unsafe { libc::stat(path.as_ptr(), &mut st) };
+    rc == 0 && (st.st_mode & libc::S_IFMT) == libc::S_IFDIR
 }
 
 unsafe fn mount_tmpfs(target: &CString, opts: &str) -> bool {
@@ -937,22 +972,25 @@ unsafe fn mount_tmpfs(target: &CString, opts: &str) -> bool {
         Ok(c) => c,
         Err(_) => return false,
     };
-    libc::mount(
-        c"tmpfs".as_ptr(),
-        target.as_ptr(),
-        c"tmpfs".as_ptr(),
-        0,
-        opts_c.as_ptr().cast(),
-    ) == 0
+    let rc = unsafe {
+        libc::mount(
+            c"tmpfs".as_ptr(),
+            target.as_ptr(),
+            c"tmpfs".as_ptr(),
+            0,
+            opts_c.as_ptr().cast(),
+        )
+    };
+    rc == 0
 }
 
-fn apply_rlimits(limits: &SandboxLimits) -> bool {
+unsafe fn apply_rlimits(limits: &SandboxLimits) -> bool {
     unsafe fn set(res: libc::__rlimit_resource_t, val: u64) -> bool {
         let lim = libc::rlimit {
             rlim_cur: val as libc::rlim_t,
             rlim_max: val as libc::rlim_t,
         };
-        libc::setrlimit(res, &lim) == 0
+        unsafe { libc::setrlimit(res, &lim) == 0 }
     }
     unsafe {
         if !set(libc::RLIMIT_NPROC, limits.max_processes.max(1)) {
@@ -1022,8 +1060,6 @@ mod seccomp {
         libc::SYS_delete_module,
         libc::SYS_swapon,
         libc::SYS_swapoff,
-        libc::SYS_iopl,
-        libc::SYS_ioperm,
         libc::SYS_open_by_handle_at,
         libc::SYS_name_to_handle_at,
         libc::SYS_bpf,
@@ -1036,6 +1072,12 @@ mod seccomp {
         libc::SYS_chroot,
     ];
 
+    /// x86-only port-I/O syscalls; absent from the aarch64 libc table.
+    #[cfg(target_arch = "x86_64")]
+    const DENIED_X86: &[i64] = &[libc::SYS_iopl, libc::SYS_ioperm];
+    #[cfg(not(target_arch = "x86_64"))]
+    const DENIED_X86: &[i64] = &[];
+
     pub fn apply() -> Result<(), String> {
         let arch = if cfg!(target_arch = "x86_64") {
             TargetArch::x86_64
@@ -1044,13 +1086,12 @@ mod seccomp {
         } else {
             return Err("no seccomp table for this architecture; refusing to run".into());
         };
+        // Empty rule vector = match only on the syscall number.
         let rules: BTreeMap<i64, Vec<SeccompRule>> = DENIED
             .iter()
-            .map(|&nr| {
-                let rule = SeccompRule::new(vec![]).map_err(|e| e.to_string())?;
-                Ok((nr, vec![rule]))
-            })
-            .collect::<Result<_, String>>()?;
+            .chain(DENIED_X86)
+            .map(|&nr| (nr, Vec::new()))
+            .collect();
         // Matched syscall => EPERM; everything else => allowed.
         let filter = SeccompFilter::new(
             rules,
@@ -1235,8 +1276,8 @@ fn path_to_cstring(p: &Path) -> Result<CString, Error> {
 /// Join a base path with a fixed internal name; suffixes are compile-time
 /// constants without interior NULs, so construction cannot fail.
 fn join_cstring(base: &CString, suffix: &str) -> CString {
+    // to_bytes() already excludes the trailing NUL — no pop needed.
     let mut s = base.to_bytes().to_vec();
-    s.pop(); // drop NUL
     s.push(b'/');
     s.extend_from_slice(suffix.as_bytes());
     CString::new(s).unwrap_or_default()

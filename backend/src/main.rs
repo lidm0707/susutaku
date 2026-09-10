@@ -5,31 +5,37 @@ use backend::api;
 use backend::app::ChatUseCase;
 use backend::infra::client_node::ClientNode;
 use backend::infra::kanban;
-use manager_rs::ManagerProcess;
 use backend::infra::model_client::RemoteModel;
 use backend::infra::sandbox::AgentSandbox;
 use backend::infra::search::{DuckDuckGo, PageFetcher};
+use manager_rs::ManagerProcess;
 
 const PORT: u16 = 8991;
 const SERVER_URL: &str = "http://127.0.0.1:8992";
-const HUB_ADDR: &str = "127.0.0.1:8993";
-const SERVER_URL_ENV: &str = "SUSUTAKU_MODEL_SERVER_URL";
+const SERVER_URL_ENV: &str = "SUSUTAKU_LOCAL_MODEL_URL";
 const HUB_ADDR_ENV: &str = "SUSUTAKU_HUB_ADDR";
 
 fn env_or(key: &str, default: &str) -> String {
     std::env::var(key).unwrap_or_else(|_| default.to_string())
 }
 
-#[tokio::main]
-async fn main() {
-    let model = Arc::new(RemoteModel::new(&env_or(SERVER_URL_ENV, SERVER_URL)));
-    let sandbox = Arc::new(AgentSandbox::restore().expect("agent sandbox init"));
-    let node = ClientNode::new(&env_or(HUB_ADDR_ENV, HUB_ADDR), sandbox.clone());
+async fn spawn_client_node(sandbox: Arc<AgentSandbox>) {
+    let Ok(hub_addr) = std::env::var(HUB_ADDR_ENV) else {
+        return;
+    };
+    let node = ClientNode::new(&hub_addr, sandbox);
     tokio::spawn(async move {
         if let Err(err) = node.run().await {
             eprintln!("client node stopped: {err}");
         }
     });
+}
+
+#[tokio::main]
+async fn main() {
+    let model = Arc::new(RemoteModel::new(&env_or(SERVER_URL_ENV, SERVER_URL)));
+    let sandbox = Arc::new(AgentSandbox::restore().expect("agent sandbox init"));
+    spawn_client_node(sandbox.clone()).await;
     let codex_workspace = sandbox.root();
     let use_case = Arc::new(ChatUseCase::new(
         Arc::new(DuckDuckGo),

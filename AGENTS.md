@@ -26,6 +26,28 @@
 - `attachments/` — file attachment storage (see `docs/attachments.md`)
 - `piplines/`, `input/`, `output/`, `web_ui/` — pipeline and UI assets (`web_ui` includes a Kanban board page backed by `crates/kanban-rs` + Postgres)
 
+## Backend in Docker (standalone)
+
+- The backend can run alone in a container (`docker/Dockerfile.backend`,
+  `debian:stable-slim`) and execute agents in-container: on Linux it uses the
+  rootless sandbox in `crates/core-agent/src/sandbox/linux.rs` (userns +
+  mount ns + chroot jail + seccomp deny-list). No macOS/Metal dependency in
+  the agent path. Verified end-to-end: spawn → run (real stdout, jailed fs,
+  workspace persistence across runs) → finish, all inside a private
+  compose stack (`docker/docker-compose.sandbox.yml` — postgres + backend,
+  no published ports; test via `docker compose exec` + curl).
+- Required compose flags — the sandbox refuses to run unsandboxed, so
+  namespace creation must be allowed:
+  `security_opt: [seccomp=unconfined, apparmor=unconfined]`.
+- Inference is always remote: `main.rs` builds `RemoteModel` from
+  `SUSUTAKU_LOCAL_MODEL_URL` (default `127.0.0.1:8992`). In a container set it
+  to the host model server (`http://host.docker.internal:8992`) — MLX itself
+  never runs inside the backend container.
+- `DATABASE_URL` must point at the postgres service (not `localhost:5434`).
+- Sandbox network is loopback-only (`linux.rs` limitations): agent commands
+  inside the sandbox have no internet; `claude`/`codex` CLIs must be baked
+  into the image to be usable and run outside the sandbox.
+
 ## Kanban Postgres
 
 - Postgres runs via `docker/docker-compose.yml` (`postgres` service, host port **5434** — 5432/5433 are taken by other local containers).

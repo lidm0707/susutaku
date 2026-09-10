@@ -1,4 +1,4 @@
-//! Client node: registers with the model-server hub and runs commands in the
+//! Client node: registers with the local-model hub and runs commands in the
 //! agent sandbox.
 
 use std::sync::Arc;

@@ -8,6 +8,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 const CALLBACK_PORT: u16 = 1455;
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(600);
+const WATCH_POLL_MS: u64 = 50;
 const HTTP_OK: &str = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nConnection: close\r\n\r\n";
 const CALLBACK_HTML: &str =
     "<html><body><p>Codex login complete. You can close this tab.</p></body></html>";
@@ -23,6 +24,9 @@ pub enum LoginPhase {
 
 pub struct CodexAuth {
     phase: RwLock<LoginPhase>,
+    /// Pending `codex login` child, kept so a new start can cancel it
+    /// (the CLI owns callback port 1455 and its OAuth state).
+    child: RwLock<Option<std::process::Child>>,
     /// Agent sandbox workspace used as cwd for `codex exec`.
     workspace: PathBuf,
 }
@@ -40,6 +44,7 @@ impl CodexAuth {
     pub fn new(workspace: PathBuf) -> Self {
         Self {
             phase: RwLock::new(LoginPhase::Idle),
+            child: RwLock::new(None),
             workspace,
         }
     }
@@ -48,17 +53,72 @@ impl CodexAuth {
         &self.workspace
     }
 
-    /// Begin a login: create the PKCE verifier, start the loopback listener,
-    /// return the authorize URL for the browser.
-    pub fn start(self: &Arc<Self>) -> Result<String, String> {
-        let mut phase = self.phase.write().map_err(|_| "login state poisoned")?;
-        if matches!(&*phase, LoginPhase::Awaiting) {
-            return Err("login already in progress".into());
+    /// Begin a login. Prefers delegating to the real `codex login` (the CLI
+    /// owns the OAuth flow and writes `auth.json` itself); falls back to the
+    /// hand-rolled PKCE flow when the CLI is not installed. Returns the
+    /// authorize URL for the browser.
+    pub async fn start(self: &Arc<Self>) -> Result<String, String> {
+        eprintln!(
+            "[codex-auth] start: phase={:?}",
+            self.phase.read().unwrap_or_else(|e| e.into_inner())
+        );
+        {
+            let mut phase = self.phase.write().map_err(|_| "login state poisoned")?;
+            if matches!(&*phase, LoginPhase::Awaiting) {
+                // Cancel the stale login: its listener on 1455 would swallow
+                // the new callback (state mismatch) and wedge the UI polling.
+                eprintln!("[codex-auth] cancelling stale login child");
+                self.cancel_child();
+                *phase = LoginPhase::Idle;
+            }
         }
+        match self.begin_login().await {
+            Ok(url) => {
+                let mut phase = self.phase.write().map_err(|_| "login state poisoned")?;
+                *phase = LoginPhase::Awaiting;
+                eprintln!("[codex-auth] awaiting login, authorize url issued");
+                Ok(url)
+            }
+            Err(e) => {
+                eprintln!("[codex-auth] start failed: {e}");
+                let mut phase = self.phase.write().map_err(|_| "login state poisoned")?;
+                *phase = LoginPhase::Failed(e.clone());
+                Err(e)
+            }
+        }
+    }
+
+    fn cancel_child(&self) {
+        if let Some(mut child) = self.child.write().unwrap_or_else(|e| e.into_inner()).take() {
+            let killed = child.kill().is_ok();
+            let waited = child
+                .wait()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|e| e.to_string());
+            eprintln!("[codex-auth] stale child killed={killed} wait={waited}");
+        }
+    }
+
+    /// Spawn the actual login flow (CLI-delegated when available) and return
+    /// the authorize URL. The phase lock is not held across the awaits here.
+    async fn begin_login(self: &Arc<Self>) -> Result<String, String> {
+        if codex_cli::check_available().is_ok() {
+            let home = codex_home();
+            eprintln!(
+                "[codex-auth] cli available, spawning codex login (home={})",
+                home.display()
+            );
+            let spawned = tokio::task::spawn_blocking(move || codex_cli::login(&home))
+                .await
+                .map_err(|e| e.to_string())?;
+            let (child, url) = spawned.map_err(|e| e.to_string())?;
+            *self.child.write().unwrap_or_else(|e| e.into_inner()) = Some(child);
+            tokio::spawn(self.clone().watch());
+            return Ok(url);
+        }
+        eprintln!("[codex-auth] cli missing, using fallback pkce flow");
         let verifier = codex_cli::new_verifier();
-        let url = codex_cli::authorize_url(&verifier);
-        *phase = LoginPhase::Awaiting;
-        drop(phase);
+        let url = codex_cli::authorize_url(&verifier).map_err(|e| e.to_string())?;
         tokio::spawn(self.clone().run(verifier));
         Ok(url)
     }
@@ -76,10 +136,59 @@ impl CodexAuth {
         }
     }
 
+    /// Poll the pending `codex login` until it exits (auth.json written →
+    /// idle) or is cancelled by a newer start (no phase change). Blocking
+    /// `wait()` is avoided so the child stays killable from `cancel_child`.
+    async fn watch(self: Arc<Self>) {
+        loop {
+            tokio::time::sleep(Duration::from_millis(WATCH_POLL_MS)).await;
+            let status = match self
+                .child
+                .write()
+                .unwrap_or_else(|e| e.into_inner())
+                .as_mut()
+            {
+                // Cancelled by a newer start — it owns the phase now.
+                None => return,
+                Some(child) => child.try_wait(),
+            };
+            match status {
+                // Still running — keep polling.
+                Ok(None) => {}
+                Ok(Some(s)) if s.success() => {
+                    eprintln!("[codex-auth] login child exited ok");
+                    self.finish(LoginPhase::Idle);
+                    return;
+                }
+                Ok(Some(s)) => {
+                    // The CLI can exit non-zero after it has already written
+                    // auth.json (observed: status 101 post-exchange), so trust
+                    // the credential file over the exit code.
+                    if codex_cli::check(&codex_home()) == codex_cli::AuthStatus::LoggedIn {
+                        eprintln!(
+                            "[codex-auth] login child exited with {s}, but auth.json is valid"
+                        );
+                        self.finish(LoginPhase::Idle);
+                    } else {
+                        eprintln!("[codex-auth] login child failed: {s}");
+                        self.finish(LoginPhase::Failed(format!("codex login exited with {s}")));
+                    }
+                }
+                Err(e) => {
+                    eprintln!("[codex-auth] login child wait error: {e}");
+                    self.finish(LoginPhase::Failed(e.to_string()));
+                    return;
+                }
+            }
+        }
+    }
+
     async fn run(self: Arc<Self>, verifier: String) {
+        eprintln!("[codex-auth] fallback flow waiting on callback port {CALLBACK_PORT}");
         let code = match callback_code().await {
             Ok(code) => code,
             Err(e) => {
+                eprintln!("[codex-auth] fallback callback error: {e}");
                 self.finish(LoginPhase::Failed(e));
                 return;
             }
@@ -89,9 +198,18 @@ impl CodexAuth {
             tokio::task::spawn_blocking(move || codex_cli::login_callback(&code, &verifier, &home))
                 .await;
         match res {
-            Ok(Ok(_)) => self.finish(LoginPhase::Idle),
-            Ok(Err(e)) => self.finish(LoginPhase::Failed(e.to_string())),
-            Err(e) => self.finish(LoginPhase::Failed(e.to_string())),
+            Ok(Ok(_)) => {
+                eprintln!("[codex-auth] fallback token exchange ok");
+                self.finish(LoginPhase::Idle);
+            }
+            Ok(Err(e)) => {
+                eprintln!("[codex-auth] fallback token exchange failed: {e}");
+                self.finish(LoginPhase::Failed(e.to_string()));
+            }
+            Err(e) => {
+                eprintln!("[codex-auth] fallback exchange task error: {e}");
+                self.finish(LoginPhase::Failed(e.to_string()));
+            }
         }
     }
 

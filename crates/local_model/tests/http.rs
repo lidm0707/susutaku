@@ -2,9 +2,9 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::http::StatusCode;
-use model_server::api::{AppState, InferenceRequest, router};
-use model_server::hub::Hub;
-use model_server::ports::{Inference, ModelSwitch, ReplyRx};
+use local_model::api::{AppState, InferenceRequest, router};
+use local_model::hub::Hub;
+use local_model::ports::{Inference, ModelSwitch, ReplyRx};
 use proto_rs::client;
 use susutaku_mlx::tok::TokKind;
 use tokio::net::TcpListener;

@@ -1905,6 +1905,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "47d9d19d1d6efa0109d2f65ff4c85cddd50bd572e5a00127ab10987290bcefae"
 
 [[package]]
+name = "local-model"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "gguf-rs",
+ "hf_loader",
+ "proto-rs",
+ "serde",
+ "serde_json",
+ "susutaku-mlx",
+ "tokio",
+]
+
+[[package]]
 name = "lock_api"
 version = "0.4.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2131,20 +2145,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
-]
-
-[[package]]
-name = "model-server"
-version = "0.1.0"
-dependencies = [
- "axum",
- "gguf-rs",
- "hf_loader",
- "proto-rs",
- "serde",
- "serde_json",
- "susutaku-mlx",
- "tokio",
 ]
 
 [[package]]

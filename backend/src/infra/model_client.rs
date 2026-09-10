@@ -1,6 +1,6 @@
-//! Remote provider client: model-server HTTP adapter.
+//! Remote provider client: local-model HTTP adapter.
 
-use susutaku_mlx::engine::GenStats;
+use susutaku_mlx::stats::GenStats;
 use susutaku_mlx::tok::TokKind;
 
 use crate::port::outbound::{GenReply, Inference, ModelSwitch, ReplyRx};

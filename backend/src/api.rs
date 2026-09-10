@@ -517,7 +517,7 @@ async fn chat<T: ChatHandling>(
 async fn codex_start(
     State(auth): State<Arc<CodexAuth>>,
 ) -> Result<Json<CodexStartReply>, ApiError> {
-    let authorize_url = auth.start().map_err(ApiError::bad_request)?;
+    let authorize_url = auth.start().await.map_err(ApiError::bad_request)?;
     Ok(Json(CodexStartReply { authorize_url }))
 }
 

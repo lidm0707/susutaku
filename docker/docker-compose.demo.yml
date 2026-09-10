@@ -1,0 +1,59 @@
+# One-command demo stack: everything in Docker, nothing to build by hand.
+#
+#   postgres + mock-model + backend + web, private docker network.
+#   Only the web UI is reachable from the host, loopback-only
+#   (127.0.0.1:3334) — pg / backend / mock-model publish NO ports.
+#
+#   docker compose -f docker/docker-compose.demo.yml up --build -d
+#   open http://localhost:3334
+name: susutaku-demo
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: susutaku
+      POSTGRES_PASSWORD: susutaku
+      POSTGRES_DB: susutaku_demo
+    restart: unless-stopped
+
+  mock-model:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.mock-model
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.backend
+      # Default stage is hub-runtime (hub_stub); we need the API server.
+      target: backend-runtime
+    extra_hosts:
+      # sqlx query! macros check against the host postgres (port 5434)
+      # at compile time — keep `make db` up while the image builds.
+      - "host.docker.internal:host-gateway"
+    environment:
+      DATABASE_URL: postgres://susutaku:susutaku@postgres:5432/susutaku_demo
+      SUSUTAKU_LOCAL_MODEL_URL: http://mock-model:8992
+    # The agent sandbox refuses to run unsandboxed (namespace creation needed).
+    security_opt:
+      - seccomp=unconfined
+      - apparmor=unconfined
+    depends_on:
+      - postgres
+      - mock-model
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.web
+    ports:
+      # Loopback-only: reachable from this machine's browser, not the LAN.
+      - "127.0.0.1:3334:80"
+    environment:
+      BACKEND_URL: http://backend:8991
+    depends_on:
+      - backend
+    restart: unless-stopped

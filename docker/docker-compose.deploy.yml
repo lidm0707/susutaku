@@ -1,0 +1,71 @@
+# One-compose deploy: postgres + backend + web (nginx), private network.
+#
+#   docker compose -f docker/docker-compose.deploy.yml up --build -d
+#
+# Inference is remote (no Metal in containers): the backend's "local model"
+# provider talks to SUSUTAKU_LOCAL_MODEL_URL — run the model server on the
+# host (e.g. :8992) or point the env at any reachable model server.
+# Only the web UI is published, loopback-only.
+name: susutaku-deploy
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: susutaku
+      POSTGRES_PASSWORD: susutaku
+      POSTGRES_DB: susutaku
+    volumes:
+      - deploy-pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  mock-model:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.mock-model
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.backend
+      # Default stage is hub-runtime; we need the API server.
+      target: backend-runtime
+    environment:
+      DATABASE_URL: postgres://susutaku:susutaku@postgres:5432/susutaku
+      # Default: bundled mock model. For real inference run an MLX server on
+      # the host (:8992) and set SUSUTAKU_LOCAL_MODEL_URL=http://host.docker.internal:8992.
+      SUSUTAKU_LOCAL_MODEL_URL: ${SUSUTAKU_LOCAL_MODEL_URL:-http://mock-model:8992}
+      # codex login writes auth.json here; keep it on a volume so the
+      # ChatGPT login survives container restarts.
+      CODEX_HOME: /data/codex-home
+    ports:
+      # OAuth loopback callback for `codex login`: the browser's redirect to
+      # http://localhost:1455 must reach the CLI listener inside the container.
+      - "127.0.0.1:1455:1455"
+    volumes:
+      - codex-home:/data/codex-home
+    security_opt:
+      - seccomp=unconfined
+      - apparmor=unconfined
+    depends_on:
+      - postgres
+      - mock-model
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.web
+    ports:
+      # Loopback-only UI; pg / backend publish nothing.
+      - "127.0.0.1:3334:80"
+    environment:
+      BACKEND_URL: http://backend:8991
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  deploy-pgdata:
+  codex-home:

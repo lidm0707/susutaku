@@ -16,7 +16,7 @@ pub struct ChatOutcome {
     pub model: Option<String>,
     pub text: String,
     pub searched: bool,
-    pub stats: susutaku_mlx::engine::GenStats,
+    pub stats: susutaku_mlx::stats::GenStats,
 }
 
 pub trait ChatHandling: Send + Sync {

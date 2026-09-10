@@ -3,16 +3,16 @@
 Three kinds of machines:
 
 - **backend** — the brain host: serves the web UI/API on :8991, runs the
-  manager process (one sandbox per agent), and connects to `model-server`
+  manager process (one sandbox per agent), and connects to `local-model`
   for inference. Never runs model code inline.
 - **client machine** — runs the installed `backend` binary in *client mode*:
-  it registers with the model-server hub over TCP and executes dispatched
+  it registers with the local-model hub over TCP and executes dispatched
   commands in its platform sandbox (macOS seatbelt, Linux namespaces,
   Windows WSL/restricted token). It runs no web UI and no models.
 - **web UI** — any browser pointed at `http://<backend>:8991`; talks only to
-  the backend, never to model-server or clients directly.
+  the backend, never to local-model or clients directly.
 
-`model-server` stays a standalone box (inference + TCP hub) that both the
+`local-model` stays a standalone box (inference + TCP hub) that both the
 backend and client machines talk to.
 
 ## Machine overview
@@ -20,7 +20,7 @@ backend and client machines talk to.
 ```mermaid
 flowchart TD
     W[web UI<br/>any browser] -->|HTTP :8991| B[backend<br/>API + manager process]
-    B -->|HTTP :8992 inference| M[model-server<br/>models + TCP hub :8993]
+    B -->|HTTP :8992 inference| M[local-model<br/>models + TCP hub :8993]
     B -->|TCP Register| M
     M -->|Command| C[client machine<br/>sandbox executor]
     C -->|Result| M
@@ -31,7 +31,7 @@ flowchart TD
 |---|---|---|---|
 | backend | `backend` | :8991 | web API, manager process (agent sandboxes), remote inference client |
 | client machine | `backend` (client mode) | — | registers with hub, runs commands in sandbox |
-| model-server | `model-server` | :8992 + :8993 | inference engine + client hub |
+| local-model | `local-model` | :8992 + :8993 | inference engine + client hub |
 | web UI | browser | — | operator console |
 
 ## 1. Install flow (client machine)
@@ -51,10 +51,10 @@ flowchart TD
     G -->|no| H[rustup install]
     G -->|yes| I
     H --> I[shallow clone repo to ~/.susutaku/src]
-    I --> J[cargo build --release<br/>model-server + backend]
+    I --> J[cargo build --release<br/>local-model + backend]
     J --> K{role}
-    K -->|model| L[start model-server<br/>logs ~/.susutaku/model-server.log]
-    K -->|worker| M[start backend client mode<br/>SUSUTAKU_MODEL_SERVER_URL + SUSUTAKU_HUB_ADDR<br/>logs ~/.susutaku/backend.log]
+    K -->|model| L[start local-model<br/>logs ~/.susutaku/local-model.log]
+    K -->|worker| M[start backend client mode<br/>SUSUTAKU_LOCAL_MODEL_URL + SUSUTAKU_HUB_ADDR<br/>logs ~/.susutaku/backend.log]
 ```
 
 ## 2. Client machine: register & run dispatched commands (TCP, proto-rs)
@@ -62,7 +62,7 @@ flowchart TD
 ```mermaid
 sequenceDiagram
     participant C as client machine
-    participant H as hub (model-server :8993)
+    participant H as hub (local-model :8993)
     participant B as backend
     C->>H: TCP connect + Register { hostname, os }
     H->>H: registry[client_id] = connection
@@ -75,13 +75,13 @@ sequenceDiagram
     Note over C,H: heartbeat keeps the link alive,<br/>client reconnects every 3 s if the hub drops
 ```
 
-## 3. Web UI → backend → model-server (inference)
+## 3. Web UI → backend → local-model (inference)
 
 ```mermaid
 sequenceDiagram
     participant U as web UI
     participant B as backend :8991
-    participant M as model-server :8992
+    participant M as local-model :8992
     U->>B: chat / generate request
     B->>M: POST /api/inference { prompt, max_tokens, tok, think }
     M->>M: engine thread (MLX q4 / GGUF) generates
@@ -115,7 +115,7 @@ sequenceDiagram
 
 ## 5. Commands
 
-Backend machine (with a model server available):
+Backend machine (with a local model server available):
 
 ```sh
 ./target/release/backend               # API :8991 + manager process + client node
@@ -124,7 +124,7 @@ Backend machine (with a model server available):
 Client machine (one line):
 
 ```sh
-curl -fsSL "http://<backend-host>:8991/install.sh?role=auto&server=http://<model-server>:8992" | sh
+curl -fsSL "http://<backend-host>:8991/install.sh?role=auto&server=http://<local-model>:8992" | sh
 ```
 
 Web UI: open `http://<backend-host>:8991` in a browser (vite dev: `make web`
@@ -133,8 +133,8 @@ on :5173, proxies to :8991).
 Verify + drive a client machine:
 
 ```sh
-curl http://<model-server>:8992/api/clients
-curl -X POST http://<model-server>:8992/api/clients/<id>/command \
+curl http://<local-model>:8992/api/clients
+curl -X POST http://<local-model>:8992/api/clients/<id>/command \
      -H 'content-type: application/json' -d '{"cmd":"echo hi"}'
 ```
 
@@ -147,8 +147,8 @@ curl -X POST http://localhost:8991/api/manager/agents/fix-login/run -H 'content-
 curl -X POST http://localhost:8991/api/manager/agents/fix-login/finish
 ```
 
-Override points (env, no .env files): `MODEL_SERVER_HTTP_PORT`,
-`MODEL_SERVER_TCP_PORT` (model-server) · `SUSUTAKU_MODEL_SERVER_URL`,
+Override points (env, no .env files): `LOCAL_MODEL_HTTP_PORT`,
+`LOCAL_MODEL_TCP_PORT` (local-model) · `SUSUTAKU_LOCAL_MODEL_URL`,
 `SUSUTAKU_HUB_ADDR` (backend / client machine).
 
 ## 6. Known gaps & planned design

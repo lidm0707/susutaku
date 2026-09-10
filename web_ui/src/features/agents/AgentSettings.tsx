@@ -13,6 +13,7 @@ import {
   Trash2,
 } from "lucide-react";
 import {
+  API_BASE,
   chat_codex,
   chat_zai,
   clear_token,
@@ -21,8 +22,10 @@ import {
   fetch_codex_models,
   fetch_models,
   fetch_system_prompt,
+  fetch_zai_settings,
   pretty_name,
   remove_agent,
+  select_model,
   render_prompt,
   save_system_prompt,
   update_agent,
@@ -30,6 +33,7 @@ import {
   type ChatReply,
   type ModelInfo,
   type RenderedPrompt,
+  type ZaiModel,
 } from "../../lib.js";
 import { Button, Field, Select, TextArea, TextInput } from "../../ui/controls.js";
 
@@ -55,6 +59,7 @@ export default function AgentSettings() {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [codexModels, setCodexModels] = useState<{ id: string; label: string }[]>([]);
+  const [zaiModels, setZaiModels] = useState<ZaiModel[]>([]);
   const [selected, setSelected] = useState<number | "new" | null>(null);
   const [fields, setFields] = useState<Fields>(EMPTY);
   const [, setError] = useState("");
@@ -80,6 +85,9 @@ export default function AgentSettings() {
         setCodexModels([...new Map(list.map((m) => [m.id, m])).values()])
       )
       .catch(() => setCodexModels([]));
+    fetch_zai_settings()
+      .then((s) => setZaiModels(s.models))
+      .catch(() => setZaiModels([]));
     fetch_system_prompt()
       .then(setSysPrompt)
       .catch(() => setSysPrompt(""));
@@ -154,10 +162,19 @@ export default function AgentSettings() {
     setReply(null);
     setBusy(true);
     try {
+      const local = models.find((m) => m.name === fields.model);
       if (codexModels.some((m) => m.id === fields.model)) {
         setReply(await chat_codex(message, fields.model));
+      } else if (local) {
+        if (!local.selected) await select_model(fields.model);
+        const res = await fetch(`${API_BASE}/api/chat`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ message }),
+        });
+        setReply(await res.json());
       } else {
-        setReply(await chat_zai(message, "", prompt_sections()));
+        setReply(await chat_zai(message, fields.model, prompt_sections()));
       }
     } catch (err: unknown) {
       setTestError(err instanceof Error ? err.message : String(err));
@@ -168,6 +185,7 @@ export default function AgentSettings() {
 
   const model_selected =
     codexModels.some((m) => m.id === fields.model) ||
+    zaiModels.some((m) => m.model === fields.model) ||
     models.some((m) => m.name === fields.model);
 
   function pick(a: Agent) {
@@ -324,6 +342,13 @@ export default function AgentSettings() {
                         <option key={m.id} value={m.id}>{m.label || m.id}</option>
                       ))}
                     </optgroup>
+                    {zaiModels.length > 0 && (
+                      <optgroup label="external (api)">
+                        {zaiModels.map((m) => (
+                          <option key={m.model} value={m.model}>{m.model}</option>
+                        ))}
+                      </optgroup>
+                    )}
                     {models.length > 0 && (
                       <optgroup label="local mlx">
                         {models.map((m) => (

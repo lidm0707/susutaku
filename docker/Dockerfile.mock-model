@@ -1,0 +1,7 @@
+# syntax=docker/dockerfile:1
+# Deterministic stand-in for the MLX model server (see playwright/mock-model/server.js).
+FROM node:22-alpine
+COPY playwright/mock-model/server.js /server.js
+USER node
+EXPOSE 8992
+ENTRYPOINT ["node", "/server.js"]

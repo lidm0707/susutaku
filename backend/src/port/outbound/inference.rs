@@ -1,6 +1,6 @@
 //! Inference port.
 
-use susutaku_mlx::engine::GenStats;
+use susutaku_mlx::stats::GenStats;
 use susutaku_mlx::tok::TokKind;
 
 /// Result of one queued generation.

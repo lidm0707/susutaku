@@ -41,13 +41,29 @@ struct Job {
 }
 
 impl Engine {
+    /// Engine handle with no backing thread: every job fails with
+    /// "no model loaded". Used by hub-only deployments.
+    pub fn empty() -> Engine {
+        let (tx, rx) = channel::<Job>();
+        std::thread::spawn(move || fail_all(&rx, "no model loaded".to_string()));
+        Engine {
+            name: Arc::new("none".to_string()),
+            tx,
+        }
+    }
+
     /// Spawn the engine on the first runnable model under [`MODELS_ROOT`].
     pub fn spawn_first() -> Result<Engine, String> {
         let models = hf_loader::loadable_models(&PathBuf::from(MODELS_ROOT));
         let entry = models
             .iter()
             .find(|e| match e.format {
+                // Native MLX only exists on macOS; on other platforms the
+                // MLX arm can never be supported.
+                #[cfg(target_os = "macos")]
                 hf_loader::ModelFormat::Mlx => susutaku_mlx::engine::Model::supported(&e.path),
+                #[cfg(not(target_os = "macos"))]
+                hf_loader::ModelFormat::Mlx => false,
                 hf_loader::ModelFormat::Gguf => gguf_rs::Model::supported(&e.path),
                 hf_loader::ModelFormat::Unknown => false,
             })
@@ -74,9 +90,19 @@ impl Engine {
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
         let (tx, rx) = channel::<Job>();
+        #[cfg(target_os = "macos")]
         match kind {
             EngineKind::Gguf => std::thread::spawn(move || run_gguf(model_dir, rx)),
             EngineKind::Mlx => std::thread::spawn(move || run_mlx(model_dir, rx)),
+        };
+        #[cfg(not(target_os = "macos"))]
+        match kind {
+            EngineKind::Gguf => std::thread::spawn(move || run_gguf(model_dir, rx)),
+            // MLX is macOS-only; fail jobs lazily instead of refusing to
+            // start — the hub and its HTTP API still work.
+            EngineKind::Mlx => std::thread::spawn(move || {
+                fail_all(&rx, "MLX engine only builds on macOS".to_string())
+            }),
         };
         Engine {
             name: Arc::new(name),
@@ -139,7 +165,7 @@ impl Toks {
 /// Stats reply shape shared by both engines.
 struct Reply {
     text: String,
-    stats: susutaku_mlx::engine::GenStats,
+    stats: susutaku_mlx::stats::GenStats,
 }
 
 fn serve_jobs(
@@ -179,8 +205,17 @@ impl ModelPool {
             active: Arc::new(RwLock::new(Engine::spawn_first()?)),
         })
     }
+
+    /// Pool with no engine: the hub/API stay up and inference jobs fail
+    /// per-request until a model is selected.
+    pub fn empty() -> ModelPool {
+        ModelPool {
+            active: Arc::new(RwLock::new(Engine::empty())),
+        }
+    }
 }
 
+#[cfg(target_os = "macos")]
 fn run_mlx(model_dir: PathBuf, rx: Receiver<Job>) {
     let name = model_dir
         .file_name()

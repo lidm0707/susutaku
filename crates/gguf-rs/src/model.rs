@@ -4,11 +4,12 @@ use std::time::Instant;
 
 use candle_core::{Device, Tensor};
 
-use crate::sample::sample;
 use crate::TEMP;
+use crate::sample::sample;
 use crate::weights;
-use susutaku_mlx::engine::{ChatTpl, GenStats};
+use susutaku_mlx::stats::GenStats;
 use susutaku_mlx::tok::ChatTok;
+use susutaku_mlx::tpl::ChatTpl;
 
 const CHATML_TPL: ChatTpl = ChatTpl::Chatml;
 
@@ -46,8 +47,8 @@ impl Model {
     }
 
     pub fn load(dir: &Path) -> Result<Self, String> {
-        let file =
-            weights::gguf_weight(dir).ok_or_else(|| format!("no .gguf weight in {}", dir.display()))?;
+        let file = weights::gguf_weight(dir)
+            .ok_or_else(|| format!("no .gguf weight in {}", dir.display()))?;
         let device = Device::Cpu;
         let mut reader =
             fs::File::open(&file).map_err(|e| format!("failed to open {}: {e}", file.display()))?;

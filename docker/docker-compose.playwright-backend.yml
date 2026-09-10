@@ -1,0 +1,92 @@
+# E2E stack with the BACKEND IN A CONTAINER and a mock local model server.
+#
+# Unlike docker-compose.playwright.yml (backend on the host because MLX needs
+# Metal), this stack has no host dependency at all:
+#   postgres + mock-model + backend + web + playwright, all on the internal
+#   docker network, no published ports.
+#
+# The mock model (playwright/mock-model/server.js) answers /api/models,
+# /api/models/select and /api/inference deterministically, so the chat UI can
+# be driven end-to-end: plain chat, the TOOL: SHELL toolcall round (executed by
+# the backend's sandbox inside the container) and summarize (compact) replies.
+# The agent path (POST /api/manager/agents + /run) runs in the same container
+# sandbox, hence the security_opt flags (see docker-compose.sandbox.yml).
+#
+# Fresh DB per run: the postgres service creates susutaku_e2e on first boot;
+# reset with `docker compose -f docker/docker-compose.playwright-backend.yml down -v`.
+# The playwright runner therefore skips the drop/create lifecycle
+# (E2E_SKIP_DB_LIFECYCLE) and only runs the chat-mock spec.
+#
+#   docker compose -f docker/docker-compose.playwright-backend.yml up --build --exit-code-from playwright
+#
+# The backend image build checks sqlx macros against the host postgres from
+# docker/docker-compose.yml (port 5434) — keep it up while building.
+name: susutaku-e2e-backend
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: susutaku
+      POSTGRES_PASSWORD: susutaku
+      POSTGRES_DB: susutaku_e2e
+    restart: unless-stopped
+
+  mock-model:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.mock-model
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.backend
+    environment:
+      DATABASE_URL: postgres://susutaku:susutaku@postgres:5432/susutaku_e2e
+      SUSUTAKU_LOCAL_MODEL_URL: http://mock-model:8992
+    # The agent sandbox refuses to run unsandboxed (by design, no fallback):
+    # namespace creation must be allowed inside the container.
+    security_opt:
+      - seccomp=unconfined
+      - apparmor=unconfined
+    depends_on:
+      - postgres
+      - mock-model
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.web
+    environment:
+      BACKEND_URL: http://backend:8991
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  playwright:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.playwright
+    environment:
+      PLAYWRIGHT_BASE_URL: http://web
+      E2E_ADMIN_USER: owner
+      E2E_ADMIN_PASSWORD: owner
+      E2E_USER: e2e-tester
+      E2E_PASSWORD: e2e-e2e-e2e
+      # The backend seeded the default owner/owner account (must change
+      # password) — helpers.ts rotates it on first login.
+      E2E_ADMIN_NEW_PASSWORD: owner-owner-1
+      # The postgres service owns susutaku_e2e; no drop/create from the runner.
+      E2E_SKIP_DB_LIFECYCLE: "1"
+      # Gates the chat-mock spec (real-model stacks skip it).
+      E2E_MOCK_MODEL: "1"
+    command: ["chat-mock"]
+    volumes:
+      - ../playwright/tests:/work/tests
+      - ../playwright/playwright.config.ts:/work/playwright.config.ts:ro
+      - ../playwright/screenshots:/work/screenshots
+      - ../playwright/test-results:/work/test-results
+    depends_on:
+      - web

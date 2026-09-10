@@ -8,7 +8,7 @@ const SERVER: &str = "http://10.0.0.5:8992";
 fn script_prepares_and_registers_worker() {
     let s = render_install_script(Role::Worker, SERVER);
     assert!(s.contains(REPO_URL));
-    assert!(s.contains("cargo build --release -p model-server -p backend"));
+    assert!(s.contains("cargo build --release -p local-model -p backend"));
     assert!(s.contains(&format!(
         "export {SERVER_URL_ENV}=\"http://$server_host:8992\""
     )));
@@ -17,9 +17,9 @@ fn script_prepares_and_registers_worker() {
 }
 
 #[test]
-fn script_model_role_runs_model_server() {
+fn script_model_role_runs_local_model() {
     let s = render_install_script(Role::Model, SERVER);
-    assert!(s.contains("./target/release/model-server"));
+    assert!(s.contains("./target/release/local-model"));
     assert!(s.contains("role: $role ("));
 }
 

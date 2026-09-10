@@ -47,6 +47,10 @@ pub async fn connect() -> Store {
         .await
         .expect("seed default admin");
     store
+        .ensure_default_board()
+        .await
+        .expect("seed default workspace/project");
+    store
 }
 
 /// Postgres-backed implementation of every kanban repo port.

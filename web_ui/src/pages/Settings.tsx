@@ -18,6 +18,8 @@ import {
 } from "lucide-react";
 import { Modal } from "../ui/Overlay.jsx";
 import { SplitLayout, type SideItem } from "../ui/SplitLayout.jsx";
+import CodexLogin from "../components/CodexLogin.tsx";
+import ClaudeLogin from "../components/ClaudeLogin.tsx";
 import {
   fetch_users,
   register_user,
@@ -26,7 +28,6 @@ import {
   zai_model_action,
   fetch_client_env,
   save_client_env,
-  codex_status,
   fetch_models,
   select_model,
   pretty_name,
@@ -35,7 +36,6 @@ import {
   type ZaiModel,
   type ZaiModelAction,
   type ClientEnv,
-  type CodexStatus,
   type ModelInfo,
 } from "../lib.js";
 
@@ -87,7 +87,7 @@ type InstallRole = "auto" | "model" | "worker";
 const INSTALL_ROLES: { id: InstallRole; label: string; desc: string }[] = [
   { id: "auto", label: "auto", desc: "probe decides: model+worker when capable" },
   { id: "model", label: "model host", desc: "force local-model host (macos + aarch64 + ≥32 GiB)" },
-  { id: "worker", label: "worker only", desc: "provider jobs only (codex / claude / z.ai)" },
+  { id: "worker", label: "worker only", desc: "external provider jobs only (cloud api / codex / claude)" },
 ];
 
 function install_command(role: InstallRole): string {
@@ -277,11 +277,12 @@ function ClientEnvTab() {
 
 /* --- ai providers --- */
 
-type ProviderTab = "zai" | "codex" | "local";
+type ProviderTab = "zai" | "codex" | "claude" | "local";
 
 const PROVIDER_ITEMS: (SideItem & { id: ProviderTab })[] = [
-  { id: "zai", name: "z.ai", desc: "cloud api", icon: <Zap size={16} /> },
+  { id: "zai", name: "external", desc: "cloud api (openai-compatible)", icon: <Zap size={16} /> },
   { id: "codex", name: "codex cli", desc: "oauth bridge", icon: <Code2 size={16} /> },
+  { id: "claude", name: "claude", desc: "claude.ai oauth", icon: <Code2 size={16} /> },
   { id: "local", name: "local mlx", desc: "on-device model", icon: <HardDrive size={16} /> },
 ];
 
@@ -292,6 +293,7 @@ function ProvidersTab() {
     <SplitLayout items={PROVIDER_ITEMS} active={provider} on_pick={(id) => setProvider(id as ProviderTab)} label="ai providers">
       {provider === "zai" && <ZaiProvider />}
       {provider === "codex" && <CodexProvider />}
+      {provider === "claude" && <ClaudeProvider />}
       {provider === "local" && <LocalProvider />}
     </SplitLayout>
   );
@@ -460,19 +462,19 @@ function ZaiProvider() {
 }
 
 function CodexProvider() {
-  const [status, setStatus] = useState<CodexStatus | null>(null);
-  const [error, setError] = useState("");
-
-  useEffect(() => {
-    codex_status()
-      .then(setStatus)
-      .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
-  }, []);
-
   return (
     <form className="settings-form">
-      <h2 className="sub">codex cli · {status?.status ?? "checking…"}</h2>
-      {error && <p className="error">{error}</p>}
+      <h2 className="sub">codex cli</h2>
+      <CodexLogin />
+    </form>
+  );
+}
+
+function ClaudeProvider() {
+  return (
+    <form className="settings-form">
+      <h2 className="sub">claude</h2>
+      <ClaudeLogin />
     </form>
   );
 }

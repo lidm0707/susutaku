@@ -5,6 +5,9 @@ ports** (all traffic stays on the internal compose network), and are configured
 purely through compose environment variables. Screenshots flow back to the host
 so UX/UI can be reviewed and improved after every run.
 
+For the fully-containerized variant (backend in Docker + mock model, no host
+dependency), see `playwright-backend-workflow.md`.
+
 ## Architecture
 
 ```

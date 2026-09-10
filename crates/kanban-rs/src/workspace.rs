@@ -4,6 +4,9 @@ use serde::Serialize;
 
 use crate::store::{Store, StoreError};
 
+pub const DEFAULT_WORKSPACE_NAME: &str = "workspace";
+pub const DEFAULT_PROJECT_NAME: &str = "project";
+
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct WorkspaceRow {
     pub id: i64,
@@ -18,6 +21,17 @@ pub struct ProjectRow {
 }
 
 impl Store {
+    /// Seed one workspace + one project on first boot; no-op once any
+    /// workspace exists (both are renameable via the API).
+    pub async fn ensure_default_board(&self) -> Result<(), StoreError> {
+        if !self.list_workspaces().await?.is_empty() {
+            return Ok(());
+        }
+        let ws = self.create_workspace(DEFAULT_WORKSPACE_NAME).await?;
+        self.create_project(ws.id, DEFAULT_PROJECT_NAME).await?;
+        Ok(())
+    }
+
     pub async fn create_workspace(&self, name: &str) -> Result<WorkspaceRow, StoreError> {
         let row = sqlx::query_as!(
             WorkspaceRow,

@@ -61,3 +61,19 @@ export async function seedUser() {
 export function e2eCredentials() {
   return { username: E2E_USER, password: E2E_PASSWORD };
 }
+
+export async function loginToken(
+  username: string = E2E_USER,
+  password: string = E2E_PASSWORD,
+): Promise<string> {
+  const ctx = await pwRequest.newContext({ baseURL: API });
+  const res = await ctx.post("/api/auth/login", {
+    data: { username, password },
+  });
+  const body = await res.text();
+  await ctx.dispose();
+  if (!res.ok()) {
+    throw new Error(`login ${username} failed: ${res.status()} ${body}`);
+  }
+  return (JSON.parse(body) as { token: string }).token;
+}

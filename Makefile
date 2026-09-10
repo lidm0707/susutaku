@@ -1,107 +1,107 @@
-# susutaku — web chat to inline qwen3.8 (MLX)
+# susutaku local orchestration.
 #
-# Quick start (web chat in Docker, model on host Metal):
-#   make run        # starts backend :8991 + web container :3334
-#   open http://localhost:3334
+# Daily driver (Metal on host, backend NOT in docker):
+#   make up          # postgres + web (nginx UI, http://localhost:3334)
+#   make backend     # backend on host, real MLX models from models/
+#   make mock-model  # instead of `make backend`: fake model server :8992
 #
-# Dev mode (no Docker):
-#   make backend    # terminal 1 — axum + qwen3.8 on :8991
-#   make web        # terminal 2 — vite dev on :5173 (proxies /api)
+# Fully-containerized stacks:
+#   make e2e         # postgres + mock-model + backend + web + playwright
+#   make client-test # hub + backend + sandbox client integration test
 #
-# Build & lint:
-#   make build      # release build of backend
-#   make check      # cargo check
-#   make clippy     # cargo clippy
-#   make web-build  # yarn production build of web_ui
-#
-# Download model:
-#   make download-model          # default model (qwen3.8)
-#   make download-model MODEL=<key>   # qwen3.8 | gemma4 | gemma4-e4b
-#
-# Docker lifecycle:
-#   make docker-up    # build + start web on :3334 (backend must run on host)
-#   make docker-down  # stop the stack
+# Everything: make down
 
-PORT := 8991
-WEB_PORT := 3334
-COMPOSE := docker compose -f docker/docker-compose.yml
+COMPOSE := docker compose
+MAIN    := -f docker/docker-compose.yml
+DEMO    := -f docker/docker-compose.demo.yml
+DEPLOY  := -f docker/docker-compose.deploy.yml
+E2E     := -f docker/docker-compose.playwright-backend.yml
+CLIENT  := -f docker/docker-compose.client-test.yml
 
-# Load env from the repo root (.env) for every target.
-ifneq (,$(wildcard .env))
-include .env
-export
-endif
+WEB_PORT     := 3334
+BACKEND_PORT := 8991
+MODEL_PORT   := 8992
 
-MODELS_DIR := models
-QWEN38_REPO := mlx-community/Qwen3.8-27B-4bit
-GEMMA4_REPO := mlx-community/gemma-4-26b-a4b-it-4bit
-# NOTE: E4B is ~11 GiB (under the 30 GiB policy floor) — hf_loader will not
-# offer it until the loader/ARCH support it; kept for engine bring-up.
-GEMMA4_E4B_REPO := google/gemma-4-E4B-it-qat-w4a16-ct
-DEFAULT_MODEL := qwen3.8
-HF := hf
+MOCK_IMAGE := susutaku-mock-model
 
-.PHONY: help init download-model check clippy build backend web web-build docker-up docker-down run
+.PHONY: help up down web db logs backend mock-model e2e e2e-down client-test client-test-down clean
 
 help:
-	@echo "make check       - cargo check (workspace)"
-	@echo "make clippy      - cargo clippy (workspace)"
-	@echo "make build       - cargo build --release -p backend"
-	@echo "make backend     - run axum backend on :$(PORT)"
-	@echo "make web         - vite dev server (proxies /api to :$(PORT))"
-	@echo "make web-build   - yarn build web_ui"
-	@echo "make docker-up   - build + start web container on :$(WEB_PORT)"
-	@echo "make docker-down - stop compose stack"
-	@echo "make run         - backend + docker web together"
-	@echo "make init        - setup project (rust deps, web_ui, models dir)"
-	@echo "make download-model [MODEL=qwen3.8|gemma4|gemma4-e4b] - download MLX model"
+	@grep -E '^# |^[a-z-]+:' Makefile
 
-IGNORED_DIRS := models input output .plans
+# --- daily stack ---------------------------------------------------------
 
-init: $(IGNORED_DIRS)
-	cargo fetch
-	cargo build
-	cd web_ui && yarn install
-	@echo "setup done — run 'make download-model' to fetch a model"
+## real-demo: one command — pg + mock-model + backend + web all in docker, open UI
+real-demo:
+	$(COMPOSE) $(DEMO) up --build -d
+	@until curl -sf http://localhost:$(WEB_PORT) >/dev/null; do sleep 1; done
+	@open http://localhost:$(WEB_PORT)
+	@echo "demo stack up (mock local model). logs: $(COMPOSE) $(DEMO) logs -f"
 
-$(IGNORED_DIRS):
-	mkdir -p $@
+## deploy: one compose — pg + backend + web(nginx), private, loopback UI only
+## host model server must run separately (Metal): make mock-model, or your MLX server on :8992
+deploy:
+	$(COMPOSE) $(DEPLOY) up --build -d
+	@until curl -sf http://localhost:$(WEB_PORT) >/dev/null; do sleep 1; done
+	@echo "up: http://localhost:$(WEB_PORT) (login: owner/owner first run)"
 
-download-model: $(MODELS_DIR)
-	@case "$(if $(MODEL),$(MODEL),$(DEFAULT_MODEL))" in \
-	  qwen3.8) repo=$(QWEN38_REPO) ;; \
-	  gemma4) repo=$(GEMMA4_REPO) ;; \
-	  gemma4-e4b) repo=$(GEMMA4_E4B_REPO) ;; \
-	  *) echo "unknown model: $(MODEL). use qwen3.8, gemma4 or gemma4-e4b"; exit 1 ;; \
-	esac; \
-	$(HF) download $$repo --local-dir $(MODELS_DIR)
+## undeploy: stop the deploy stack (keeps data)
+undeploy:
+	$(COMPOSE) $(DEPLOY) down
 
-check:
-	cargo check
+## up: start postgres + web ui (http://localhost:3334)
+up:
+	$(COMPOSE) $(MAIN) up -d --build postgres web
+	@echo "web ui: http://localhost:$(WEB_PORT)  (backend: run 'make backend' or 'make mock-model')"
 
-clippy:
-	cargo clippy
+## db: start only postgres (host port 5434)
+db:
+	$(COMPOSE) $(MAIN) up -d postgres
 
-build:
-	cargo build --release -p backend
-
-backend:
-	cargo run -p backend --release
-
+## web: start only web ui
 web:
-	cd web_ui && yarn dev
+	$(COMPOSE) $(MAIN) up -d --build web
 
-web-build:
-	cd web_ui && yarn install && yarn build
+## logs: follow compose logs (daily stack)
+logs:
+	$(COMPOSE) $(MAIN) logs -f
 
-docker-up:
-	$(COMPOSE) up web --build -d
+## backend: run backend on host (real MLX, needs Metal)
+backend:
+	cargo run -p backend
 
-docker-down:
-	$(COMPOSE) down
+## mock-model: fake model server on :8992 (use INSTEAD of real backend)
+mock-model:
+	docker build -f docker/Dockerfile.mock-model -t $(MOCK_IMAGE) .
+	docker rm -f susutaku-mock-model 2>/dev/null || true
+	docker run -d --name susutaku-mock-model -p $(MODEL_PORT):8992 $(MOCK_IMAGE)
+	@echo "mock model: http://localhost:$(MODEL_PORT)"
 
-run:
-	@trap 'kill 0' EXIT; \
-	$(MAKE) -s backend & \
-	$(MAKE) -s docker-up; \
-	wait
+# --- containerized stacks ------------------------------------------------
+
+## e2e: full stack in docker (pg + mock-model + backend + web + playwright)
+e2e:
+	$(COMPOSE) $(E2E) up --build -d
+	$(COMPOSE) $(E2E) logs -f playwright
+
+## client-test: hub + backend + sandbox client, then show RESULT lines
+client-test:
+	$(COMPOSE) $(CLIENT) up --build -d
+	$(COMPOSE) $(CLIENT) logs hub | grep RESULT || true
+
+## down: stop all stacks (keeps volumes)
+down:
+	$(COMPOSE) $(DEPLOY) down || true
+	$(COMPOSE) $(DEMO) down || true
+	$(COMPOSE) $(MAIN) down || true
+	$(COMPOSE) $(E2E) down || true
+	$(COMPOSE) $(CLIENT) down || true
+	-docker rm -f susutaku-mock-model
+
+## clean: also delete postgres volumes (destroys data)
+clean: down
+	$(COMPOSE) $(DEPLOY) down -v || true
+	$(COMPOSE) $(DEMO) down -v || true
+	$(COMPOSE) $(MAIN) down -v
+	$(COMPOSE) $(E2E) down -v || true
+	$(COMPOSE) $(CLIENT) down -v || true

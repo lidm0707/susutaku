@@ -96,7 +96,10 @@ export default function Login() {
   return (
     <main className="chat login-page">
       <header>
-        <h1>{headline}</h1>
+        <h1>
+          <img className="title-icon" src="/susutaku_jibi.png" alt="" />
+          {headline}
+        </h1>
         <span className="sub">{subline}</span>
       </header>
       {error && <p className="error">{error}</p>}

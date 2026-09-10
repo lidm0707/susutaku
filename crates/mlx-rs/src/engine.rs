@@ -84,41 +84,6 @@ fn eos_ids(dir: &Path, json: &serde_json::Value) -> Vec<u32> {
     ids
 }
 
-/// Chat prompt wrapper, selected by the loaded model's architecture.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ChatTpl {
-    /// Qwen ChatML: `<|im_start|>user ... <|im_end|><|im_start|>assistant`
-    Chatml,
-    /// Gemma turn format with a `<|think|>` system turn.
-    Turn,
-}
-
-impl ChatTpl {
-    /// Wrap a raw prompt body so the model answers it. `think` toggles the
-    /// reasoning block (gemma system `<|think|>` turn / qwen prefilled empty
-    /// think block).
-    pub fn wrap(self, body: &str, think: bool) -> String {
-        match self {
-            Self::Chatml => {
-                let opener = if think {
-                    "<|im_start|>assistant\n"
-                } else {
-                    "<|im_start|>assistant\n<think>\n\n</think>\n"
-                };
-                format!("<|im_start|>user\n{body}<|im_end|>\n{opener}")
-            }
-            Self::Turn => {
-                let system = if think {
-                    "<|turn>system\n<|think|>\n<turn|>\n"
-                } else {
-                    ""
-                };
-                format!("{system}<|turn>user\n{body}<turn|>\n<|turn>model\n")
-            }
-        }
-    }
-}
-
 impl Model {
     fn forward(&mut self, tokens: &Array) -> Ex<Array> {
         match &mut self.arch {
@@ -547,20 +512,5 @@ impl Ngram {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct GenStats {
-    pub prompt_tokens: usize,
-    pub prompt_secs: f64,
-    pub decode_tokens: usize,
-    pub decode_secs: f64,
-}
-
-impl GenStats {
-    pub fn prompt_tps(&self) -> f64 {
-        self.prompt_tokens as f64 / self.prompt_secs
-    }
-
-    pub fn decode_tps(&self) -> f64 {
-        self.decode_tokens as f64 / self.decode_secs
-    }
-}
+pub use crate::stats::GenStats;
+pub use crate::tpl::ChatTpl;

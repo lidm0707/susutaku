@@ -9,11 +9,15 @@ pub struct AgentSandbox {
 }
 
 impl AgentSandbox {
+    /// Restore a saved sandbox, or create a fresh one on first boot (a new
+    /// instance never has saved state — e.g. a freshly started container).
     pub fn restore() -> Result<Self, String> {
         Sandbox::purge_stale();
-        Sandbox::restore()
-            .map(|inner| Self { inner })
-            .map_err(|e| e.to_string())
+        let inner = match Sandbox::restore() {
+            Ok(inner) => inner,
+            Err(_) => Sandbox::new().map_err(|e| e.to_string())?,
+        };
+        Ok(Self { inner })
     }
 
     /// Workspace root of the underlying macOS sandbox.

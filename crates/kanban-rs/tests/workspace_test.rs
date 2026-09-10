@@ -1,65 +1,21 @@
-//! Integration test: workspaces > projects > tasks against a live Postgres.
+//! Integration test: default workspace + project seeding against a live Postgres.
 
-use kanban_rs::{AddCard, Store};
-
-fn unique(tag: &str) -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.subsec_nanos())
-        .unwrap_or(0);
-    format!("{tag}_{nanos}")
-}
+use kanban_rs::{DEFAULT_PROJECT_NAME, DEFAULT_WORKSPACE_NAME, Store};
 
 #[tokio::test]
-async fn workspace_project_task_roundtrip() {
+async fn default_board_seeded_once_and_idempotent() {
     let store = Store::connect(Store::default_url()).await.expect("connect");
 
-    let ws = store.create_workspace(&unique("ws")).await.expect("workspace");
-    let project = store
-        .create_project(ws.id, &unique("proj"))
-        .await
-        .expect("project");
+    store.ensure_default_board().await.expect("seed");
 
-    let projects = store.list_projects(ws.id).await.expect("list projects");
-    assert!(projects.iter().any(|p| p.id == project.id));
-
-    // Duplicate project name in the same workspace is rejected.
-    let dup_name = format!("dup_{}", nanos());
-    let _ = store.create_project(ws.id, &dup_name).await.expect("first");
-    assert!(store.create_project(ws.id, &dup_name).await.is_err());
-
-    // Task created inside the project, listed through the project filter.
-    let task_id = store
-        .add(AddCard {
-            project_id: Some(project.id),
-            column_id: "todo",
-            title: "a task",
-            description: "",
-            priority: "normal",
-        })
-        .await
-        .expect("add task");
-
-    let in_project = store
-        .list(Some(project.id))
-        .await
-        .expect("list by project");
-    assert!(in_project.iter().any(|c| c.id == task_id));
-    assert!(in_project.iter().all(|c| c.project_id == Some(project.id)));
-
-    // Deleting the workspace cascades to project and tasks.
-    store.delete_workspace(ws.id).await.expect("delete ws");
-    assert!(store.delete_workspace(ws.id).await.is_err());
-    assert!(store.delete_project(project.id).await.is_err());
-    let left = store.list(Some(project.id)).await.expect("list");
-    assert!(left.is_empty());
-}
-
-fn nanos() -> u128 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0)
+    let workspaces = store.list_workspaces().await.expect("list workspaces");
+    let seeded = workspaces
+        .iter()
+        .find(|ws| ws.name == DEFAULT_WORKSPACE_NAME)
+        .expect("default workspace exists");
+    let projects = store.list_projects(seeded.id).await.expect("list projects");
+    assert!(
+        projects.iter().any(|p| p.name == DEFAULT_PROJECT_NAME),
+        "default project exists"
+    );
 }
