@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   ReactFlow,
@@ -112,6 +112,10 @@ const STAGE_DOCS: Record<Stage, string> = {
     "legacy: renders the payload to its final text form. kept for old specs.",
 };
 
+const DEBOUNCE_MS = 800;
+const SAVING_MARK = "saving…";
+const SAVED_MARK = "saved";
+
 const NODE_X_STEP = 280;
 const NODE_Y_STEP = 110;
 const NODE_ORIGIN_X = 60;
@@ -167,6 +171,39 @@ function layout(spec: PipelineSpec): { nodes: FlowNode[]; edges: Edge[] } {
   return { nodes, edges };
 }
 
+/// Param inputs keep local state so canvas re-renders never reset them;
+/// the key (node id + param) remounts it only when the edited node changes.
+function ParamField({
+  id,
+  param_key,
+  hint,
+  value,
+  on_change,
+}: {
+  id: string;
+  param_key: string;
+  hint: string;
+  value: string;
+  on_change: (key: string, value: string) => void;
+}) {
+  const [local, setLocal] = useState(value);
+  return (
+    <div className="stage-field">
+      <label>{param_key}</label>
+      <input
+        key={`${id}:${param_key}`}
+        value={local}
+        onChange={(e) => {
+          setLocal(e.target.value);
+          on_change(param_key, e.target.value);
+        }}
+        placeholder={hint}
+        spellCheck={false}
+      />
+    </div>
+  );
+}
+
 function parse_params(s: string): Record<string, unknown> {
   try {
     const v = JSON.parse(s);
@@ -207,6 +244,10 @@ export default function Pipelines() {
   const [, setError] = useState("");
   const [status, setStatus] = useState("");
   const [newOpen, setNewOpen] = useState(false);
+  const dragRef = useRef(false);
+  const saveTimer = useRef<number | null>(null);
+  const dirtyRef = useRef(false);
+  const lastSpecRef = useRef("");
 
   useEffect(() => {
     load_pipelines();
@@ -239,6 +280,7 @@ export default function Pipelines() {
     const { nodes: ns, edges: es } = layout(p.spec || { nodes: [], links: [] });
     setNodes(ns);
     setEdges(es);
+    return { ns, es };
   }
 
   function pick(p: Pipeline) {
@@ -247,7 +289,8 @@ export default function Pipelines() {
     setSelected(p.id);
     setName(p.name);
     setEditId(null);
-    load_flow(p);
+    const { ns, es } = load_flow(p);
+    lastSpecRef.current = JSON.stringify({ name: p.name.trim(), spec: to_spec(ns, es) });
   }
 
   async function start_new(pipeline_name: string) {
@@ -260,6 +303,7 @@ export default function Pipelines() {
       setName(created.name);
       setNodes([]);
       setEdges([]);
+      lastSpecRef.current = JSON.stringify({ name: created.name.trim(), spec: { nodes: [], links: [] } });
       await load_pipelines();
       toast(`pipeline "${pipeline_name}" created`, "success");
     } catch (err) {
@@ -320,14 +364,14 @@ export default function Pipelines() {
       setError("node ids must be unique");
       return;
     }
-    setNodes(
-      nodes.map((n) =>
+    setNodes((ns) =>
+      ns.map((n) =>
         n.id === editId ? { ...n, id, data: { ...n.data, stage: use_stage, params: use_params } } : n
       )
     );
     if (id !== editId) {
-      setEdges(
-        edges.map((e) => ({
+      setEdges((es) =>
+        es.map((e) => ({
           ...e,
           source: e.source === editId ? id : e.source,
           target: e.target === editId ? id : e.target,
@@ -364,19 +408,64 @@ export default function Pipelines() {
     }
   }
 
-  async function save() {
-    setStatus("");
+  async function do_save(mark: boolean) {
     if (selected == null || selected === "new") return;
     const spec = to_spec(nodes as FlowNode[], edges);
-    setError("");
     try {
       await update_pipeline(selected, name.trim(), spec);
-      setStatus("saved");
-      await load_pipelines();
+      lastSpecRef.current = JSON.stringify({ name: name.trim(), spec });
+      dirtyRef.current = false;
+      if (mark) setStatus(SAVED_MARK);
     } catch (err) {
       handle(err);
+      if (mark) setStatus("");
     }
   }
+
+  async function save() {
+    setStatus(SAVING_MARK);
+    if (saveTimer.current != null) {
+      window.clearTimeout(saveTimer.current);
+      saveTimer.current = null;
+    }
+    await do_save(true);
+    await load_pipelines();
+  }
+
+  function schedule_save() {
+    if (saveTimer.current != null) window.clearTimeout(saveTimer.current);
+    setStatus(SAVING_MARK);
+    saveTimer.current = window.setTimeout(() => {
+      saveTimer.current = null;
+      void do_save(true);
+    }, DEBOUNCE_MS);
+  }
+
+  const snapshot = useCallback(
+    () => JSON.stringify({ name: name.trim(), spec: to_spec(nodes as FlowNode[], edges) }),
+    [name, nodes, edges]
+  );
+
+  // autosave: any graph/name change schedules a debounced save; skipped mid-drag
+  useEffect(() => {
+    if (selected == null || selected === "new") return;
+    const snap = snapshot();
+    if (snap === lastSpecRef.current) return;
+    dirtyRef.current = true;
+    if (dragRef.current) return;
+    schedule_save();
+  });
+
+  // flush a pending save on unmount (e.g. navigating away mid-edit)
+  const flushRef = useRef(do_save);
+  flushRef.current = do_save;
+  useEffect(
+    () => () => {
+      if (saveTimer.current != null) window.clearTimeout(saveTimer.current);
+      if (dirtyRef.current) void flushRef.current(false);
+    },
+    []
+  );
 
   async function del() {
     if (selected == null || selected === "new") return;
@@ -450,7 +539,14 @@ export default function Pipelines() {
                 nodeTypes={NODE_TYPES}
                 onNodeClick={(_, n) => select_node(n as FlowNode)}
                 onPaneClick={() => select_node(null)}
-                onNodeDragStop={(_, n) => select_node(n as FlowNode)}
+                onNodeDragStart={() => {
+                  dragRef.current = true;
+                }}
+                onNodeDragStop={(_, n) => {
+                  dragRef.current = false;
+                  select_node(n as FlowNode);
+                  if (snapshot() !== lastSpecRef.current) schedule_save();
+                }}
                 fitView
                 proOptions={{ hideAttribution: true }}
                 deleteKeyCode={["Backspace", "Delete"]}
@@ -527,15 +623,14 @@ export default function Pipelines() {
                           </select>
                         </div>
                       ) : (
-                        <div key={key} className="stage-field">
-                          <label>{key}</label>
-                          <input
-                            value={String(parse_params(editParams)[key] ?? "")}
-                            onChange={(e) => edit_param(key, e.target.value)}
-                            placeholder={hint}
-                            spellCheck={false}
-                          />
-                        </div>
+                        <ParamField
+                          key={`${editId}:${key}`}
+                          id={editId}
+                          param_key={key}
+                          hint={hint}
+                          value={String(parse_params(editParams)[key] ?? "")}
+                          on_change={edit_param}
+                        />
                       )
                     )}
                   </>

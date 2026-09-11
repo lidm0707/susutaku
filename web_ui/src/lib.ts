@@ -155,6 +155,9 @@ export interface ZaiSettings {
   api_key_set: boolean;
   model: string;
   models: ZaiModel[];
+  say_hi_time: string | null;
+  say_hi_interval_mins: number | null;
+  timezone: string | null;
 }
 
 export type ZaiModelAction =
@@ -400,8 +403,42 @@ export async function chat_claude(message: string): Promise<ChatReply> {
   return res.json();
 }
 
+export interface AlertSettings {
+  webhook_set: boolean;
+}
+
+export async function fetch_alert_settings(): Promise<AlertSettings> {
+  const res = await fetch(`${API_BASE}/api/settings/alerts`);
+  if (!res.ok) throw new ApiError(res.status, await res.text());
+  return res.json();
+}
+
+export async function save_alert_settings(webhook_url: string | null): Promise<AlertSettings> {
+  const res = await fetch(`${API_BASE}/api/settings/alerts`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ webhook_url }),
+  });
+  if (!res.ok) throw new ApiError(res.status, await res.text());
+  return res.json();
+}
+
 export async function fetch_zai_settings(): Promise<ZaiSettings> {
   const res = await fetch(`${API_BASE}/api/settings/zai`);
+  if (!res.ok) throw new ApiError(res.status, await res.text());
+  return res.json();
+}
+
+export async function save_zai_schedule(
+  say_hi_time: string | null,
+  say_hi_interval_mins: number | null,
+  timezone: string | null
+): Promise<ZaiSettings> {
+  const res = await fetch(`${API_BASE}/api/settings/zai`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ say_hi_time, say_hi_interval_mins, timezone }),
+  });
   if (!res.ok) throw new ApiError(res.status, await res.text());
   return res.json();
 }
@@ -465,6 +502,27 @@ export async function fetch_quota_board(): Promise<PlatformQuota[]> {
 
 export async function fetch_zai_quota(): Promise<ZaiQuota> {
   const res = await fetch(`${API_BASE}/api/settings/zai/quota`);
+  if (!res.ok) throw new ApiError(res.status, await res.text());
+  return res.json();
+}
+
+export interface CodexUsageRow {
+  captured_at: string;
+  plan_type: string | null;
+  primary_used_percent: number | null;
+  primary_resets_at: string | null;
+  secondary_used_percent: number | null;
+  secondary_resets_at: string | null;
+}
+
+export async function fetch_codex_usage_latest(): Promise<CodexUsageRow | null> {
+  const res = await fetch(`${API_BASE}/api/codex/usage/latest`);
+  if (!res.ok) throw new ApiError(res.status, await res.text());
+  return res.json();
+}
+
+export async function fetch_codex_usage_history(limit = 20): Promise<CodexUsageRow[]> {
+  const res = await fetch(`${API_BASE}/api/codex/usage/history?limit=${limit}`);
   if (!res.ok) throw new ApiError(res.status, await res.text());
   return res.json();
 }
@@ -667,6 +725,18 @@ export interface HostSpec {
   memory_bytes: number;
 }
 
+export interface MachineView {
+  hostname: string;
+  os: string;
+  arch: string;
+  local: boolean;
+  sandboxes: SandboxDir[];
+}
+
+export async function fetch_machines(): Promise<MachineView[]> {
+  return (await api("/api/machines")).json();
+}
+
 export async function fetch_pipelines(): Promise<Pipeline[]> {
   return (await api("/api/pipelines")).json();
 }
@@ -689,6 +759,15 @@ export interface ActivityEntry { id: number; kind: string; message: string; crea
 
 export async function fetch_activity(): Promise<ActivityEntry[]> {
   return (await api("/api/activity")).json();
+}
+
+export interface CardAgentState {
+  name: string | null;
+  state: { run?: CardRun } | null;
+}
+
+export async function fetch_card_agent(id: number): Promise<CardAgentState> {
+  return (await api(`/api/kanban/cards/${id}/agent`)).json();
 }
 
 export async function fetch_machine_agents(): Promise<MachineAgent[]> {

@@ -4,6 +4,8 @@ use std::sync::Arc;
 use backend::api;
 use backend::app::ChatUseCase;
 use backend::infra::chat_memory;
+use backend::infra::codex_auth::codex_home;
+use backend::infra::codex_usage;
 use backend::infra::client_node::ClientNode;
 use backend::infra::kanban;
 use backend::infra::local_settings;
@@ -70,6 +72,8 @@ async fn main() {
     ));
 
     let kanban_store = Arc::new(kanban::connect().await);
+    let usage_store = Arc::new(codex_usage::connect().await);
+    codex_usage::spawn_scheduler(usage_store.clone(), codex_home());
     let addr = SocketAddr::from(([0, 0, 0, 0], PORT));
     let listener = tokio::net::TcpListener::bind(addr).await.expect("bind");
     tracing::info!("backend listening on http://{addr}");
@@ -80,6 +84,7 @@ async fn main() {
             model.clone(),
             codex_workspace,
             kanban_store,
+            usage_store,
             ManagerProcess::new(),
             model.clone(),
         ),

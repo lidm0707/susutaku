@@ -205,6 +205,42 @@ pub fn account_id_from_id_token(id_token: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
+pub fn load(codex_home: &Path) -> Option<Tokens> {
+    let bytes = fs::read(auth_path(codex_home)).ok()?;
+    let doc: Value = serde_json::from_slice(&bytes).ok()?;
+    Some(Tokens {
+        id_token: doc.pointer("/tokens/id_token")?.as_str()?.to_owned(),
+        access_token: doc.pointer("/tokens/access_token")?.as_str()?.to_owned(),
+        refresh_token: doc.pointer("/tokens/refresh_token")?.as_str()?.to_owned(),
+        account_id: doc.pointer("/tokens/account_id")?.as_str()?.to_owned(),
+    })
+}
+
+const GRANT_REFRESH: &str = "refresh_token";
+
+/// Exchange the stored refresh token for fresh tokens and persist them.
+pub fn refresh(codex_home: &Path) -> Result<Tokens, AuthError> {
+    let tokens = load(codex_home).ok_or(AuthError::MissingField("refresh_token"))?;
+    let body = serde_json::json!({
+        "grant_type": GRANT_REFRESH,
+        "refresh_token": tokens.refresh_token,
+        "client_id": client_id()?,
+    });
+    let resp = ureq::post(format!("{ISSUER}/oauth/token").as_str())
+        .send_json(body)
+        .map_err(|e| match e {
+            ureq::Error::Status(status, resp) => {
+                let text = resp.into_string().unwrap_or_default();
+                AuthError::Token(status, text)
+            }
+            other => AuthError::from(other),
+        })?
+        .into_json::<Value>()?;
+    let fresh = to_tokens(&resp)?;
+    save(codex_home, &fresh)?;
+    Ok(fresh)
+}
+
 pub fn save(codex_home: &Path, tokens: &Tokens) -> Result<(), AuthError> {
     fs::create_dir_all(codex_home)?;
     let doc = serde_json::json!({

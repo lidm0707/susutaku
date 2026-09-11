@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use axum::{
     Json, Router,
-    extract::{DefaultBodyLimit, FromRequestParts, Multipart, Path, Request, State},
+    extract::{DefaultBodyLimit, FromRequestParts, Multipart, Path, Query, Request, State},
     http::{self, StatusCode, request::Parts},
     response::{IntoResponse, Response},
     routing::{delete, get, post, put},
@@ -20,6 +20,7 @@ use crate::infra::codex_auth;
 use crate::infra::codex_auth::{CodexAuth, LoginStatus};
 use crate::infra::codex_chat;
 use crate::infra::host_spec::{self, HostSpec};
+use crate::infra::local_settings;
 use crate::infra::provider_quota::QuotaBoard;
 use crate::infra::sandbox::AgentSandbox;
 use crate::infra::zai_settings::{SettingsState, ZaiSettings};
@@ -39,6 +40,7 @@ pub fn router<T: ChatHandling + ModelSwitch + 'static>(
     catalog: Arc<dyn crate::infra::model_client::ModelCatalog>,
     codex_workspace: PathBuf,
     kanban_store: std::sync::Arc<kanban_rs::Store>,
+    usage_store: std::sync::Arc<codex_usage_rs::Store>,
     manager: Arc<manager_rs::ManagerProcess>,
     model_cfg: Arc<dyn ModelEndpoint>,
 ) -> Router {
@@ -77,6 +79,8 @@ pub fn router<T: ChatHandling + ModelSwitch + 'static>(
         .route("/api/auth/claude/status", get(claude_status))
         .route("/api/chat/claude", post(chat_claude))
         .with_state(Arc::new(ClaudeAuth::new(codex_workspace.clone())));
+    let settings_state = Arc::new(SettingsState::load());
+    crate::app::say_hi::spawn(settings_state.clone());
     let settings = Router::new()
         .route(
             "/api/settings/zai",
@@ -84,11 +88,14 @@ pub fn router<T: ChatHandling + ModelSwitch + 'static>(
         )
         .route("/api/settings/zai/models", post(zai_model_action))
         .route("/api/settings/zai/quota", get(zai_quota))
-        .route("/api/quota", get(quota_board))
         .route("/api/settings/zai/hi", post(zai_hi))
         .route(
             "/api/settings/client-env",
             get(get_client_env).post(set_client_env),
+        )
+        .route(
+            "/api/settings/alerts",
+            get(get_alert_settings).post(set_alert_settings),
         )
         .route(
             "/api/settings/system-prompt",
@@ -96,11 +103,12 @@ pub fn router<T: ChatHandling + ModelSwitch + 'static>(
         )
         .route("/api/chat/zai", post(chat_zai))
         .route("/api/sandbox", get(list_sandboxes))
+        .route("/api/machines", get(machines))
         .route("/api/host", get(host_spec_handler))
         .route("/api/sandbox/purge", post(purge_sandbox))
         .route("/api/sandbox/sweep", post(sweep_sandboxes))
         .route("/install.sh", get(install_script))
-        .with_state(Arc::new(SettingsState::load()));
+        .with_state(settings_state.clone());
     let local_settings_router = Router::new()
         .route(
             "/api/settings/local",
@@ -110,10 +118,22 @@ pub fn router<T: ChatHandling + ModelSwitch + 'static>(
             settings: Arc::new(SettingsState::load()),
             model: model_cfg,
         }));
+    let usage = Router::new()
+        .route(
+            "/api/codex/usage/latest",
+            get(codex_usage_latest),
+        )
+        .route("/api/codex/usage/history", get(codex_usage_history))
+        .with_state(usage_store.clone());
+    let quota = Router::new()
+        .route("/api/quota", get(quota_board))
+        .with_state((settings_state.clone(), usage_store));
     core.merge(auth)
         .merge(claude)
         .merge(settings)
         .merge(local_settings_router)
+        .merge(usage)
+        .merge(quota)
         .merge(kanban_router(kanban_state(
             kanban_store,
             std::sync::Arc::new(crate::app::schedule_work::spawn(std::sync::Arc::new(
@@ -661,6 +681,18 @@ async fn set_zai_settings(
     state
         .set_zai(req.api_key, req.model)
         .map_err(ApiError::internal)?;
+    if req.say_hi_time.is_some()
+        || req.say_hi_interval_mins.is_some()
+        || req.timezone.is_some()
+    {
+        state
+            .set_zai_schedule(
+                req.say_hi_time.flatten(),
+                req.say_hi_interval_mins.flatten(),
+                req.timezone.flatten(),
+            )
+            .map_err(ApiError::bad_request)?;
+    }
     Ok(Json(zai_reply(&state.zai())))
 }
 
@@ -676,6 +708,9 @@ fn zai_reply(zai: &ZaiSettings) -> ZaiSettingsReply {
                 api_key_set: m.key().is_some(),
             })
             .collect(),
+        say_hi_time: zai.say_hi_time.clone(),
+        say_hi_interval_mins: zai.say_hi_interval_mins,
+        timezone: zai.timezone.clone(),
     }
 }
 
@@ -753,13 +788,45 @@ fn now_ms() -> i64 {
     path = "/api/quota",
     responses((status = 200, body = QuotaBoard))
 )]
-async fn quota_board(State(state): State<Arc<SettingsState>>) -> Json<QuotaBoard> {
-    let board = tokio::task::spawn_blocking(move || crate::infra::provider_quota::board(&state))
-        .await
-        .unwrap_or(QuotaBoard {
-            platforms: Vec::new(),
-        });
+async fn quota_board(
+    State((settings, usage)): State<(Arc<SettingsState>, Arc<codex_usage_rs::Store>)>,
+) -> Json<QuotaBoard> {
+    let latest = usage.latest().await.ok().flatten();
+    let board =
+        tokio::task::spawn_blocking(move || crate::infra::provider_quota::board(&settings, latest))
+            .await
+            .unwrap_or(QuotaBoard {
+                platforms: Vec::new(),
+            });
     Json(board)
+}
+
+const CODEX_USAGE_HISTORY_DEFAULT_LIMIT: i64 = 50;
+const CODEX_USAGE_HISTORY_MAX_LIMIT: i64 = 500;
+
+#[derive(Deserialize)]
+struct UsageHistoryQuery {
+    limit: Option<i64>,
+}
+
+async fn codex_usage_latest(
+    State(store): State<Arc<codex_usage_rs::Store>>,
+) -> Json<Option<codex_usage_rs::Row>> {
+    Json(store.latest().await.ok().flatten())
+}
+
+async fn codex_usage_history(
+    State(store): State<Arc<codex_usage_rs::Store>>,
+    Query(query): Query<UsageHistoryQuery>,
+) -> Json<Vec<codex_usage_rs::Row>> {
+    let limit = query
+        .limit
+        .unwrap_or(CODEX_USAGE_HISTORY_DEFAULT_LIMIT)
+        .clamp(
+            1,
+            CODEX_USAGE_HISTORY_MAX_LIMIT,
+        );
+    Json(store.history(limit).await.unwrap_or_default())
 }
 
 #[derive(Serialize, utoipa::ToSchema)]
@@ -932,6 +999,45 @@ fn stamp_host(env: &mut crate::infra::client_env::ClientEnv) {
     env.hostname = hostname;
     env.os = os;
     env.arch = arch;
+}
+
+#[derive(serde::Serialize, utoipa::ToSchema)]
+struct AlertSettingsReply {
+    webhook_set: bool,
+}
+
+#[derive(serde::Deserialize, utoipa::ToSchema)]
+struct AlertSettingsRequest {
+    webhook_url: Option<String>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/settings/alerts",
+    responses((status = 200, body = AlertSettingsReply))
+)]
+async fn get_alert_settings(State(state): State<Arc<SettingsState>>) -> Json<AlertSettingsReply> {
+    Json(AlertSettingsReply {
+        webhook_set: state.alert_webhook().is_some(),
+    })
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/settings/alerts",
+    request_body = AlertSettingsRequest,
+    responses((status = 200, body = AlertSettingsReply), (status = 500, body = str))
+)]
+async fn set_alert_settings(
+    State(state): State<Arc<SettingsState>>,
+    Json(req): Json<AlertSettingsRequest>,
+) -> Result<Json<AlertSettingsReply>, ApiError> {
+    state
+        .set_alert_webhook(req.webhook_url.as_deref())
+        .map_err(ApiError::internal)?;
+    Ok(Json(AlertSettingsReply {
+        webhook_set: state.alert_webhook().is_some(),
+    }))
 }
 
 #[utoipa::path(
@@ -1822,6 +1928,109 @@ async fn host_spec_handler() -> Json<HostSpec> {
     Json(host_spec::host_spec())
 }
 
+/// Default model-server URL when no endpoint is saved in local settings.
+const MODEL_SERVER_DEFAULT: &str = "http://127.0.0.1:8992";
+/// Hub probe budget: machines panel must stay responsive when the hub is down.
+const HUB_TIMEOUT_SECS: u64 = 3;
+
+#[derive(Serialize, utoipa::ToSchema)]
+struct MachineView {
+    hostname: String,
+    os: String,
+    arch: String,
+    local: bool,
+    sandboxes: Vec<SandboxDirInfo>,
+}
+
+fn model_server_url() -> String {
+    local_settings::read_saved()
+        .map(|s| s.endpoint)
+        .filter(|e| !e.is_empty())
+        .unwrap_or_else(|| MODEL_SERVER_DEFAULT.to_string())
+}
+
+fn sandbox_info(d: &core_agent::sandbox::SandboxDir) -> SandboxDirInfo {
+    SandboxDirInfo {
+        pid: d.pid,
+        alive: d.alive,
+        path: d.path.display().to_string(),
+    }
+}
+
+/// Remote hub clients; each reachable client's sandbox root is resolved with
+/// a `pwd` dispatch through the hub command channel.
+fn remote_machines(local_hostname: &str) -> Vec<MachineView> {
+    let url = model_server_url();
+    let agent = ureq::AgentBuilder::new()
+        .timeout(std::time::Duration::from_secs(HUB_TIMEOUT_SECS))
+        .build();
+    let Ok(resp) = agent.get(&format!("{url}/api/clients")).call() else {
+        return Vec::new();
+    };
+    let Ok(val) = resp.into_json::<serde_json::Value>() else {
+        return Vec::new();
+    };
+    let Some(rows) = val.as_array() else {
+        return Vec::new();
+    };
+    rows.iter()
+        .map(|c| MachineView {
+            hostname: c["hostname"].as_str().unwrap_or("client").to_string(),
+            os: c["os"].as_str().unwrap_or_default().to_string(),
+            arch: String::new(),
+            local: false,
+            sandboxes: hub_client_sandbox(&agent, &url, c["id"].as_u64()),
+        })
+        .filter(|m| m.hostname != local_hostname)
+        .collect()
+}
+
+fn hub_client_sandbox(agent: &ureq::Agent, url: &str, id: Option<u64>) -> Vec<SandboxDirInfo> {
+    let Some(id) = id else {
+        return Vec::new();
+    };
+    let body = serde_json::json!({ "cmd": "pwd" }).to_string();
+    let Ok(resp) = agent
+        .post(&format!("{url}/api/clients/{id}/command"))
+        .send_string(&body)
+    else {
+        return Vec::new();
+    };
+    let Ok(val) = resp.into_json::<serde_json::Value>() else {
+        return Vec::new();
+    };
+    match val["output"].as_str() {
+        Some(path) if !path.trim().is_empty() => vec![SandboxDirInfo {
+            pid: 0,
+            alive: true,
+            path: path.trim().to_string(),
+        }],
+        _ => Vec::new(),
+    }
+}
+
+fn machine_views() -> Vec<MachineView> {
+    let host = host_spec::host_spec();
+    let mut views = vec![MachineView {
+        hostname: host.hostname.clone(),
+        os: host.os,
+        arch: host.arch,
+        local: true,
+        sandboxes: AgentSandbox::dirs().iter().map(sandbox_info).collect(),
+    }];
+    views.extend(remote_machines(&host.hostname));
+    views
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/machines",
+    responses((status = 200, body = [MachineView]))
+)]
+async fn machines() -> Json<Vec<MachineView>> {
+    Json(tokio::task::spawn_blocking(machine_views).await.unwrap_or_default())
+}
+
 #[utoipa::path(
     post,
     path = "/api/sandbox/purge",
@@ -1927,10 +2136,38 @@ async fn finish_agent(
     State(manager): State<Arc<manager_rs::ManagerProcess>>,
     Path(agent): Path<String>,
 ) -> Result<Json<manager_rs::TaskOutcome>, ApiError> {
-    let outcome = tokio::task::spawn_blocking(move || manager.finish(&agent))
+    const STATUS_FINISHED: &str = "finished";
+    const STATUS_ERROR: &str = "error";
+    let settings = Arc::new(SettingsState::load());
+    let finish_agent_name = agent.clone();
+    let outcome = tokio::task::spawn_blocking(move || manager.finish(&finish_agent_name))
         .await
-        .map_err(|e| ApiError::bad_request(e.to_string()))?
-        .map_err(ApiError::bad_request)?;
+        .map_err(|e| ApiError::bad_request(e.to_string()))?;
+    match &outcome {
+        Ok(out) => {
+            let (settings, agent, status) = (
+                Arc::clone(&settings),
+                out.agent.clone(),
+                STATUS_FINISHED,
+            );
+            let _ = tokio::task::spawn_blocking(move || {
+                crate::infra::alerts::notify_agent_finished(&settings, &agent, status)
+            })
+            .await;
+        }
+        Err(_) => {
+            let (settings, agent, status) = (
+                Arc::clone(&settings),
+                agent.clone(),
+                STATUS_ERROR,
+            );
+            let _ = tokio::task::spawn_blocking(move || {
+                crate::infra::alerts::notify_agent_finished(&settings, &agent, status)
+            })
+            .await;
+        }
+    }
+    let outcome = outcome.map_err(ApiError::bad_request)?;
     Ok(Json(outcome))
 }
 
@@ -1998,6 +2235,8 @@ async fn install_script(
         set_system_prompt,
         get_client_env,
         set_client_env,
+        get_alert_settings,
+        set_alert_settings,
         get_local_endpoint,
         set_local_endpoint,
         chat_zai,
@@ -2055,6 +2294,8 @@ async fn install_script(
         SystemPromptRequest,
         ClientEnvReply,
         ClientEnvRequest,
+        AlertSettingsReply,
+        AlertSettingsRequest,
         LocalEndpointReply,
         LocalEndpointRequest,
         ZaiChatRequest,
@@ -2179,6 +2420,12 @@ struct ZaiSettingsReply {
     api_key_set: bool,
     model: String,
     models: Vec<ZaiModelReply>,
+    /// Daily automatic z.ai ping time, `HH:MM` in the configured timezone.
+    say_hi_time: Option<String>,
+    /// When set, the ping repeats every N minutes after the start time.
+    say_hi_interval_mins: Option<u64>,
+    /// IANA timezone used for the schedule and quota reset display.
+    timezone: Option<String>,
 }
 
 #[derive(Serialize, utoipa::ToSchema)]
@@ -2213,6 +2460,12 @@ struct ZaiSettingsRequest {
     /// Omit or send empty to keep the saved key; the saved key is never returned.
     api_key: Option<String>,
     model: Option<String>,
+    /// `HH:MM` daily say-hi schedule. Omit to leave unchanged, null to clear.
+    say_hi_time: Option<Option<String>>,
+    /// Repeat interval in minutes. Omit to leave unchanged, null for once a day.
+    say_hi_interval_mins: Option<Option<u64>>,
+    /// IANA timezone name. Omit to leave unchanged, null for server-local time.
+    timezone: Option<Option<String>>,
 }
 
 #[derive(Serialize, utoipa::ToSchema)]

@@ -17,9 +17,23 @@ pub struct ClientConn {
     pub rx: mpsc::Receiver<Envelope>,
 }
 
-/// Maps client_id -> outbound command sender.
+/// Identity a client reported in its Register envelope.
+#[derive(Clone, serde::Serialize)]
+pub struct ClientInfo {
+    pub id: u64,
+    pub hostname: String,
+    pub os: String,
+}
+
+struct Slot {
+    tx: mpsc::Sender<Envelope>,
+    hostname: Option<String>,
+    os: Option<String>,
+}
+
+/// Maps client_id -> outbound command sender plus reported identity.
 pub struct Registry {
-    clients: RwLock<HashMap<u64, mpsc::Sender<Envelope>>>,
+    clients: RwLock<HashMap<u64, Slot>>,
     next_id: AtomicU64,
 }
 
@@ -37,7 +51,7 @@ impl Registry {
             .read()
             .map_err(|_| "client registry poisoned".to_string())?
             .get(&client_id)
-            .cloned()
+            .map(|s| s.tx.clone())
             .ok_or_else(|| format!("no client {client_id}"))?;
         tx.send(env)
             .await
@@ -51,9 +65,41 @@ impl Registry {
             .unwrap_or_default()
     }
 
+    /// All connected clients with their reported identity.
+    pub fn list(&self) -> Vec<ClientInfo> {
+        self.clients
+            .read()
+            .map(|c| {
+                c.iter()
+                    .map(|(id, s)| ClientInfo {
+                        id: *id,
+                        hostname: s.hostname.clone().unwrap_or_else(|| format!("client-{id}")),
+                        os: s.os.clone().unwrap_or_default(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     fn insert(&self, id: u64, tx: mpsc::Sender<Envelope>) {
         if let Ok(mut clients) = self.clients.write() {
-            clients.insert(id, tx);
+            clients.insert(
+                id,
+                Slot {
+                    tx,
+                    hostname: None,
+                    os: None,
+                },
+            );
+        }
+    }
+
+    fn set_meta(&self, id: u64, hostname: String, os: String) {
+        if let Ok(mut clients) = self.clients.write()
+            && let Some(slot) = clients.get_mut(&id)
+        {
+            slot.hostname = Some(hostname);
+            slot.os = Some(os);
         }
     }
 
@@ -118,7 +164,8 @@ async fn handle_conn(
         }
     });
     while let Ok(env) = read_frame(&mut rd).await {
-        if matches!(env.kind, Kind::Register { .. }) {
+        if let Kind::Register { hostname, os } = env.kind {
+            registry.set_meta(id, hostname, os);
             continue;
         }
         if in_tx.send(env).await.is_err() {

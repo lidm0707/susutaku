@@ -7,6 +7,7 @@ pub mod auth;
 pub mod exec;
 pub mod model;
 pub mod pkce;
+pub mod usage;
 
 pub use auth::{AuthError, AuthStatus, Tokens};
 pub use auth::{authorize_url, check, client_id_from_codex_home, exchange_code, save};
@@ -15,6 +16,8 @@ pub use exec::{check_available, drain_events, exec_json, login, resolve_bin};
 pub use model::ModelInfo;
 pub use model::list as list_models;
 pub use pkce::{challenge, new_verifier};
+pub use usage::{FetchError, Usage, UsageStatus, UsageWindow};
+pub use usage::{fetch as fetch_usage, parse as parse_usage, status as usage_status};
 
 use std::path::Path;
 

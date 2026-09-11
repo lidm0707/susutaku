@@ -20,6 +20,34 @@ pub const FIELD_API_KEY: &str = "api_key";
 pub const FIELD_MODEL: &str = "model";
 pub const FIELD_MODELS: &str = "models";
 pub const FIELD_PROMPT: &str = "prompt";
+pub const FIELD_SAY_HI_TIME: &str = "say_hi_time";
+pub const FIELD_SAY_HI_INTERVAL: &str = "say_hi_interval_mins";
+pub const FIELD_TIMEZONE: &str = "timezone";
+pub const TIME_LEN: usize = 5;
+/// Repeat interval for say hi, in minutes (1 step every N minutes).
+pub const MIN_SAY_HI_INTERVAL: u64 = 1;
+pub const MAX_SAY_HI_INTERVAL: u64 = 24 * 60;
+
+/// Validates `HH:MM` (24h). Returns hour/minute for scheduler use.
+pub fn parse_hhmm(value: &str) -> Result<(u32, u32), String> {
+    const HOURS: u32 = 24;
+    const MINUTES: u32 = 60;
+    let parts: Vec<&str> = value.split(':').collect();
+    if parts.len() != 2 {
+        return Err(format!("invalid time {value:?}: expected HH:MM"));
+    }
+    let parse = |p: &str| -> Result<u32, String> {
+        if p.len() != 2 || !p.bytes().all(|b| b.is_ascii_digit()) {
+            return Err(format!("invalid time {value:?}: expected HH:MM"));
+        }
+        p.parse::<u32>().map_err(|_| format!("invalid time {value:?}"))
+    };
+    let (h, m) = (parse(parts[0])?, parse(parts[1])?);
+    if h >= HOURS || m >= MINUTES {
+        return Err(format!("invalid time {value:?}: out of range"));
+    }
+    Ok((h, m))
+}
 
 /// One created model with its own API token.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -41,6 +69,13 @@ pub struct ZaiSettings {
     pub models: Vec<ZaiModel>,
     #[serde(skip_serializing)]
     pub api_key: Option<String>,
+    #[serde(default)]
+    pub say_hi_time: Option<String>,
+    /// When set, say hi repeats every N minutes after the start time.
+    #[serde(default)]
+    pub say_hi_interval_mins: Option<u64>,
+    #[serde(default)]
+    pub timezone: Option<String>,
 }
 
 pub fn validate_api_key(raw_key: &str) -> Result<(), String> {
@@ -60,6 +95,7 @@ pub struct SettingsState {
     client_env: RwLock<Option<ClientEnv>>,
     system_prompt: RwLock<String>,
     local_endpoint: RwLock<String>,
+    alert_webhook: RwLock<Option<String>>,
 }
 
 impl SettingsState {
@@ -74,7 +110,34 @@ impl SettingsState {
                     .map(|s| s.endpoint)
                     .unwrap_or_default(),
             ),
+            alert_webhook: RwLock::new(super::alerts::read_webhook()),
         }
+    }
+
+    /// Webhook URL is write-only: it never leaves the backend.
+    pub fn alert_webhook(&self) -> Option<String> {
+        self.alert_webhook
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    pub fn set_alert_webhook(&self, url: Option<&str>) -> Result<(), String> {
+        let mut doc = read_doc();
+        match url.map(str::trim).filter(|u| !u.is_empty()) {
+            Some(u) => doc[super::alerts::FIELD_WEBHOOK_URL] = serde_json::json!(u),
+            None => {
+                doc.as_object_mut()
+                    .ok_or_else(|| "settings doc is not an object".to_owned())?
+                    .remove(super::alerts::FIELD_WEBHOOK_URL);
+            }
+        }
+        write_doc(&doc)?;
+        *self
+            .alert_webhook
+            .write()
+            .unwrap_or_else(|e| e.into_inner()) = super::alerts::read_webhook();
+        Ok(())
     }
 
     pub fn local_endpoint(&self) -> String {
@@ -204,6 +267,31 @@ impl SettingsState {
         write_file(&zai)
     }
 
+    pub fn set_zai_schedule(
+        &self,
+        say_hi_time: Option<String>,
+        say_hi_interval: Option<u64>,
+        timezone: Option<String>,
+    ) -> Result<(), String> {
+        let time = say_hi_time.filter(|t| !t.is_empty());
+        if let Some(t) = &time {
+            parse_hhmm(t)?;
+        }
+        let interval = say_hi_interval
+            .filter(|v| *v >= MIN_SAY_HI_INTERVAL)
+            .map(|v| v.clamp(MIN_SAY_HI_INTERVAL, MAX_SAY_HI_INTERVAL));
+        let tz = timezone.as_deref().map(str::trim).filter(|t| !t.is_empty());
+        if let Some(t) = tz {
+            t.parse::<chrono_tz::Tz>()
+                .map_err(|_| format!("unknown timezone {t:?}"))?;
+        }
+        let mut zai = self.zai.write().unwrap_or_else(|e| e.into_inner());
+        zai.say_hi_time = time;
+        zai.say_hi_interval_mins = interval;
+        zai.timezone = tz.map(str::to_owned);
+        write_file(&zai)
+    }
+
     /// Token priority: the active model's own key, the saved global key, `$ZAI_API_KEY`.
     pub fn zai_token(&self) -> Result<String, String> {
         let zai = self.zai();
@@ -284,6 +372,17 @@ fn read_file() -> Option<ZaiSettings> {
             .get(FIELD_API_KEY)
             .and_then(serde_json::Value::as_str)
             .map(str::to_owned),
+        say_hi_time: zai
+            .get(FIELD_SAY_HI_TIME)
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned),
+        say_hi_interval_mins: zai
+            .get(FIELD_SAY_HI_INTERVAL)
+            .and_then(serde_json::Value::as_u64),
+        timezone: zai
+            .get(FIELD_TIMEZONE)
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned),
     })
 }
 
@@ -302,6 +401,9 @@ fn write_file(zai: &ZaiSettings) -> Result<(), String> {
         FIELD_API_KEY: zai.api_key.as_deref().unwrap_or(""),
         FIELD_MODEL: zai.model.as_deref().unwrap_or(DEFAULT_MODEL),
         FIELD_MODELS: zai.models,
+        FIELD_SAY_HI_TIME: zai.say_hi_time,
+        FIELD_SAY_HI_INTERVAL: zai.say_hi_interval_mins,
+        FIELD_TIMEZONE: zai.timezone,
     });
     write_doc(&doc)
 }

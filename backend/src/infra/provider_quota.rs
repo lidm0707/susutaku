@@ -40,9 +40,13 @@ pub struct QuotaBoard {
     pub platforms: Vec<PlatformQuota>,
 }
 
-pub fn board(state: &SettingsState) -> QuotaBoard {
+pub fn board(state: &SettingsState, codex_usage: Option<codex_usage_rs::Row>) -> QuotaBoard {
     QuotaBoard {
-        platforms: vec![zai(state), codex(&codex_home()), claude(&claude_home())],
+        platforms: vec![
+            zai(state),
+            codex(&codex_home(), codex_usage),
+            claude(&claude_home()),
+        ],
     }
 }
 
@@ -75,12 +79,47 @@ fn from_zai_limits(limits: &[quota::Limit]) -> PlatformQuota {
     }
 }
 
-pub fn codex(home: &Path) -> PlatformQuota {
-    let Some(claims) = codex_claims(home) else {
-        return unavailable(PLATFORM_CODEX, REASON_NO_TOKEN);
-    };
-    platform_from_codex_claims(&claims)
-        .unwrap_or_else(|| unavailable(PLATFORM_CODEX, REASON_NO_USAGE_DATA))
+pub fn codex(home: &Path, usage: Option<codex_usage_rs::Row>) -> PlatformQuota {
+    if let Some(row) = usage {
+        return from_codex_usage_row(&row);
+    }
+    if let Some(platform) =
+        codex_claims(home).and_then(|claims| platform_from_codex_claims(&claims))
+    {
+        return platform;
+    }
+    codex_from_usage(&codex_cli::usage::status(home))
+}
+
+/// Freshest source: the scheduler's DB snapshot (rollout `rate_limits`).
+/// Mapping mirrors the z.ai row: primary window is the headline % + bar;
+/// weekly (secondary), when present, shows as the small "win %".
+fn from_codex_usage_row(row: &codex_usage_rs::Row) -> PlatformQuota {
+    PlatformQuota {
+        platform: PLATFORM_CODEX.to_string(),
+        available: true,
+        reason: None,
+        tokens_used_pct: row.primary_used_percent.map(|p| p as f32),
+        window_reset_ms: row.primary_resets_at.map(|t| t.timestamp_millis()),
+        window_used_pct: row.secondary_used_percent.map(|p| p as f32),
+    }
+}
+
+fn codex_from_usage(status: &codex_cli::UsageStatus) -> PlatformQuota {
+    match status {
+        codex_cli::UsageStatus::Ok(usage) => PlatformQuota {
+            platform: PLATFORM_CODEX.to_string(),
+            available: true,
+            reason: None,
+            tokens_used_pct: usage.secondary.as_ref().map(|w| w.used_percent as f32),
+            window_reset_ms: usage.primary.as_ref().and_then(|w| w.resets_at).map(to_ms),
+            window_used_pct: usage.primary.as_ref().map(|w| w.used_percent as f32),
+        },
+        codex_cli::UsageStatus::NotLoggedIn => unavailable(PLATFORM_CODEX, REASON_NO_TOKEN),
+        codex_cli::UsageStatus::Unavailable(e) => {
+            unavailable(PLATFORM_CODEX, &format!("{REASON_NO_USAGE_DATA}: {e}"))
+        }
+    }
 }
 
 fn codex_claims(home: &Path) -> Option<Value> {

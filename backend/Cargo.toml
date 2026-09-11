@@ -5,6 +5,8 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+chrono = "0.4"
+chrono-tz = "0.10"
 axum = { version = "0.8", features = ["multipart"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "fs"] }
 tower-http = { version = "0.6", features = ["cors", "fs", "trace"] }
@@ -24,6 +26,7 @@ claude-cli = { path = "../crates/agent_3th_cli/claude_cli" }
 zai-api = { path = "../crates/agent_3th_cli/zai_api" }
 ai-interface-layer = { path = "../crates/agent_3th_cli/ai_interface_layer" }
 kanban-rs = { workspace = true }
+codex-usage-rs = { workspace = true }
 manager-rs = { workspace = true }
 piplines = { workspace = true }
 work = { workspace = true }

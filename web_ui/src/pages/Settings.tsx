@@ -17,6 +17,9 @@ import {
   Trash2,
   RefreshCw,
   Hand,
+  Clock,
+  Bell,
+  HelpCircle,
 } from "lucide-react";
 import { Modal } from "../ui/Overlay.jsx";
 import { toast } from "../ui/Toast.jsx";
@@ -44,18 +47,24 @@ import {
   save_local_settings,
   fetch_zai_quota,
   zai_say_hi,
+  save_zai_schedule,
   type ZaiQuota,
-  fetch_quota_board,
-  type PlatformQuota,
+  fetch_codex_usage_latest,
+  fetch_codex_usage_history,
+  type CodexUsageRow,
+  fetch_alert_settings,
+  save_alert_settings,
 } from "../lib.js";
 
-type Tab = "client" | "providers" | "users";
+type Tab = "client" | "providers" | "alerts" | "timezone" | "users";
 
 const ZAI_MODELS = ["glm-4.6", "glm-4.6v", "glm-4.5", "glm-4.5-air", "glm-4.5-flash", "glm-4.5v"] as const;
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "client", label: "client env" },
   { id: "providers", label: "ai providers" },
+  { id: "alerts", label: "alerts" },
+  { id: "timezone", label: "timezone" },
   { id: "users", label: "users" },
 ];
 
@@ -82,6 +91,8 @@ export default function Settings() {
         </div>
         {tab === "client" && <ClientEnvTab />}
         {tab === "providers" && <ProvidersTab />}
+        {tab === "alerts" && <AlertsTab />}
+        {tab === "timezone" && <TimezoneTab />}
         {tab === "users" && <UsersTab />}
       </section>
     </main>
@@ -298,11 +309,23 @@ const PROVIDER_ITEMS: (SideItem & { id: ProviderTab })[] = [
 
 function ProvidersTab() {
   const [provider, setProvider] = useState<ProviderTab>("zai");
+  const [tz, set_tz] = useState<string>(localStorage.getItem(TZ_KEY) || TZ_LOCAL);
+
+  useEffect(() => {
+    fetch_zai_settings()
+      .then((s: ZaiSettings) => {
+        if (s.timezone) {
+          set_tz(s.timezone);
+          localStorage.setItem(TZ_KEY, s.timezone);
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   return (
     <SplitLayout items={PROVIDER_ITEMS} active={provider} on_pick={(id) => setProvider(id as ProviderTab)} label="ai providers">
-      <QuotaBoard />
-      {provider === "zai" && <ZaiProvider />}
+      {provider === "codex" && <CodexUsageBlock tz={tz} />}
+      {provider === "zai" && <ZaiProvider tz={tz} />}
       {provider === "codex" && <CodexProvider />}
       {provider === "claude" && <ClaudeProvider />}
       {provider === "local" && <LocalProvider />}
@@ -313,7 +336,166 @@ function ProvidersTab() {
 
 type ZaiModal = { mode: "create" } | { mode: "key"; model: string } | null;
 
-function ZaiProvider() {
+const ALERT_ITEMS: (SideItem & { id: "discord" })[] = [
+  { id: "discord", name: "discord", desc: "webhook alerts", icon: <Bell size={16} /> },
+];
+
+function AlertsTab() {
+  const [channel, setChannel] = useState<string>("discord");
+
+  return (
+    <SplitLayout items={ALERT_ITEMS} active={channel} on_pick={(id) => setChannel(id)} label="alerts">
+      {channel === "discord" && <AlertsProvider />}
+    </SplitLayout>
+  );
+}
+
+/// Own tab: timezone dropdown plus a comparison of what the frontend
+/// detects vs what the backend has stored (null = backend uses its own
+/// server-local time for the schedule).
+function TimezoneTab() {
+  const [tz, setTz] = useState<string>(localStorage.getItem(TZ_KEY) || TZ_LOCAL);
+  const [backendTz, setBackendTz] = useState<string | null>(null);
+  const [hiTime, setHiTime] = useState("");
+  const [hiInterval, setHiInterval] = useState<number | null>(null);
+  const [status, setStatus] = useState("");
+  const [error, setError] = useState("");
+  const browserTz = Intl.DateTimeFormat().resolvedOptions().timeZone || "unknown";
+
+  useEffect(() => {
+    fetch_zai_settings()
+      .then((s: ZaiSettings) => {
+        setBackendTz(s.timezone);
+        setHiTime(s.say_hi_time || "");
+        setHiInterval(s.say_hi_interval_mins);
+        if (s.timezone) {
+          setTz(s.timezone);
+          localStorage.setItem(TZ_KEY, s.timezone);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  async function saveSchedule(nextTz: string) {
+    setStatus("");
+    setError("");
+    try {
+      // echo the stored say-hi time back — the backend clears the schedule
+      // when say_hi_time arrives as null.
+      const s = await save_zai_schedule(hiTime || null, hiInterval, nextTz === TZ_LOCAL ? null : nextTz);
+      setBackendTz(s.timezone);
+      setTz(s.timezone || TZ_LOCAL);
+      localStorage.setItem(TZ_KEY, s.timezone || TZ_LOCAL);
+      setStatus("saved");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  return (
+    <div className="timezone-layout">
+      <section className="provider-section" aria-label="timezone">
+        <h3>
+          <Globe size={14} /> timezone
+        </h3>
+        <div className="form-row tz-field" title="what is timezone? — the IANA zone used to fire the daily say hi and to show quota reset times">
+          <select
+            aria-label="timezone"
+            value={tz}
+            onChange={(e: React.ChangeEvent<HTMLSelectElement>) => {
+              setTz(e.target.value);
+              void saveSchedule(e.target.value);
+            }}
+          >
+            <option value={TZ_LOCAL}>local time</option>
+            {timezone_options().map((z) => (
+              <option key={z} value={z}>{z}</option>
+            ))}
+          </select>
+          <HelpCircle size={13} />
+        </div>
+        {status && <span className="saved-mark">{status}</span>}
+        {error && <span className="error">{error}</span>}
+      </section>
+      <section className="provider-section" aria-label="timezone sources">
+        <h3>detected vs stored</h3>
+        <dl className="tz-source-list">
+          <div>
+            <dt>frontend detects</dt>
+            <dd>{browserTz}</dd>
+          </div>
+          <div>
+            <dt>backend receives</dt>
+            <dd>{backendTz ?? "not set — backend uses server-local time"}</dd>
+          </div>
+        </dl>
+      </section>
+    </div>
+  );
+}
+
+function AlertsProvider() {
+  const [url, setUrl] = useState("");
+  const [webhookSet, setWebhookSet] = useState(false);
+  const [status, setStatus] = useState("");
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    fetch_alert_settings()
+      .then((s) => setWebhookSet(s.webhook_set))
+      .catch(() => setWebhookSet(false));
+  }, []);
+
+  async function save(webhook_url: string | null) {
+    setStatus("");
+    setError("");
+    try {
+      const res = await save_alert_settings(webhook_url);
+      setWebhookSet(res.webhook_set);
+      setUrl("");
+      setStatus(webhook_url ? "saved" : "cleared");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  function submit(e: React.FormEvent) {
+    e.preventDefault();
+    void save(url.trim() ? url.trim() : null);
+  }
+
+  return (
+    <section className="provider-section" aria-label="alerts">
+      <h3>discord webhook alerts</h3>
+      <p className="sub">
+        {webhookSet ? "webhook set" : "no webhook — agent finish events stay in-app"}
+      </p>
+      <form onSubmit={submit}>
+        <div className="form-row">
+          <input
+            type="password"
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            placeholder={webhookSet ? "replace webhook url…" : "discord webhook url…"}
+            autoComplete="off"
+          />
+        </div>
+        <div className="form-row">
+          <button type="submit">{webhookSet ? "update" : "save"}</button>
+          {webhookSet && (
+            <button type="button" onClick={() => void save(null)}>
+              clear
+            </button>
+          )}
+          {status && <span className="saved-mark">{status}</span>}
+          {error && <span className="error">{error}</span>}
+        </div>
+      </form>
+    </section>
+  );
+}
+
+function ZaiProvider({ tz }: { tz: string }) {
   const [entries, setEntries] = useState<ZaiModel[]>([]);
   const [active, setActive] = useState("");
   const [keySet, setKeySet] = useState(false);
@@ -322,6 +504,10 @@ function ZaiProvider() {
   const [modal, setModal] = useState<ZaiModal>(null);
   const [draftModel, setDraftModel] = useState("");
   const [draftKey, setDraftKey] = useState("");
+  const [hiTime, setHiTime] = useState("");
+  const [hiInterval, setHiInterval] = useState("");
+  const [schedStatus, setSchedStatus] = useState("");
+  const [schedError, setSchedError] = useState("");
 
   const suggestions: string[] = [...new Set([...ZAI_MODELS, ...entries.map((m) => m.model)])];
 
@@ -331,6 +517,8 @@ function ZaiProvider() {
         setKeySet(s.api_key_set);
         setEntries(s.models);
         setActive(s.model);
+        setHiTime(s.say_hi_time || "");
+        setHiInterval(s.say_hi_interval_mins != null ? String(s.say_hi_interval_mins) : "");
       })
       .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
   }, []);
@@ -368,6 +556,21 @@ function ZaiProvider() {
     e.preventDefault();
     if (modal?.mode !== "key") return;
     run({ action: "set_key", model: modal.model, api_key: draftKey.trim() }, close);
+  }
+
+  async function saveSchedule(nextHiTime: string, nextInterval: string = hiInterval) {
+    setSchedStatus("");
+    setSchedError("");
+    const mins = Number(nextInterval);
+    const interval = Number.isFinite(mins) && mins >= 1 ? Math.floor(mins) : null;
+    try {
+      const s = await save_zai_schedule(nextHiTime || null, interval, tz === TZ_LOCAL ? null : tz);
+      setHiTime(s.say_hi_time || "");
+      setHiInterval(s.say_hi_interval_mins != null ? String(s.say_hi_interval_mins) : "");
+      setSchedStatus("saved");
+    } catch (err: unknown) {
+      setSchedError(err instanceof Error ? err.message : String(err));
+    }
   }
 
   const creating = modal?.mode === "create";
@@ -432,7 +635,56 @@ function ZaiProvider() {
       </div>
       {status && <span className="saved-mark">{status}</span>}
       {error && <p className="error">{error}</p>}
-      <ZaiQuotaBlock />
+      <ZaiQuotaBlock tz={tz} />
+      <section className="provider-section" aria-label="zai schedule">
+        <h3>daily say hi</h3>
+        <p className="sub">
+          {hiTime
+            ? `z.ai say hi at ${hiTime}${tz === TZ_LOCAL ? " (local time)" : ` (${tz})`}${hiInterval ? `, every ${hiInterval} min` : ""}`
+            : "no daily say hi scheduled"}
+        </p>
+        <form
+          onSubmit={(e: React.FormEvent) => {
+            e.preventDefault();
+            void saveSchedule(hiTime);
+          }}
+        >
+          <div className="form-row">
+            <input
+              type="time"
+              aria-label="say hi start time"
+              value={hiTime}
+              onChange={(e: React.ChangeEvent<HTMLInputElement>) => setHiTime(e.target.value)}
+            />
+            <input
+              type="number"
+              aria-label="say hi repeat every (minutes)"
+              min={1}
+              step={1}
+              className="say-hi-interval"
+              title="repeat every N minutes after the start time (empty = once a day)"
+              placeholder="every …"
+              value={hiInterval}
+              onChange={(e: React.ChangeEvent<HTMLInputElement>) => setHiInterval(e.target.value)}
+            />
+            <button type="submit" disabled={!hiTime}>save</button>
+            {hiTime && (
+              <button
+                type="button"
+                onClick={() => {
+                  setHiTime("");
+                  setHiInterval("");
+                  void saveSchedule("", "");
+                }}
+              >
+                clear
+              </button>
+            )}
+          </div>
+          {schedStatus && <span className="saved-mark">{schedStatus}</span>}
+          {schedError && <span className="error">{schedError}</span>}
+        </form>
+      </section>
       <Modal
         open={modal !== null}
         title={creating ? "create z.ai model" : "edit token"}
@@ -479,6 +731,14 @@ type QuotaState = { quota: ZaiQuota } | { error: true } | null;
 const QUOTA_MINT_MAX = 50;
 const QUOTA_LEMON_MAX = 80;
 const REPLY_PREVIEW_LEN = 120;
+const TZ_LOCAL = "local";
+const TZ_KEY = "susutaku:tz";
+
+function timezone_options(): string[] {
+  const supported = (Intl as unknown as { supportedValuesOf?: (k: string) => string[] })
+    .supportedValuesOf?.("timeZone");
+  return supported ? supported.filter((z) => z.includes("/")) : [TZ_LOCAL];
+}
 
 function quota_mood(pct: number): string {
   if (pct < QUOTA_MINT_MAX) return "genki";
@@ -486,13 +746,28 @@ function quota_mood(pct: number): string {
   return "abunai!";
 }
 
-function reset_time(ms: number): string {
-  const d = new Date(ms);
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+function reset_time(ms: number, tz: string): string {
+  const fmt = new Intl.DateTimeFormat("en-GB", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    ...(tz !== TZ_LOCAL ? { timeZone: tz } : {}),
+  });
+  return fmt.format(new Date(ms));
 }
 
-function ZaiQuotaBlock() {
+/// Short UTC offset of the display timezone, e.g. "UTC+7".
+function tz_label(tz: string): string {
+  const zone = tz === TZ_LOCAL ? Intl.DateTimeFormat().resolvedOptions().timeZone : tz;
+  try {
+    const parts = new Intl.DateTimeFormat("en-GB", { timeZone: zone, timeZoneName: "shortOffset" }).formatToParts();
+    return parts.find((p) => p.type === "timeZoneName")?.value || "";
+  } catch {
+    return "";
+  }
+}
+
+function ZaiQuotaBlock({ tz }: { tz: string }) {
   const [state, setState] = useState<QuotaState>(null);
   const [busy, setBusy] = useState(false);
 
@@ -539,7 +814,11 @@ function ZaiQuotaBlock() {
       </div>
       <p className="zai-quota-label">
         <span>{tokens_used_pct}% used · {quota_mood(tokens_used_pct)}</span>
-        {time_limit_reset_ms !== null && <span>window resets {reset_time(time_limit_reset_ms)}</span>}
+        {time_limit_reset_ms !== null && (
+          <span>
+            <Clock size={12} /> window resets {reset_time(time_limit_reset_ms, tz)} ({tz_label(tz)})
+          </span>
+        )}
         <span className="zai-quota-actions">
           <button type="button" className="icon-btn" title="refresh quota" disabled={busy} onClick={refresh}>
             <RefreshCw size={14} />
@@ -553,54 +832,39 @@ function ZaiQuotaBlock() {
   );
 }
 
-type QuotaBoardState = { rows: PlatformQuota[] } | { error: true } | null;
+type CodexUsageState =
+  | { latest: CodexUsageRow | null; history: CodexUsageRow[] }
+  | { error: true }
+  | null;
 
-function quota_bar_class(pct: number): string {
-  return pct < QUOTA_MINT_MAX ? "mint" : pct < QUOTA_LEMON_MAX ? "lemon" : "pink";
+const CODEX_USAGE_HISTORY_POINTS = 12;
+
+/// Full date + time for multi-day reset windows (weekly etc.).
+function reset_datetime(ms: number, tz: string): string {
+  const fmt = new Intl.DateTimeFormat("en-GB", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    ...(tz !== TZ_LOCAL ? { timeZone: tz } : {}),
+  });
+  return fmt.format(new Date(ms));
 }
 
-function QuotaRow({ row }: { row: PlatformQuota }) {
-  return (
-    <li className={`quota-row${row.available ? "" : " muted"}`}>
-      <span className="quota-row-name">{row.platform}</span>
-      {row.available ? (
-        <>
-          {row.tokens_used_pct !== null && (
-            <span
-              className="zai-quota-bar quota-row-bar"
-              role="progressbar"
-              aria-valuenow={row.tokens_used_pct}
-              aria-valuemin={0}
-              aria-valuemax={100}
-            >
-              <span
-                className={`zai-quota-fill ${quota_bar_class(row.tokens_used_pct)}`}
-                style={{ width: `${Math.min(100, Math.max(0, row.tokens_used_pct))}%` }}
-              />
-            </span>
-          )}
-          <span className="quota-row-info">
-            {row.tokens_used_pct !== null && <>{row.tokens_used_pct}%</>}
-            {row.window_used_pct !== null && <span> · win {row.window_used_pct}%</span>}
-            {row.window_reset_ms !== null && <span> · resets {reset_time(row.window_reset_ms)}</span>}
-            {row.tokens_used_pct === null && row.window_used_pct === null && row.window_reset_ms === null && <>—</>}
-          </span>
-        </>
-      ) : (
-        <span className="quota-row-info">unavailable{row.reason ? ` — ${row.reason}` : ""}</span>
-      )}
-    </li>
-  );
-}
-
-function QuotaBoard() {
-  const [state, setState] = useState<QuotaBoardState>(null);
+function CodexUsageBlock({ tz }: { tz: string }) {
+  const [state, setState] = useState<CodexUsageState>(null);
   const [busy, setBusy] = useState(false);
 
   async function load() {
     setBusy(true);
     try {
-      setState({ rows: await fetch_quota_board() });
+      const [latest, history] = await Promise.all([
+        fetch_codex_usage_latest(),
+        fetch_codex_usage_history(CODEX_USAGE_HISTORY_POINTS),
+      ]);
+      setState({ latest, history });
     } catch {
       setState({ error: true });
     } finally {
@@ -613,25 +877,138 @@ function QuotaBoard() {
   }, []);
 
   return (
-    <section className="quota-board" aria-label="quota board">
+    <section className="quota-board" aria-label="codex usage">
       <p className="quota-board-head">
-        <span className="quota-board-title">quota board</span>
-        <button type="button" className="icon-btn" title="refresh quota board" disabled={busy} onClick={load}>
+        <span className="quota-board-title">codex usage (sampled)</span>
+        <button type="button" className="icon-btn" title="refresh codex usage" disabled={busy} onClick={load}>
           <RefreshCw size={14} />
         </button>
       </p>
       {state === null && <p className="model-empty">loading…</p>}
-      {state !== null && "error" in state && <p className="model-empty">quota board unavailable</p>}
-      {state !== null && !("error" in state) && (
-        <ul className="quota-board-list">
-          {state.rows.map((row) => (
-            <QuotaRow key={row.platform} row={row} />
-          ))}
-        </ul>
-      )}
+      {state !== null && "error" in state && <p className="model-empty">codex usage unavailable</p>}
+      {state !== null && !("error" in state) && (state.latest === null ? (
+        <p className="model-empty">no samples yet — scheduler stores one every few minutes</p>
+      ) : (
+        <CodexUsageLatest row={state.latest} tz={tz} history={state.history} />
+      ))}
     </section>
   );
 }
+
+function CodexUsageLatest({
+  row,
+  tz,
+  history,
+}: {
+  row: CodexUsageRow;
+  tz: string;
+  history: CodexUsageRow[];
+}) {
+  return (
+    <div className="codex-usage">
+      <p className="model-empty zai-quota-note">
+        plan {row.plan_type ?? "?"} · sampled {reset_datetime(Date.parse(row.captured_at), tz)} ({tz_label(tz)})
+      </p>
+      <div className="codex-usage-windows">
+        <CodexUsageWindow
+          label="5h window"
+          pct={row.primary_used_percent}
+          reset={row.primary_resets_at}
+          tz={tz}
+        />
+        {row.secondary_used_percent !== null && (
+          <CodexUsageWindow
+            label="weekly"
+            pct={row.secondary_used_percent}
+            reset={row.secondary_resets_at}
+            tz={tz}
+          />
+        )}
+      </div>
+      <CodexUsageHistory history={history} tz={tz} />
+    </div>
+  );
+}
+
+function CodexUsageWindow({
+  label,
+  pct,
+  reset,
+  tz,
+}: {
+  label: string;
+  pct: number | null;
+  reset: string | null;
+  tz: string;
+}) {
+  const shown = pct ?? 0;
+  const countdown = reset !== null ? until_label(Date.parse(reset)) : null;
+  return (
+    <div className="codex-usage-window">
+      <p className="codex-usage-window-head">
+        <span className="codex-usage-window-label">{label}</span>
+        <span className="codex-usage-window-pct">{pct !== null ? `${pct}%` : "—"}</span>
+      </p>
+      <span
+        className="zai-quota-bar codex-usage-bar"
+        role="progressbar"
+        aria-valuenow={shown}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-label={`${label} usage`}
+      >
+        <span className={`zai-quota-fill ${quota_bar_class(shown)}`} style={{ width: `${Math.min(100, Math.max(0, shown))}%` }} />
+      </span>
+      <p className="codex-usage-window-reset">
+        {countdown !== null ? (
+          <>
+            <Clock size={11} /> resets in {countdown}
+          </>
+        ) : (
+          "\u00a0"
+        )}
+      </p>
+    </div>
+  );
+}
+
+/// Humanized distance, e.g. "3h 20m" / "42m" / "5d".
+function until_label(ms: number): string {
+  const mins = Math.max(0, Math.round((ms - Date.now()) / 60_000));
+  if (mins >= 60 * 24) return `${Math.floor(mins / (60 * 24))}d ${Math.floor((mins % (60 * 24)) / 60)}h`;
+  if (mins >= 60) return `${Math.floor(mins / 60)}h ${mins % 60}m`;
+  return `${mins}m`;
+}
+
+function CodexUsageHistory({ history, tz }: { history: CodexUsageRow[]; tz: string }) {
+  if (history.length < 2) return null;
+  const points = history.slice(0, CODEX_USAGE_HISTORY_POINTS).reverse();
+  return (
+    <div className="codex-usage-history">
+      <div className="codex-usage-spark" role="img" aria-label="5h usage over recent samples">
+        {points.map((row) => {
+          const pct = row.primary_used_percent ?? 0;
+          return (
+            <span
+              key={row.captured_at}
+              className={`codex-usage-spark-bar ${quota_bar_class(pct)}`}
+              title={`${reset_datetime(Date.parse(row.captured_at), tz)} · ${row.primary_used_percent ?? "—"}%`}
+              style={{ height: `${Math.max(4, Math.min(100, pct))}%` }}
+            />
+          );
+        })}
+      </div>
+      <p className="codex-usage-history-note">
+        last {points.length} samples · oldest → newest
+      </p>
+    </div>
+  );
+}
+
+function quota_bar_class(pct: number): string {
+  return pct < QUOTA_MINT_MAX ? "mint" : pct < QUOTA_LEMON_MAX ? "lemon" : "pink";
+}
+
 
 function CodexProvider() {
   return (

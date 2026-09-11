@@ -50,9 +50,10 @@ type ModalProps = {
   on_close: () => void;
   children: ReactNode;
   wide?: boolean;
+  className?: string;
 };
 
-export function Modal({ open, title, on_close, children, wide }: ModalProps) {
+export function Modal({ open, title, on_close, children, wide, className }: ModalProps) {
   const box = use_overlay(open, on_close);
   if (!open) return null;
   return (
@@ -60,7 +61,7 @@ export function Modal({ open, title, on_close, children, wide }: ModalProps) {
     <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && on_close()}>
       <div
         ref={box}
-        className={wide ? "overlay-box modal wide" : "overlay-box modal"}
+        className={["overlay-box", "modal", wide ? "wide" : "", className ?? ""].filter(Boolean).join(" ")}
         role="dialog"
         aria-modal="true"
         tabIndex={-1}

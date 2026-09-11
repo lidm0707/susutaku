@@ -2,7 +2,6 @@ import React, { useEffect } from "react";
 import { useState } from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter, Navigate, Route, Routes, useNavigate } from "react-router-dom";
-import { MessageSquareText } from "lucide-react";
 import ChatModal from "./components/ChatModal.jsx";
 import AgentSettings from "./features/agents/AgentSettings.jsx";
 import Kanban from "./pages/Kanban.jsx";
@@ -50,18 +49,7 @@ function App() {
         <Route path="/sandbox" element={<RequireAuth><Sandbox /></RequireAuth>} />
         <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
-        <SideNav />
-        {get_token() && !chat_open && (
-          <button
-            type="button"
-            className="chat-fab"
-            onClick={() => set_chat_open(true)}
-            aria-label="open chat"
-            title="chat"
-          >
-            <MessageSquareText size={16} />
-          </button>
-        )}
+        <SideNav on_chat={() => set_chat_open(true)} />
         <ChatModal open={chat_open} on_close={() => set_chat_open(false)} />
         </ProjectProvider>
       <Toaster />

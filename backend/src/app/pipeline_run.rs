@@ -15,6 +15,11 @@ use super::kanban::KanbanApp;
 
 pub const RUN_KEY: &str = "run";
 pub const RUNNER_NAME: &str = "pipeline-runner";
+pub const FETCH_TIMEOUT_SECS: u64 = 10;
+pub const FETCH_MAX_BYTES: usize = 1 << 20;
+pub const HTTP_GET: &str = "GET";
+pub const NETWORK_HINT: &str =
+    "(backend has no outbound network access — check host/container network)";
 pub const STAGE_NOTE_INGEST: &str = "seeded card title + description";
 pub const STAGE_NOTE_PASSTHROUGH: &str = "payload passed through";
 pub const STAGE_NOTE_OUTPUT: &str = "captured pipeline output";
@@ -76,7 +81,8 @@ pub async fn run_card_pipeline(app: &KanbanApp, card_id: i64) -> Result<RunRecor
         payload.take().expect("seeded"),
         pipeline_id,
         &pipeline.name,
-    );
+    )
+    .await;
     persist(app, card_id, &card, outcome).await
 }
 
@@ -89,7 +95,7 @@ fn seed_payload(card: &CardRow) -> Payload {
     Payload::text(text)
 }
 
-fn execute(spec: &PipelineSpec, seed: Payload, pipeline_id: i64, name: &str) -> RunOutcome {
+async fn execute(spec: &PipelineSpec, seed: Payload, pipeline_id: i64, name: &str) -> RunOutcome {
     let mut stages: Vec<RunStage> = Vec::new();
     let mut failed = false;
     let mut payload = Some(seed);
@@ -102,7 +108,7 @@ fn execute(spec: &PipelineSpec, seed: Payload, pipeline_id: i64, name: &str) -> 
             stages.push(skipped(node));
             continue;
         }
-        match apply_node(node, current) {
+        match apply_node(node, current).await {
             Ok(next) => {
                 payload = Some(next.payload);
                 stages.push(RunStage {
@@ -153,7 +159,7 @@ struct NodeResult {
     note: String,
 }
 
-fn apply_node(node: &NodeDef, payload: Payload) -> Result<NodeResult, String> {
+async fn apply_node(node: &NodeDef, payload: Payload) -> Result<NodeResult, String> {
     match node.stage.as_str() {
         piplines::graph::STAGE_INGEST => Ok(NodeResult {
             payload,
@@ -171,6 +177,7 @@ fn apply_node(node: &NodeDef, payload: Payload) -> Result<NodeResult, String> {
                 note,
             })
         }
+        piplines::graph::STAGE_FETCH => fetch_node(node, payload).await,
         piplines::graph::STAGE_TRANSFORM => transform(node, payload),
         piplines::graph::STAGE_RENDER | piplines::graph::STAGE_OUTPUT_RESOURCE => Ok(NodeResult {
             payload,
@@ -181,8 +188,63 @@ fn apply_node(node: &NodeDef, payload: Payload) -> Result<NodeResult, String> {
             },
         }),
         other => Err(format!(
-            "stage \"{other}\" is not wired to an engine yet (fetch/search/ref_image/parse/model_infer pending)"
+            "stage \"{other}\" is not wired to an engine yet (search/ref_image/parse/model_infer pending)"
         )),
+    }
+}
+
+pub const PARAM_URL: &str = "url";
+pub const PARAM_METHOD: &str = "method";
+pub const FETCH_NOTE_PREFIX: &str = "fetched ";
+
+async fn fetch_node(node: &NodeDef, mut payload: Payload) -> Result<NodeResult, String> {
+    let url = node
+        .params
+        .get(PARAM_URL)
+        .and_then(serde_json::Value::as_str)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| format!("fetch node params missing \"{PARAM_URL}\""))?
+        .to_owned();
+    let method = node
+        .params
+        .get(PARAM_METHOD)
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_ascii_uppercase)
+        .unwrap_or_else(|| HTTP_GET.to_owned());
+    // ureq is blocking; keep it off the async executor threads.
+    let body = payload.as_str().unwrap_or_default().to_owned();
+    let fetch_url = url.clone();
+    let text = tokio::task::spawn_blocking(move || http_fetch(&method, &fetch_url, &body))
+        .await
+        .map_err(|e| format!("fetch task join failed: {e}"))??;
+    let note = format!("{FETCH_NOTE_PREFIX}{} bytes from {url}", text.len());
+    payload.data = text.into_bytes();
+    payload.kind = PayloadKind::Text;
+    Ok(NodeResult { payload, note })
+}
+
+fn http_fetch(method: &str, url: &str, body: &str) -> Result<String, String> {
+    let timeout = std::time::Duration::from_secs(FETCH_TIMEOUT_SECS);
+    let agent = ureq::AgentBuilder::new().timeout(timeout).build();
+    let resp = if method == HTTP_GET {
+        agent.get(url).call()
+    } else {
+        agent.request(method, url).send_string(body)
+    };
+    match resp {
+        Ok(resp) => resp
+            .into_string()
+            .map(|s| s.chars().take(FETCH_MAX_BYTES).collect())
+            .map_err(|e| format!("fetch {url}: failed to read body: {e}")),
+        Err(ureq::Error::Status(code, resp)) => {
+            let detail = resp.into_string().unwrap_or_default();
+            Err(format!(
+                "fetch {method} {url}: http {code} {detail} {NETWORK_HINT}"
+            ))
+        }
+        Err(ureq::Error::Transport(t)) => {
+            Err(format!("fetch {method} {url} failed: {t} {NETWORK_HINT}"))
+        }
     }
 }
 

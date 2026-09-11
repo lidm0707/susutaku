@@ -130,8 +130,8 @@ async fn inference(
     Ok(Json(reply_dto(reply)))
 }
 
-async fn clients(State(state): State<Arc<AppState>>) -> Json<Vec<u64>> {
-    Json(state.hub.client_ids())
+async fn clients(State(state): State<Arc<AppState>>) -> Json<Vec<proto_rs::server::ClientInfo>> {
+    Json(state.hub.registry().list())
 }
 
 async fn client_command(

@@ -1183,14 +1183,15 @@ const STAGE_LABEL: Record<string, string> = {
 
 function RunBadge({ run, on_open }: { run: CardRun | null; on_open: () => void }) {
   if (!run) return null;
+  const failed_note = run.stages.find((s) => s.status === "failed")?.note ?? "";
   return (
     <button
       className={`run-badge run-${run.status}`}
       onClick={on_open}
-      title="open run log"
+      title={failed_note || "open run log"}
     >
       {run.status === "ok" ? <CheckCircle2 size={11} /> : <XCircle size={11} />}
-      {run.pipeline_name} · {run.status === "ok" ? "ran" : "failed"} · {run.stages.length} stage{run.stages.length === 1 ? "" : "s"}
+      {run.pipeline_name} · {run.status === "ok" ? "ran" : `failed · ${failed_note}`}
     </button>
   );
 }
