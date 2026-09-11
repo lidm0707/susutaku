@@ -802,6 +802,37 @@ button:disabled {
   color: #e6e6ea;
 }
 
+.chat-focus-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  max-width: 14rem;
+  padding: 0.15rem 0.4rem;
+  border: 1px solid var(--border, #ccc);
+  border-radius: 999px;
+  font-size: 0.72rem;
+  color: inherit;
+  white-space: nowrap;
+}
+
+.chat-focus-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chat-focus-chip button {
+  display: inline-flex;
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
+
+.chat-focus-chip button:hover {
+  color: #e6e6ea;
+}
+
 .chat-agent-pick {
   position: relative;
 }

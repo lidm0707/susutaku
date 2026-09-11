@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
-import { Bot, Brain, MessageSquarePlus, Send, X } from "lucide-react";
+import { Bot, Brain, Crosshair, MessageSquarePlus, Send, X } from "lucide-react";
 import {
   API_BASE,
   chat_codex,
@@ -18,6 +18,7 @@ import {
   type PromptSection,
 } from "../lib.js";
 import { Modal } from "../ui/Overlay.js";
+import { focus_label, focus_section, set_focus, use_focus, type Focus } from "./focus.js";
 
 const MAX_TOKENS = 512;
 
@@ -70,11 +71,15 @@ interface Thread {
   id: number;
   title: string;
   messages: Msg[];
+  focus: Focus | null;
+  detached: boolean;
 }
 
 export default function ChatModal({ open, on_close }: { open: boolean; on_close: () => void }) {
   const { pathname } = useLocation();
-  const [threads, setThreads] = useState<Thread[]>([{ id: 0, title: "thread 1", messages: [] }]);
+  const [threads, setThreads] = useState<Thread[]>([
+    { id: 0, title: "thread 1", messages: [], focus: null, detached: false },
+  ]);
   const [activeId, setActiveId] = useState(0);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -93,6 +98,8 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
   const active = threads.find((t) => t.id === activeId) ?? threads[0];
   const messages = active.messages;
   const selected = agents.filter((a) => selectedIds.includes(a.id as number));
+  const liveFocus = use_focus();
+  const threadFocus = active.detached ? null : (active.focus ?? liveFocus);
 
   useEffect(() => {
     if (!toast) return;
@@ -127,6 +134,19 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
     setThreads((ts) => ts.map((t) => (t.id === id ? { ...t, messages: fn(t.messages) } : t)));
   }
 
+  function detach_focus() {
+    set_focus(null);
+    setThreads((ts) =>
+      ts.map((t) =>
+        t.id === activeId
+          ? t.messages.length
+            ? { ...t, detached: true }
+            : t
+          : t
+      )
+    );
+  }
+
   function set_title_from(id: number, text: string) {
     setThreads((ts) =>
       ts.map((t) =>
@@ -139,7 +159,10 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
 
   function new_thread() {
     const id = nextThreadId.current++;
-    setThreads((ts) => [...ts, { id, title: `thread ${id + 1}`, messages: [] }]);
+    setThreads((ts) => [
+      ...ts,
+      { id, title: `thread ${id + 1}`, messages: [], focus: null, detached: false },
+    ]);
     setActiveId(id);
     setError("");
   }
@@ -148,7 +171,13 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
     setThreads((ts) => {
       const rest = ts.filter((t) => t.id !== id);
       if (!rest.length) {
-        const fresh = { id: nextThreadId.current++, title: "thread 1", messages: [] as Msg[] };
+        const fresh = {
+          id: nextThreadId.current++,
+          title: "thread 1",
+          messages: [] as Msg[],
+          focus: null,
+          detached: false,
+        };
         setActiveId(fresh.id);
         return [fresh];
       }
@@ -200,6 +229,9 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
       return;
     }
     const tid = activeId;
+    const thread = threads.find((t) => t.id === tid);
+    const focus: Focus | null =
+      thread && thread.messages.length ? (thread.detached ? null : thread.focus) : liveFocus;
     setInput("");
     setError("");
     setBusy(true);
@@ -219,7 +251,13 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
       })),
     ]);
     const page = page_label(pathname);
-    const contexted = `[context: user is currently on the ${page} page]\n\n${text}`;
+    const focusText = focus_section(focus);
+    const contexted = focusText
+      ? `${focusText}\n[context: user is currently on the ${page} page]\n\n${text}`
+      : `[context: user is currently on the ${page} page]\n\n${text}`;
+    setThreads((ts) =>
+      ts.map((t) => (t.id === tid && !t.messages.length ? { ...t, focus } : t))
+    );
     const outcomes = await Promise.allSettled(selected.map((a) => send_agent(a, contexted)));
     let failures = 0;
     outcomes.forEach((out, i) => {
@@ -358,6 +396,20 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
                 </div>
               )}
             </div>
+            {threadFocus && (
+              <span className="chat-focus-chip" title={focus_label(threadFocus)}>
+                <Crosshair size={11} />
+                <span className="chat-focus-label">{focus_label(threadFocus)}</span>
+                <button
+                  type="button"
+                  onClick={detach_focus}
+                  aria-label="detach focus"
+                  title="detach focus"
+                >
+                  <X size={10} />
+                </button>
+              </span>
+            )}
             <input
               value={input}
               onChange={(e) => setInput(e.target.value)}

@@ -16,3 +16,4 @@ log/
 check_real/
 ux-snapshots.spec.ts-snapshots/
 design/
+dist/

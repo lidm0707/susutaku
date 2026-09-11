@@ -38,6 +38,7 @@ import {
 } from "../lib.js";
 import { PromptModal } from "../ui/Overlay.js";
 import { toast } from "../ui/Toast.js";
+import { set_focus } from "../components/focus.js";
 
 // basic connector nodes a user can pick, then legacy stages (old saved specs only)
 const STAGES = [
@@ -287,6 +288,7 @@ export default function Pipelines() {
     setError("");
     setStatus("");
     setSelected(p.id);
+    set_focus({ kind: "pipeline", id: p.id, name: p.name });
     setName(p.name);
     setEditId(null);
     const { ns, es } = load_flow(p);
@@ -473,6 +475,7 @@ export default function Pipelines() {
     try {
       await remove_pipeline(selected);
       setSelected(null);
+      set_focus(null);
       await load_pipelines();
     } catch (err) {
       handle(err);
