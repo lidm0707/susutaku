@@ -12,11 +12,11 @@
 # Everything: make down
 
 COMPOSE := docker compose
-MAIN    := -f docker/docker-compose.yml
-DEMO    := -f docker/docker-compose.demo.yml
-DEPLOY  := -f docker/docker-compose.deploy.yml
-E2E     := -f docker/docker-compose.playwright-backend.yml
-CLIENT  := -f docker/docker-compose.client-test.yml
+MAIN    := -f docker/compose/base.yml
+DEMO    := -f docker/compose/demo.yml
+DEPLOY  := -f docker/compose/deploy.yml
+E2E     := -f docker/compose/playwright-backend.yml
+CLIENT  := -f docker/compose/client-test.yml
 
 WEB_PORT     := 3334
 BACKEND_PORT := 8991
@@ -24,7 +24,7 @@ MODEL_PORT   := 8992
 
 MOCK_IMAGE := susutaku-mock-model
 
-.PHONY: help up down web db logs backend mock-model e2e e2e-down client-test client-test-down clean
+.PHONY: help run up down web db logs backend mock-model e2e e2e-down client-test client-test-down clean cover cover-html
 
 help:
 	@grep -E '^# |^[a-z-]+:' Makefile
@@ -49,6 +49,12 @@ deploy:
 undeploy:
 	$(COMPOSE) $(DEPLOY) down
 
+## run: one command — db + web in docker, backend on host (blocking, Ctrl-C to stop)
+run:
+	$(COMPOSE) $(MAIN) up -d --build postgres web
+	@echo "web ui: http://localhost:$(WEB_PORT)  (db + web up, backend starting)"
+	cargo run -p backend
+
 ## up: start postgres + web ui (http://localhost:3334)
 up:
 	$(COMPOSE) $(MAIN) up -d --build postgres web
@@ -72,7 +78,7 @@ backend:
 
 ## mock-model: fake model server on :8992 (use INSTEAD of real backend)
 mock-model:
-	docker build -f docker/Dockerfile.mock-model -t $(MOCK_IMAGE) .
+	docker build -f docker/mock/Dockerfile.mock-model -t $(MOCK_IMAGE) .
 	docker rm -f susutaku-mock-model 2>/dev/null || true
 	docker run -d --name susutaku-mock-model -p $(MODEL_PORT):8992 $(MOCK_IMAGE)
 	@echo "mock model: http://localhost:$(MODEL_PORT)"
@@ -97,6 +103,14 @@ down:
 	$(COMPOSE) $(E2E) down || true
 	$(COMPOSE) $(CLIENT) down || true
 	-docker rm -f susutaku-mock-model
+
+## cover: test-coverage summary for the whole workspace (needs cargo-llvm-cov)
+cover:
+	cargo llvm-cov --workspace --summary-only --hide-instantiations
+
+## cover-html: coverage report at target/llvm-cov/html/index.html
+cover-html:
+	cargo llvm-cov --workspace --html --hide-instantiations
 
 ## clean: also delete postgres volumes (destroys data)
 clean: down

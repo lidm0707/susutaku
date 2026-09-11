@@ -36,6 +36,7 @@ import {
   type ZaiModel,
 } from "../../lib.js";
 import { Button, Field, Select, TextArea, TextInput } from "../../ui/controls.js";
+import { PromptModal } from "../../ui/Overlay.js";
 
 const CUSTOM = "__custom__";
 
@@ -72,6 +73,7 @@ export default function AgentSettings() {
   const [sysPrompt, setSysPrompt] = useState("");
   const [sysStatus, setSysStatus] = useState("");
   const [sysOpen, setSysOpen] = useState(false);
+  const [newOpen, setNewOpen] = useState(false);
 
   useEffect(() => {
     Promise.all([fetch_agents(), fetch_models().catch(() => [])])
@@ -202,12 +204,12 @@ export default function AgentSettings() {
     });
   }
 
-  function start_new() {
+  function start_new(name: string) {
     setError("");
     setStatus("");
     setSysOpen(false);
     setSelected("new");
-    setFields(EMPTY);
+    setFields({ ...EMPTY, name });
   }
 
   async function save(e: React.FormEvent) {
@@ -250,7 +252,8 @@ export default function AgentSettings() {
     setError("");
     try {
       await remove_agent(selected);
-      start_new();
+      setFields(EMPTY);
+      setSelected(null);
       await load_agents();
     } catch (err) {
       handle(err);
@@ -267,7 +270,7 @@ export default function AgentSettings() {
       </header>
       <div className="agents-layout">
         <aside className="agents-side">
-          <Button variant="ghost" className="agents-new" onClick={start_new}>
+          <Button variant="ghost" className="agents-new" onClick={() => setNewOpen(true)}>
             <Plus size={14} /> new agent
           </Button>
           <div className="agents-list">
@@ -450,10 +453,20 @@ export default function AgentSettings() {
           <div className="agent-editor agent-editor-empty">
             <Bot size={28} />
             <p>select an agent on the left,<br />or create a new one.</p>
-            <Button variant="ghost" onClick={start_new}><Plus size={14} /> new agent</Button>
+            <Button variant="ghost" onClick={() => setNewOpen(true)}><Plus size={14} /> new agent</Button>
           </div>
         )}
       </div>
+      <PromptModal
+        open={newOpen}
+        title="new agent"
+        placeholder="name…"
+        on_close={() => setNewOpen(false)}
+        on_submit={(v) => {
+          setNewOpen(false);
+          start_new(v);
+        }}
+      />
     </main>
   );
 }

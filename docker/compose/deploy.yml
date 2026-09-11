@@ -1,6 +1,6 @@
 # One-compose deploy: postgres + backend + web (nginx), private network.
 #
-#   docker compose -f docker/docker-compose.deploy.yml up --build -d
+#   docker compose -f docker/compose/deploy.yml up --build -d
 #
 # Inference is remote (no Metal in containers): the backend's "local model"
 # provider talks to SUSUTAKU_LOCAL_MODEL_URL — run the model server on the
@@ -21,14 +21,14 @@ services:
 
   mock-model:
     build:
-      context: ..
-      dockerfile: docker/Dockerfile.mock-model
+      context: ../..
+      dockerfile: docker/mock/Dockerfile.mock-model
     restart: unless-stopped
 
   backend:
     build:
-      context: ..
-      dockerfile: docker/Dockerfile.backend
+      context: ../..
+      dockerfile: docker/backend/Dockerfile.backend
       # Default stage is hub-runtime; we need the API server.
       target: backend-runtime
     environment:
@@ -39,12 +39,16 @@ services:
       # codex login writes auth.json here; keep it on a volume so the
       # ChatGPT login survives container restarts.
       CODEX_HOME: /data/codex-home
+      # setting.json (zai keys, system prompt, client env) on a volume so
+      # settings survive redeploys.
+      SUSUTAKU_SETTINGS: /data/settings/setting.json
     ports:
       # OAuth loopback callback for `codex login`: the browser's redirect to
       # http://localhost:1455 must reach the CLI listener inside the container.
       - "127.0.0.1:1455:1455"
     volumes:
       - codex-home:/data/codex-home
+      - settings:/data/settings
     security_opt:
       - seccomp=unconfined
       - apparmor=unconfined
@@ -55,8 +59,8 @@ services:
 
   web:
     build:
-      context: ..
-      dockerfile: docker/Dockerfile.web
+      context: ../..
+      dockerfile: docker/web/Dockerfile.web
     ports:
       # Loopback-only UI; pg / backend publish nothing.
       - "127.0.0.1:3334:80"
@@ -69,3 +73,4 @@ services:
 volumes:
   deploy-pgdata:
   codex-home:
+  settings:

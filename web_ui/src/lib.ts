@@ -68,6 +68,14 @@ export interface Card {
   pipeline_name?: string;
   cron?: string | null;
   deadline?: string | null;
+  labels: string | null;
+  checklist: string | null;
+  estimate: number | null;
+}
+
+export interface ChecklistItem {
+  text: string;
+  done: boolean;
 }
 
 export type RunStatus = "ok" | "failed";
@@ -304,6 +312,14 @@ export function size_label(bytes: number): string {
   return `${(bytes / GIB).toFixed(1)} GB`;
 }
 
+export function gib_label(bytes: number): string {
+  return `${(bytes / GIB).toFixed(1)} GiB`;
+}
+
+export async function fetch_host_spec(): Promise<HostSpec> {
+  return (await api("/api/host")).json();
+}
+
 export async function fetch_models(): Promise<ModelInfo[]> {
   const res = await fetch(`${API_BASE}/api/models`);
   if (!res.ok) throw new Error(`${res.status} fetching models`);
@@ -400,12 +416,61 @@ export async function save_zai_settings(api_key: string, model: string): Promise
   return res.json();
 }
 
+export interface LocalModelSettings {
+  endpoint: string;
+}
+
+export async function fetch_local_settings(): Promise<LocalModelSettings> {
+  return (await api("/api/settings/local")).json();
+}
+
+export async function save_local_settings(endpoint: string): Promise<void> {
+  await api("/api/settings/local", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ endpoint }),
+  });
+}
+
 export async function zai_model_action(req: ZaiModelAction): Promise<ZaiSettings> {
   const res = await fetch(`${API_BASE}/api/settings/zai/models`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(req),
   });
+  if (!res.ok) throw new ApiError(res.status, await res.text());
+  return res.json();
+}
+
+export interface ZaiQuota {
+  tokens_used_pct: number;
+  time_limit_reset_ms: number | null;
+  time_limit_pct: number | null;
+}
+
+export interface PlatformQuota {
+  platform: string;
+  available: boolean;
+  reason: string | null;
+  tokens_used_pct: number | null;
+  window_reset_ms: number | null;
+  window_used_pct: number | null;
+}
+
+export async function fetch_quota_board(): Promise<PlatformQuota[]> {
+  const res = await fetch(`${API_BASE}/api/quota`);
+  if (!res.ok) throw new ApiError(res.status, await res.text());
+  return (await res.json()).platforms;
+}
+
+export async function fetch_zai_quota(): Promise<ZaiQuota> {
+  const res = await fetch(`${API_BASE}/api/settings/zai/quota`);
+  if (!res.ok) throw new ApiError(res.status, await res.text());
+  return res.json();
+}
+
+export async function zai_say_hi(): Promise<{ ok: boolean; reply: string }> {
+  const res = await fetch(`${API_BASE}/api/settings/zai/hi`, { method: "POST" });
   if (!res.ok) throw new ApiError(res.status, await res.text());
   return res.json();
 }
@@ -506,12 +571,24 @@ export async function create_card(
   column_id: string,
   title: string,
   description: string,
-  priority: string
+  priority: string,
+  labels?: string[],
+  checklist?: ChecklistItem[],
+  estimate?: number | null
 ): Promise<Response> {
   return api("/api/kanban/cards", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ project_id, column_id, title, description, priority }),
+    body: JSON.stringify({
+      project_id,
+      column_id,
+      title,
+      description,
+      priority,
+      labels: labels ? JSON.stringify(labels) : null,
+      checklist: checklist ? JSON.stringify(checklist) : null,
+      estimate: estimate ?? null,
+    }),
   });
 }
 
@@ -533,12 +610,24 @@ export async function update_card(
   description: string,
   assignee: string | null,
   priority?: string,
-  deadline?: string | null
+  deadline?: string | null,
+  labels?: string[],
+  checklist?: ChecklistItem[],
+  estimate?: number | null
 ): Promise<Card> {
   const res = await api(`/api/kanban/cards/${id}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ title, description, assignee, priority, deadline }),
+    body: JSON.stringify({
+      title,
+      description,
+      assignee,
+      priority,
+      deadline,
+      labels: labels ? JSON.stringify(labels) : null,
+      checklist: checklist ? JSON.stringify(checklist) : null,
+      estimate: estimate ?? null,
+    }),
   });
   return res.json();
 }
@@ -569,8 +658,57 @@ export async function chat(message: string): Promise<ChatReply> {
   return res.json();
 }
 
+export interface HostSpec {
+  hostname: string;
+  os: string;
+  arch: string;
+  cpu_model: string;
+  cpu_cores: number;
+  memory_bytes: number;
+}
+
 export async function fetch_pipelines(): Promise<Pipeline[]> {
   return (await api("/api/pipelines")).json();
+}
+
+export interface MachineAgent {
+  agent: string;
+  work_tree: string;
+  runs: number;
+}
+
+export interface AgentLogs {
+  agent: string;
+  work_tree: string;
+  runs: number;
+  transcript: string[];
+  last_result: string | null;
+}
+
+export interface ActivityEntry { id: number; kind: string; message: string; created_at: string }
+
+export async function fetch_activity(): Promise<ActivityEntry[]> {
+  return (await api("/api/activity")).json();
+}
+
+export async function fetch_machine_agents(): Promise<MachineAgent[]> {
+  const data: { agents: MachineAgent[] } = await (await api("/api/manager/agents")).json();
+  return data.agents;
+}
+
+export async function fetch_agent_logs(agent: string): Promise<AgentLogs> {
+  return (await api(`/api/manager/agents/${encodeURIComponent(agent)}/logs`)).json();
+}
+
+export async function run_agent_command(agent: string, cmd: string): Promise<string> {
+  const res: { agent: string; output: string } = await (
+    await api(`/api/manager/agents/${encodeURIComponent(agent)}/run`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cmd }),
+    })
+  ).json();
+  return res.output;
 }
 
 export async function create_pipeline(name: string, spec: PipelineSpec): Promise<Pipeline> {

@@ -15,7 +15,8 @@ pub use card::{
 };
 pub use pipeline::PipelineRow;
 pub use store::{
-    AddCard, AgentState, CardRow, CommentRow, DbTx, MoveCard, Store, StoreError, UpdateCard,
+    ACTIVITY_LIST_DEFAULT, ACTIVITY_LIST_MAX, ACTIVITY_MESSAGE_MAX_CHARS, ActivityRow, AddCard,
+    AgentState, CardRow, CommentRow, DbTx, MoveCard, Store, StoreError, UpdateCard,
 };
 pub use user::{
     DEFAULT_ADMIN_PASSWORD, DEFAULT_ADMIN_USER, MIN_PASSWORD_LEN, NewUser, Role, UserRow,

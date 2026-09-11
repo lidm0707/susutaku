@@ -11,6 +11,7 @@
     "@playwright/test": "1.63.0",
     "@types/node": "^24",
     "@types/pg": "^8.23.1",
-    "pg": "^8.16.0"
+    "pg": "^8.16.0",
+    "typescript": "^5.9.3"
   }
 }

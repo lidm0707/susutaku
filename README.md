@@ -88,7 +88,7 @@ itself never runs inside the backend container.
 - **macOS** — Seatbelt sandbox.
 - **Linux** — rootless sandbox: userns + mount ns + chroot jail + seccomp
   deny-list. The backend can run agents fully inside Docker
-  (`docker/docker-compose.sandbox.yml`); required compose flags:
+  (`docker/compose/sandbox.yml`); required compose flags:
   `security_opt: [seccomp=unconfined, apparmor=unconfined]` — the sandbox
   refuses to run unsandboxed.
 - Sandbox network is loopback-only: agent commands inside the sandbox have no
@@ -97,7 +97,7 @@ itself never runs inside the backend container.
 
 ## Kanban board (plan tracking)
 
-Postgres via `docker/docker-compose.yml` (host port **5434**):
+Postgres via `docker/compose/base.yml` (host port **5434**):
 
 ```
 postgres://susutaku:susutaku@localhost:5434/susutaku
@@ -126,7 +126,7 @@ role `owner`.
 
 ```sh
 # 1. Postgres
-docker compose -f docker/docker-compose.yml up -d
+docker compose -f docker/compose/base.yml up -d
 
 # 2. Model server
 cargo run -p local_model
@@ -138,7 +138,7 @@ cargo run -p backend
 Backend in Docker (sandboxed agents):
 
 ```sh
-docker compose -f docker/docker-compose.sandbox.yml up -d
+docker compose -f docker/compose/sandbox.yml up -d
 ```
 
 `DATABASE_URL` must point at the postgres *service*, not `localhost:5434`.

@@ -1,0 +1,18 @@
+[package]
+name = "design_render"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "design_render"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+headless_chrome = "1.0"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+
+[package.metadata.notes]
+design = "Skia via headless Chromium (CDP); wgpu reserved for future box-overlay mode"

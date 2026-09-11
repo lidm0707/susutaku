@@ -35,6 +35,9 @@ fn card_row(id: i64, pipeline_id: Option<i64>) -> CardRow {
         pipeline_id,
         cron: None,
         deadline: None,
+        labels: None,
+        checklist: None,
+        estimate: None,
     }
 }
 
@@ -96,6 +99,9 @@ async fn card_service_create_runs_write_and_read_back_in_one_tx() {
             title: "hello".into(),
             description: String::new(),
             priority: "normal".into(),
+            labels: None,
+            checklist: None,
+            estimate: None,
         })
         .await
         .expect("created");

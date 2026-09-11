@@ -7,10 +7,14 @@ license.workspace = true
 [dependencies]
 axum = { version = "0.8", features = ["multipart"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "fs"] }
-tower-http = { version = "0.6", features = ["cors", "fs"] }
+tower-http = { version = "0.6", features = ["cors", "fs", "trace"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
+base64 = "0.22"
 hostname = "0.4"
+libc = "0.2"
 proto-rs = { workspace = true }
 susutaku-mlx = { workspace = true }
 core-agent = { workspace = true }

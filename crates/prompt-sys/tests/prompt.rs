@@ -1,4 +1,4 @@
-use prompt_sys::{PromptBuilder, PromptError, Role, MAX_PROMPT_CHARS};
+use prompt_sys::{MAX_PROMPT_CHARS, PromptBuilder, PromptError, Role};
 
 #[test]
 fn parses_role_names() {
@@ -46,6 +46,14 @@ fn builder_len_matches_render() {
     let b = PromptBuilder::new().system("abc").tool("de");
     let rendered = b.clone().build().unwrap().render();
     assert_eq!(b.len(), rendered.len());
+}
+
+#[test]
+fn empty_builder_is_empty_and_builds() {
+    let b = PromptBuilder::default();
+    assert!(b.is_empty());
+    assert_eq!(b.len(), 0);
+    assert!(b.build().unwrap().render().is_empty());
 }
 
 #[test]

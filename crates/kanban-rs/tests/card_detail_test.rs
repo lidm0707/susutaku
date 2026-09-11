@@ -22,6 +22,9 @@ async fn card_update_and_comments_roundtrip() {
             title: TEST_TITLE,
             description: "",
             priority: TEST_PRIORITY,
+            labels: None,
+            checklist: None,
+            estimate: None,
         })
         .await
         .expect("add");
@@ -44,6 +47,9 @@ async fn card_update_and_comments_roundtrip() {
             assignee: Some(ASSIGNEE),
             deadline: None,
             priority: None,
+            labels: None,
+            checklist: None,
+            estimate: None,
         })
         .await
         .expect("update");
@@ -77,6 +83,9 @@ async fn card_update_and_comments_roundtrip() {
                 assignee: None,
                 deadline: None,
                 priority: None,
+                labels: None,
+                checklist: None,
+                estimate: None,
             })
             .await
             .is_err()

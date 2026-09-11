@@ -1,22 +1,57 @@
 # AGENTS.md
 
-## Model policy (harness agent)
+## Project tree
 
-- Only load MLX models that are **larger than 30 GiB** on disk.
-- Only use **4-bit (Q4) quantized** checkpoints, e.g. `-4bit` / `4bit` variants.
-- First supported model: `qwen3.8 27b mlx` (`mlx-community/Qwen3.8-27B-4bit`, qwen3_5 hybrid).
-- Second model: `gemma4 26b a4b it mlx` (`mlx-community/gemma-4-26b-a4b-it-4bit`, dense) — engine port complete, parity-verified vs mlx-lm.
-- Model selection at runtime via `POST /api/models/select`; discovery goes through `hf_loader::loadable_models` — never hardcode model paths.
-- Exception: `gemma4 e4b mlx` (`mlx-community/gemma-4-e4b-it-4bit`, ~4.8 GB) —
-  supported despite being under the size floor (bring-up exception, plan 12).
-- Local model dirs live in `models/` (see `models/names_models.md`).
+```
+susutaku/
+├── AGENTS.md                  ← this file (workspace rules; per-crate AGENTS.md override)
+├── Cargo.toml                 ← workspace: all crates below
+├── Makefile                   ← make run/up/deploy/e2e/cover … (compose + host targets)
+├── backend/                   ← HTTP backend (axum): agent API, sandbox adapter,
+│    │                            auth, settings, quota board
+│    └── src/{api.rs, app/, domain/, infra/, port/}
+├── crates/
+│   ├── core-agent/            ← agent state, sandbox (sandbox/{macos,linux,windows}.rs), web search
+│   ├── manager-rs/            ← manager process: agent sandboxes, run/logs API
+│   ├── local_model/           ← standalone model server (MLX on Metal, hub, HTTP API)
+│   │                            — owns model size/quant policy (see its AGENTS.md)
+│   ├── hf_loader/             ← model dir scanning + loadability filter (policy: local_model/AGENTS.md)
+│   ├── mlx-rs/                ← MLX inference backend
+│   ├── gguf-rs/               ← GGUF model file parsing
+│   ├── kanban-rs/             ← kanban board + Postgres store (query_as!)
+│   │                            workspace → project → card; card agent state
+│   ├── piplines/              ← pipeline graph/stage engine
+│   ├── prompt-sys/            ← prompt builder + sections
+│   ├── proto-rs/              ← hub/client protocol (codec, client, server)
+│   ├── queue-rs/              ← bounded/unbounded queues
+│   ├── pdf-rs/                ← PDF parsing
+│   ├── work/                  ← services on top (cron worker, model service, pdf2csv)
+│   ├── design_render/         ← bin: paints every UI page → bench/design/ PNG + boxes.json
+│   └── agent_3th_cli/         ← claude_cli · codex_cli · zai_api · ai_interface_layer
+├── web_ui/                    ← React TS UI (vite): pages/, components/, ui/, api/
+├── playwright/                ← e2e suite (tests/, fixtures, mock-model server)
+├── docker/                    ← grouped by purpose:
+│   ├── compose/               ← base · demo · deploy · sandbox · playwright*
+│   ├── backend/               ← Dockerfile.backend · entrypoint · Dockerfile.client
+│   ├── web/                   ← Dockerfile.web · nginx.conf
+│   ├── mock/                  ← Dockerfile.mock-model
+│   └── test/                  ← Dockerfile.playwright
+├── models/                    ← local model dirs (see names_models.md)
+├── .plans/                    ← numbered plan files (00–99) — write one per task
+├── bench/                     ← benchmark/design summaries (coverage, design renders)
+├── docs/                      ← workflow docs (attachments, playwright, docker)
+├── attachments/               ← uploaded file storage
+└── piplines/ input/ output/   ← pipeline assets
+```
 
 ## Layout
 
 - `backend/` — HTTP backend (agent API, sandbox adapter, auth, settings)
 - `crates/core-agent` — agent state, sandbox (macOS/Linux/Windows, `sandbox/{macos,linux,windows}.rs`), web search
-- `crates/hf_loader` — model dir scanning + loadability filter (size ≥ 30 GiB, q4, MLX)
+- `crates/hf_loader` — model dir scanning + loadability filter (policy: `crates/local_model/AGENTS.md`)
 - `crates/mlx-rs` — MLX inference backend
+- `crates/local_model` — standalone model server (MLX on Metal, hub, HTTP API).
+  Owns the model size/quantization policy — see `crates/local_model/AGENTS.md`.
 - `crates/pdf-rs` — PDF parsing
 - `crates/kanban-rs` — kanban board model + Postgres store (`query_as!`); hierarchy
   workspace → project → task (card); cards carry per-card agent state (`agent_name`, `agent_state` JSON)
@@ -28,13 +63,13 @@
 
 ## Backend in Docker (standalone)
 
-- The backend can run alone in a container (`docker/Dockerfile.backend`,
+- The backend can run alone in a container (`docker/backend/Dockerfile.backend`,
   `debian:stable-slim`) and execute agents in-container: on Linux it uses the
   rootless sandbox in `crates/core-agent/src/sandbox/linux.rs` (userns +
   mount ns + chroot jail + seccomp deny-list). No macOS/Metal dependency in
   the agent path. Verified end-to-end: spawn → run (real stdout, jailed fs,
   workspace persistence across runs) → finish, all inside a private
-  compose stack (`docker/docker-compose.sandbox.yml` — postgres + backend,
+  compose stack (`docker/compose/sandbox.yml` — postgres + backend,
   no published ports; test via `docker compose exec` + curl).
 - Required compose flags — the sandbox refuses to run unsandboxed, so
   namespace creation must be allowed:
@@ -50,7 +85,7 @@
 
 ## Kanban Postgres
 
-- Postgres runs via `docker/docker-compose.yml` (`postgres` service, host port **5434** — 5432/5433 are taken by other local containers).
+- Postgres runs via `docker/compose/base.yml` (`postgres` service, host port **5434** — 5432/5433 are taken by other local containers).
 - Connection: `postgres://susutaku:susutaku@localhost:5434/susutaku` (override with `DATABASE_URL`).
 - sqlx macros compile against the live DB — keep the container up when running `cargo check` on `kanban-rs`/`backend`.
 - API: `/api/workspaces` (GET/POST), `/api/workspaces/{id}` (DELETE),

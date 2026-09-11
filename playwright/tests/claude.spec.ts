@@ -32,23 +32,8 @@ test.describe("claude provider", () => {
     expect(res.ok()).toBeFalsy();
   });
 
-  test("chat page shows claude provider option and login button", async ({
-    page,
-    login,
-  }) => {
-    await page.goto("/chat");
-    await expect(
-      page.locator('select[title="model"] option[value="claude"]')
-    ).toHaveCount(1);
-    await expect(page.getByRole("button", { name: /claude/ }).first()).toBeVisible();
-  });
-
-  test("selecting claude provider switches the status line", async ({
-    page,
-    login,
-  }) => {
-    await page.goto("/chat");
-    await page.selectOption('select[title="model"]', "claude");
-    await expect(page.locator("header .sub")).toHaveText(/claude/);
-  });
+  // The claude provider selector used to live on the /chat page
+  // (select[title="model"] + a claude login button). Chat is now a global
+  // modal (ChatModal.tsx) with only an agent select — the provider UI was
+  // dropped, so there is nothing left to assert in the UI here.
 });

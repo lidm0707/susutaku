@@ -26,8 +26,8 @@ FROM debian:stable-slim AS backend-runtime
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl nodejs npm socat \
     && rm -rf /var/lib/apt/lists/* \
-    && npm install -g @openai/codex @anthropic-ai/claude-code
-COPY docker/entrypoint-backend.sh /usr/local/bin/docker-entrypoint
+    && npm install -g @openai/codex
+COPY docker/backend/entrypoint-backend.sh /usr/local/bin/docker-entrypoint
 RUN chmod +x /usr/local/bin/docker-entrypoint
 COPY --from=build /app/target/release/backend /usr/local/bin/backend
 WORKDIR /app

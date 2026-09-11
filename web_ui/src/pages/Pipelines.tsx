@@ -36,6 +36,8 @@ import {
   type Pipeline,
   type PipelineSpec,
 } from "../lib.js";
+import { PromptModal } from "../ui/Overlay.js";
+import { toast } from "../ui/Toast.js";
 
 // basic connector nodes a user can pick, then legacy stages (old saved specs only)
 const STAGES = [
@@ -204,6 +206,7 @@ export default function Pipelines() {
   const [agentNames, setAgentNames] = useState<string[]>([]);
   const [, setError] = useState("");
   const [status, setStatus] = useState("");
+  const [newOpen, setNewOpen] = useState(false);
 
   useEffect(() => {
     load_pipelines();
@@ -247,20 +250,18 @@ export default function Pipelines() {
     load_flow(p);
   }
 
-  async function start_new() {
+  async function start_new(pipeline_name: string) {
     setError("");
     setStatus("");
     setEditId(null);
-    const taken = new Set(pipelines.map((p) => p.name));
-    let i = 1;
-    while (taken.has(`pipeline ${i}`)) i++;
     try {
-      const created = await create_pipeline(`pipeline ${i}`, { nodes: [], links: [] });
+      const created = await create_pipeline(pipeline_name, { nodes: [], links: [] });
       setSelected(created.id);
       setName(created.name);
       setNodes([]);
       setEdges([]);
       await load_pipelines();
+      toast(`pipeline "${pipeline_name}" created`, "success");
     } catch (err) {
       handle(err);
     }
@@ -382,7 +383,7 @@ export default function Pipelines() {
     setError("");
     try {
       await remove_pipeline(selected);
-      await start_new();
+      setSelected(null);
       await load_pipelines();
     } catch (err) {
       handle(err);
@@ -399,7 +400,7 @@ export default function Pipelines() {
       </header>
       <div className="pipeline-layout">
         <aside className="agents-side">
-          <button className="agents-new" onClick={start_new}>
+          <button className="agents-new" onClick={() => setNewOpen(true)}>
             <Plus size={14} /> new pipeline
           </button>
           <div className="agents-list">
@@ -421,12 +422,21 @@ export default function Pipelines() {
         {editor ? (
           <div className="pipeline-main">
             <div className="pipeline-toolbar">
-              <span className="pipeline-name">{name}</span>
+              <input
+                className="pipeline-name"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                spellCheck={false}
+                aria-label="pipeline name"
+              />
               <button className="kanban-mini" onClick={() => spawn_node()} title="add node">
                 <Plus size={13} /> node
               </button>
               <button className="kanban-mini" onClick={del} disabled={selected == null || selected === "new"} title="delete pipeline">
                 <Trash2 size={13} />
+              </button>
+              <button type="button" className="pipeline-save" onClick={save} disabled={selected == null || selected === "new"} title="save pipeline">
+                <Save size={13} /> save pipeline
               </button>
               {status && <span className="saved-mark">{status}</span>}
             </div>
@@ -454,9 +464,6 @@ export default function Pipelines() {
                     <X size={14} />
                   </button>
                 </div>
-                <button type="button" className="pipeline-save" onClick={save}>
-                  <Save size={13} /> save pipeline
-                </button>
                 <div className="inspector-id">
                   <label>id</label>
                   <input
@@ -548,10 +555,20 @@ export default function Pipelines() {
           <div className="agent-editor agent-editor-empty">
             <Workflow size={28} />
             <p>select a pipeline on the left,<br />or create a new one.</p>
-            <button onClick={start_new}><Plus size={14} /> new pipeline</button>
+            <button onClick={() => setNewOpen(true)}><Plus size={14} /> new pipeline</button>
           </div>
         )}
       </div>
+      <PromptModal
+        open={newOpen}
+        title="new pipeline"
+        placeholder="name…"
+        on_close={() => setNewOpen(false)}
+        on_submit={(v) => {
+          setNewOpen(false);
+          start_new(v);
+        }}
+      />
     </main>
   );
 }

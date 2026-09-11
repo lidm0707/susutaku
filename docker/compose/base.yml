@@ -8,7 +8,7 @@
 # profile for Linux/GPU-passthrough setups only (no Metal -> /api/chat 500s).
 #
 #   cargo run -p backend          # host, loads models/ qwen3.8 4bit mlx
-#   docker compose -f docker/docker-compose.yml up web --build
+#   docker compose -f docker/compose/base.yml up web --build
 #   # then open http://localhost:3334
 name: susutaku
 
@@ -29,8 +29,8 @@ services:
 
   web:
     build:
-      context: ..
-      dockerfile: docker/Dockerfile.web
+      context: ../..
+      dockerfile: docker/web/Dockerfile.web
     ports:
       - "3334:80"
     environment:
@@ -43,10 +43,11 @@ services:
   backend-container:
     profiles: ["container-backend"]
     build:
-      context: ..
-      dockerfile: docker/Dockerfile.backend
+      context: ../..
+      dockerfile: docker/backend/Dockerfile.backend
     volumes:
       - ../models:/app/models:ro
+      - ../setting.json:/app/setting.json
     ports:
       - "8991:8991"
     environment:

@@ -19,6 +19,9 @@ async fn card_and_agent_roundtrip() {
             title: TEST_TITLE,
             description: "",
             priority: TEST_PRIORITY,
+            labels: None,
+            checklist: None,
+            estimate: None,
         })
         .await
         .expect("add");
@@ -40,7 +43,13 @@ async fn card_and_agent_roundtrip() {
 
     let state = serde_json::json!({ "step": 2, "done": false });
     store
-        .set_agent(id, &AgentState { name: TEST_AGENT_NAME.into(), state: state.clone() })
+        .set_agent(
+            id,
+            &AgentState {
+                name: TEST_AGENT_NAME.into(),
+                state: state.clone(),
+            },
+        )
         .await
         .expect("set agent");
     let agent = store.agent(id).await.expect("agent").expect("agent set");

@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO kanban_cards (column_id, project_id, title, description, priority, position, labels, checklist, estimate)\n               VALUES ($1, $5, $2, $3, $4,\n                       COALESCE((SELECT MAX(position) + 1 FROM kanban_cards WHERE column_id = $1), 0),\n                       NULLIF($6, ''), NULLIF($7, ''), $8)\n               RETURNING id AS \"id: i64\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id: i64",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Int8",
+        "Text",
+        "Text",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "7189c533ac7c28ed112974a538595bd802ad31f13907e091de3d6d94b8acbfef"
+}

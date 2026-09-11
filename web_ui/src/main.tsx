@@ -1,7 +1,9 @@
 import React, { useEffect } from "react";
+import { useState } from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter, Navigate, Route, Routes, useNavigate } from "react-router-dom";
-import Chat from "./pages/Chat.jsx";
+import { MessageSquareText } from "lucide-react";
+import ChatModal from "./components/ChatModal.jsx";
 import AgentSettings from "./features/agents/AgentSettings.jsx";
 import Kanban from "./pages/Kanban.jsx";
 import Login from "./pages/Login.jsx";
@@ -23,6 +25,7 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
 
 function App() {
   const nav = useNavigate();
+  const [chat_open, set_chat_open] = useState(false);
   useEffect(() => {
     const onUnauthorized = () => {
       if (window.location.pathname !== "/") nav("/", { replace: true });
@@ -37,8 +40,8 @@ function App() {
         <Routes>
         <Route path="/" element={<Login />} />
         <Route path="/login" element={<Navigate to="/" replace />} />
-        <Route path="/chat" element={<RequireAuth><Chat /></RequireAuth>} />
-        <Route path="/models" element={<Navigate to="/chat" replace />} />
+        <Route path="/chat" element={<Navigate to="/kanban" replace />} />
+        <Route path="/models" element={<Navigate to="/kanban" replace />} />
         <Route path="/kanban" element={<RequireAuth><Kanban /></RequireAuth>} />
         <Route path="/pipelines" element={<RequireAuth><Pipelines /></RequireAuth>} />
         <Route path="/cronjobs" element={<RequireAuth><Cronjobs /></RequireAuth>} />
@@ -48,6 +51,18 @@ function App() {
         <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
         <SideNav />
+        {get_token() && !chat_open && (
+          <button
+            type="button"
+            className="chat-fab"
+            onClick={() => set_chat_open(true)}
+            aria-label="open chat"
+            title="chat"
+          >
+            <MessageSquareText size={16} />
+          </button>
+        )}
+        <ChatModal open={chat_open} on_close={() => set_chat_open(false)} />
         </ProjectProvider>
       <Toaster />
     </WorkspaceProvider>

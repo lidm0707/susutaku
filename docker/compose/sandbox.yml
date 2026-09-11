@@ -8,8 +8,8 @@
 # No service publishes a port to the host — everything stays on the internal
 # docker network. API tests run inside the container (image ships curl):
 #
-#   docker compose -f docker/docker-compose.sandbox.yml up --build -d
-#   docker compose -f docker/docker-compose.sandbox.yml exec backend \
+#   docker compose -f docker/compose/sandbox.yml up --build -d
+#   docker compose -f docker/compose/sandbox.yml exec backend \
 #     curl -s http://127.0.0.1:8991/api/health
 #
 # Inference stays remote: SUSUTAKU_LOCAL_MODEL_URL points at the host MLX
@@ -28,8 +28,8 @@ services:
 
   backend:
     build:
-      context: ..
-      dockerfile: docker/Dockerfile.backend
+      context: ../..
+      dockerfile: docker/backend/Dockerfile.backend
       extra_hosts:
         - "host.docker.internal:host-gateway"
     environment:

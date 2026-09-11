@@ -52,3 +52,30 @@ fn restore_reloads_state() {
     sandbox.purge();
     assert!(!sb::state_path().exists());
 }
+
+#[test]
+fn snapshot_captures_workspace_files() {
+    let _g = STATE_LOCK.lock().unwrap();
+    let sandbox = sb::Sandbox::new().unwrap();
+    sandbox
+        .run(if cfg!(target_os = "windows") {
+            "Write-Output snapshot-me > marker.txt"
+        } else {
+            "echo snapshot-me > marker.txt"
+        })
+        .unwrap();
+    let snap = sandbox.snapshot("step-0001").unwrap();
+    let marker = snap.join("marker.txt");
+    assert!(marker.exists());
+    assert!(
+        std::fs::read_to_string(&marker)
+            .unwrap()
+            .contains("snapshot-me")
+    );
+    // Snapshots live under the sandbox root, not the workspace itself.
+    assert!(
+        !sandbox.root().join("snapshots").join("step-0001").exists() || cfg!(target_os = "macos")
+    );
+    sandbox.purge();
+    assert!(!snap.exists());
+}

@@ -5,3 +5,5 @@ pub mod app;
 pub mod domain;
 pub mod infra;
 pub mod port;
+
+pub use infra::local_settings::{FIELD_ENDPOINT, LOCAL_SECTION};

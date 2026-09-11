@@ -5,10 +5,13 @@
     "language": "en-US",
     "os": "macos",
     "platform": "MacIntel",
-    "screen": "1512x982",
+    "screen": "1280x720",
     "timezone": "Asia/Bangkok",
-    "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:154.0) Gecko/20100101 Firefox/154.0",
-    "workspace_path": ""
+    "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.12 Safari/537.36",
+    "workspace_path": "/tmp/e2e-workspace-1789072304531"
+  },
+  "local": {
+    "endpoint": "http://localhost:8992"
   },
   "zai": {
     "api_key": "",

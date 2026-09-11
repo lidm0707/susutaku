@@ -1,0 +1,69 @@
+# E2E stack with the BACKEND IN A CONTAINER talking to the REAL local model
+# server on the HOST (default http://host.docker.internal:8992 — MLX never
+# runs in the container). The agent sandbox runs in the backend container,
+# hence the security_opt flags (same as docker-compose.sandbox.yml).
+#
+# Results/screenshots are bind-mounted to check_real/ on the host for review.
+#
+#   REAL_MODEL_URL=http://host.docker.internal:8992 \
+#     docker compose -f docker/compose/playwright-real.yml up --build --exit-code-from playwright
+name: susutaku-e2e-real
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: susutaku
+      POSTGRES_PASSWORD: susutaku
+      POSTGRES_DB: susutaku_e2e
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ../..
+      dockerfile: docker/backend/Dockerfile.backend
+    environment:
+      DATABASE_URL: postgres://susutaku:susutaku@postgres:5432/susutaku_e2e
+      SUSUTAKU_LOCAL_MODEL_URL: ${REAL_MODEL_URL:-http://host.docker.internal:8992}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    security_opt:
+      - seccomp=unconfined
+      - apparmor=unconfined
+    depends_on:
+      - postgres
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ../..
+      dockerfile: docker/web/Dockerfile.web
+    environment:
+      BACKEND_URL: http://backend:8991
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  playwright:
+    build:
+      context: ../..
+      dockerfile: docker/test/Dockerfile.playwright
+    environment:
+      PLAYWRIGHT_BASE_URL: http://web
+      E2E_ADMIN_USER: ${E2E_ADMIN_USER:-e2e-admin}
+      E2E_ADMIN_PASSWORD: ${E2E_ADMIN_PASSWORD:-e2e-admin-e2e-admin}
+      E2E_USER: e2e-tester
+      E2E_PASSWORD: e2e-e2e-e2e
+      E2E_PG_HOST: postgres
+      E2E_PG_PORT: "5432"
+      E2E_REAL_MODEL: "1"
+    volumes:
+      - ../playwright/tests:/work/tests
+      - ../playwright/playwright.config.ts:/work/playwright.config.ts:ro
+      # Artifacts back to check_real/ for review.
+      - ../check_real/screenshots:/work/screenshots
+      - ../check_real/test-results:/work/test-results
+      - ../check_real/run.log:/work/playwright.log
+    depends_on:
+      - web
+    restart: "no"

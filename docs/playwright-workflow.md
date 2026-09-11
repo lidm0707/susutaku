@@ -26,8 +26,8 @@ host: cargo run -p backend        # MLX needs macOS Metal, stays on host :8991
 
 | Path | Purpose |
 |---|---|
-| `docker/Dockerfile.playwright` | Playwright runner image (browsers + deps baked in) |
-| `docker/docker-compose.playwright.yml` | postgres + web + playwright, zero published ports |
+| `docker/test/Dockerfile.playwright` | Playwright runner image (browsers + deps baked in) |
+| `docker/compose/playwright.yml` | postgres + web + playwright, zero published ports |
 | `playwright/playwright.config.ts` | baseURL from `PLAYWRIGHT_BASE_URL` env |
 | `playwright/global-setup.ts` | Fresh `susutaku_e2e` DB lifecycle on the internal compose postgres |
 | `playwright/setup.ts` / `playwright/teardown.ts` | globalSetup / globalTeardown hooks |
@@ -88,7 +88,7 @@ public `POST /api/auth/users` endpoint.
 cargo run -p backend
 
 # 2. Run the whole suite in Docker (builds, runs, exits with test status)
-docker compose -f docker/docker-compose.playwright.yml up --build \
+docker compose -f docker/compose/playwright.yml up --build \
   --exit-code-from playwright
 
 # 3. Review UX snapshots
@@ -96,7 +96,7 @@ open playwright/screenshots/pages/
 
 # 4. Improve UX/UI in web_ui/, then re-run step 2.
 #    Intentional visual change? Refresh baselines:
-docker compose -f docker/docker-compose.playwright.yml run --rm \
+docker compose -f docker/compose/playwright.yml run --rm \
   -e PLAYWRIGHT_BASE_URL=http://web playwright npx playwright test --update-snapshots
 ```
 

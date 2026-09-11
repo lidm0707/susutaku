@@ -2,4 +2,6 @@
 
 pub mod manager_process;
 
-pub use manager_process::{AgentInfo, AgentRunState, ManagerProcess, TaskOutcome, AGENTS_ROOT};
+pub use manager_process::{
+    AGENTS_ROOT, AgentInfo, AgentLogs, AgentRunState, ManagerProcess, TaskOutcome,
+};

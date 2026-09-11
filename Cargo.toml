@@ -19,6 +19,8 @@ members = [
     "crates/agent_3th_cli/ai_interface_layer",
     "crates/agent_3th_cli/zai_api",
     "crates/prompt-sys",
+    "crates/design_render",
+    "crates/prompt_bench",
 ]
 
 [workspace.package]

@@ -24,8 +24,8 @@ tested end-to-end in CI without a GPU.
 | Path | Purpose |
 |---|---|
 | `playwright/mock-model/server.js` | Mock of the local MLX model server: `/api/models`, `/api/models/select`, `/api/inference` |
-| `docker/Dockerfile.mock-model` | Mock model image (node:22-alpine, no deps) |
-| `docker/docker-compose.playwright-backend.yml` | postgres + mock-model + backend + web + playwright, zero published ports |
+| `docker/mock/Dockerfile.mock-model` | Mock model image (node:22-alpine, no deps) |
+| `docker/compose/playwright-backend.yml` | postgres + mock-model + backend + web + playwright, zero published ports |
 | `playwright/tests/chat-mock.spec.ts` | Chat UI echo, toolcall round, summary, agent run (gated on `E2E_MOCK_MODEL=1`) |
 
 ## Mock model reply rules (deterministic)
@@ -46,11 +46,11 @@ behaviour is stable regardless of the user's message text.
 
 ```sh
 # 1. Build + run the whole stack (exits with the test status)
-docker compose -f docker/docker-compose.playwright-backend.yml up --build \
+docker compose -f docker/compose/playwright-backend.yml up --build \
   --exit-code-from playwright
 
 # 2. Reset (the postgres service owns susutaku_e2e; no drop/create from the suite)
-docker compose -f docker/docker-compose.playwright-backend.yml down -v
+docker compose -f docker/compose/playwright-backend.yml down -v
 ```
 
 Only the `chat-mock` spec runs here (`command: ["chat-mock"]`); the full
@@ -85,7 +85,7 @@ UX/snapshot suite stays on the host-backend stack from
   apparmor=unconfined]` — the agent sandbox refuses to run unsandboxed (by
   design, no fallback).
 - **Building** `Dockerfile.backend` compiles sqlx macros against the *host*
-  postgres from `docker/docker-compose.yml` (port 5434) — keep it up while
+  postgres from `docker/compose/base.yml` (port 5434) — keep it up while
   building. Runtime uses the compose postgres only.
 - There is no `/compact` command in the backend yet; the summary case rides
   `/api/chat` with the mock replying `MOCK-SUMMARY:`. A real endpoint would

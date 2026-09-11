@@ -1,0 +1,11 @@
+[package]
+name = "prompt_bench"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow = "1"
+serde = { workspace = true }
+serde_json = "1"
+ureq = { workspace = true, features = ["json"] }

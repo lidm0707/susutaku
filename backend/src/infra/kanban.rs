@@ -32,7 +32,7 @@ pub async fn connect() -> Store {
             Err(err) => {
                 eprintln!(
                     "kanban postgres connect (attempt {attempt}/{CONNECT_RETRIES}): {err:?} \
-                     — is the postgres container up? (docker/docker-compose.yml, host port 5434)"
+                     — is the postgres container up? (docker/compose/base.yml, host port 5434)"
                 );
                 if attempt < CONNECT_RETRIES {
                     tokio::time::sleep(std::time::Duration::from_secs(CONNECT_RETRY_DELAY_SECS))
@@ -75,6 +75,9 @@ fn as_add(card: &NewCard) -> AddCard<'_> {
         title: &card.title,
         description: &card.description,
         priority: &card.priority,
+        labels: card.labels.as_deref(),
+        checklist: card.checklist.as_deref(),
+        estimate: card.estimate,
     }
 }
 
@@ -94,6 +97,9 @@ fn as_patch(patch: &CardPatch) -> UpdateCard<'_> {
         assignee: patch.assignee.as_deref(),
         deadline: patch.deadline.as_deref(),
         priority: patch.priority.as_deref(),
+        labels: patch.labels.as_deref(),
+        checklist: patch.checklist.as_deref(),
+        estimate: patch.estimate,
     }
 }
 

@@ -94,7 +94,7 @@ export default function Cronjobs() {
     }
   }
 
-  const schedulable = cards.filter((c) => c.pipeline_id != null && !c.cron);
+  const unscheduled = cards.filter((c) => !c.cron);
   const active = jobs.find((j) => j.card_id === selected) ?? null;
 
   return (
@@ -187,9 +187,10 @@ export default function Cronjobs() {
             card
             <select value={cardPick} onChange={(e) => setCardPick(e.target.value)}>
               <option value="">pick a card with a pipeline…</option>
-              {schedulable.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.title}
+              {unscheduled.length === 0 && <option disabled>no cards yet</option>}
+              {unscheduled.map((c) => (
+                <option key={c.id} value={c.pipeline_id != null ? c.id : ""} disabled={c.pipeline_id == null}>
+                  {c.pipeline_id == null ? `${c.title} — no pipeline attached` : c.title}
                 </option>
               ))}
             </select>

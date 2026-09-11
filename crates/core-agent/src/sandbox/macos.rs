@@ -160,6 +160,16 @@ impl Sandbox {
             .unwrap_or_else(|_| std::env::temp_dir())
     }
 
+    /// Copy the workspace into `<root>/snapshots/<label>`. Note: on macOS the
+    /// snapshots dir sits inside the seatbelt-writable root (there is no
+    /// separate jail staging dir), so it is not agent-untouchable.
+    pub fn snapshot(&self, label: &str) -> Result<PathBuf, Error> {
+        let root = self.root();
+        let dst = root.join("snapshots").join(label);
+        super::copy_dir_recursive_skip(&root, &dst, "snapshots")?;
+        Ok(dst)
+    }
+
     /// Delete sandbox dir and saved state (full teardown).
     pub fn purge(&self) {
         if let Ok(root) = self.root.read() {

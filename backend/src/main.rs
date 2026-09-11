@@ -3,20 +3,36 @@ use std::sync::Arc;
 
 use backend::api;
 use backend::app::ChatUseCase;
+use backend::infra::chat_memory;
 use backend::infra::client_node::ClientNode;
 use backend::infra::kanban;
+use backend::infra::local_settings;
 use backend::infra::model_client::RemoteModel;
 use backend::infra::sandbox::AgentSandbox;
 use backend::infra::search::{DuckDuckGo, PageFetcher};
+use backend::port::outbound::ChatMemory;
 use manager_rs::ManagerProcess;
+use tracing_subscriber::EnvFilter;
 
 const PORT: u16 = 8991;
+const DEFAULT_LOG_LEVEL: &str = "info";
 const SERVER_URL: &str = "http://127.0.0.1:8992";
 const SERVER_URL_ENV: &str = "SUSUTAKU_LOCAL_MODEL_URL";
 const HUB_ADDR_ENV: &str = "SUSUTAKU_HUB_ADDR";
 
 fn env_or(key: &str, default: &str) -> String {
     std::env::var(key).unwrap_or_else(|_| default.to_string())
+}
+
+fn local_model_url() -> String {
+    let saved = local_settings::read_saved()
+        .map(|s| s.endpoint)
+        .filter(|e| !e.is_empty());
+    saved.unwrap_or_else(|| env_or(SERVER_URL_ENV, SERVER_URL))
+}
+
+fn chat_memory() -> Option<Arc<dyn ChatMemory>> {
+    chat_memory::from_env().map(|m| Arc::new(m) as Arc<dyn ChatMemory>)
 }
 
 async fn spawn_client_node(sandbox: Arc<AgentSandbox>) {
@@ -26,14 +42,21 @@ async fn spawn_client_node(sandbox: Arc<AgentSandbox>) {
     let node = ClientNode::new(&hub_addr, sandbox);
     tokio::spawn(async move {
         if let Err(err) = node.run().await {
-            eprintln!("client node stopped: {err}");
+            tracing::error!("client node stopped: {err}");
         }
     });
 }
 
+fn init_tracing() {
+    let filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(DEFAULT_LOG_LEVEL));
+    tracing_subscriber::fmt().with_env_filter(filter).init();
+}
+
 #[tokio::main]
 async fn main() {
-    let model = Arc::new(RemoteModel::new(&env_or(SERVER_URL_ENV, SERVER_URL)));
+    init_tracing();
+    let model = Arc::new(RemoteModel::new(&local_model_url()));
     let sandbox = Arc::new(AgentSandbox::restore().expect("agent sandbox init"));
     spawn_client_node(sandbox.clone()).await;
     let codex_workspace = sandbox.root();
@@ -43,12 +66,13 @@ async fn main() {
         sandbox,
         model.clone(),
         model.clone(),
+        chat_memory(),
     ));
 
     let kanban_store = Arc::new(kanban::connect().await);
     let addr = SocketAddr::from(([0, 0, 0, 0], PORT));
     let listener = tokio::net::TcpListener::bind(addr).await.expect("bind");
-    println!("backend listening on http://{addr}");
+    tracing::info!("backend listening on http://{addr}");
     axum::serve(
         listener,
         api::router(
@@ -57,6 +81,7 @@ async fn main() {
             codex_workspace,
             kanban_store,
             ManagerProcess::new(),
+            model.clone(),
         ),
     )
     .with_graceful_shutdown(async {

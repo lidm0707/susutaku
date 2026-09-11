@@ -1,6 +1,6 @@
 //! Minimal test hub: accepts sandbox-client registrations and auto-dispatches
 //! a probe command to every new client, printing the sandbox result. Used by
-//! docker/docker-compose.client-test.yml to verify backend/worker → client
+//! docker/compose/client-test.yml to verify backend/worker → client
 //! round trips without a model server.
 //!
 //! Registered clients: `backend` (its built-in worker node) and `client`

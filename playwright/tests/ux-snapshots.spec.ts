@@ -6,7 +6,8 @@ import { test, expect } from "./fixtures";
 // for manual UX review.
 const PAGES = [
   { path: "/", name: "login", auth: false },
-  { path: "/chat", name: "chat", auth: true },
+  // /chat no longer exists as a page (redirects to /kanban); chat is the
+  // global ChatModal, covered functionally in chat-modal.spec.ts.
   { path: "/kanban", name: "kanban", auth: true },
   { path: "/pipelines", name: "pipelines", auth: true },
   { path: "/prompts", name: "prompts", auth: true },

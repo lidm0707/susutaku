@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE kanban_cards\n               SET title = $2, description = $3, assignee = $4,\n                   deadline = NULLIF($5, ''), priority = COALESCE($6, priority),\n                   labels = CASE WHEN $7::text IS NULL THEN labels WHEN $7::text = '' THEN NULL ELSE $7::text END,\n                   checklist = CASE WHEN $8::text IS NULL THEN checklist WHEN $8::text = '' THEN NULL ELSE $8::text END,\n                   estimate = COALESCE($9::int, estimate)\n               WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "7fe633be01c43d16558a9ceaedcaf50ebf6eb5dee55c8be95b9c83eef2bcd0c8"
+}

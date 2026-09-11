@@ -29,14 +29,19 @@ async fn pipeline_crud_and_validation() {
     ));
 
     let rows = store.list_pipelines().await.expect("list");
-    assert!(rows.iter().any(|PipelineRow { name, spec, .. }| name == TEST_PIPELINE_A && spec == VALID_SPEC));
+    assert!(
+        rows.iter()
+            .any(|PipelineRow { name, spec, .. }| name == TEST_PIPELINE_A && spec == VALID_SPEC)
+    );
 
     store
         .update_pipeline(id, TEST_PIPELINE_B, VALID_SPEC)
         .await
         .expect("update");
     assert!(matches!(
-        store.update_pipeline(999_999, TEST_PIPELINE_B, VALID_SPEC).await,
+        store
+            .update_pipeline(999_999, TEST_PIPELINE_B, VALID_SPEC)
+            .await,
         Err(StoreError::NoSuchPipeline)
     ));
 
@@ -60,7 +65,10 @@ async fn agent_crud_and_card_link() {
         output: "".into(),
     };
     let id = store.create_agent(&cfg).await.expect("create agent");
-    assert!(matches!(store.create_agent(&cfg).await, Err(StoreError::AgentTaken)));
+    assert!(matches!(
+        store.create_agent(&cfg).await,
+        Err(StoreError::AgentTaken)
+    ));
 
     let rows = store.list_agents().await.expect("list agents");
     let found = rows.iter().find(|r| r.id == id).expect("agent row");
@@ -98,6 +106,9 @@ async fn agent_crud_and_card_link() {
             title: TEST_TITLE,
             description: "",
             priority: TEST_PRIORITY,
+            labels: None,
+            checklist: None,
+            estimate: None,
         })
         .await
         .expect("add card");
@@ -117,7 +128,13 @@ async fn agent_crud_and_card_link() {
     ));
 
     store.remove(card_id).await.expect("remove card");
-    store.remove_pipeline(pipe_id).await.expect("remove pipeline");
+    store
+        .remove_pipeline(pipe_id)
+        .await
+        .expect("remove pipeline");
     store.remove_agent(id).await.expect("remove agent");
-    assert!(matches!(store.remove_agent(id).await, Err(StoreError::NoSuchAgent)));
+    assert!(matches!(
+        store.remove_agent(id).await,
+        Err(StoreError::NoSuchAgent)
+    ));
 }

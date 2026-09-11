@@ -7,8 +7,13 @@ use crate::domain::{
     Prompt, SearchMode, SearchResult, TOOL_RESULT_HEADER, TOOL_ROUNDS_MAX, ToolCall,
 };
 use crate::port::inbound::{ChatCmd, ChatHandling, ChatOutcome};
-use crate::port::outbound::{Fetcher, GenReply, Inference, ModelSwitch, Runner, Searcher};
+use crate::port::outbound::{
+    ChatMemory, Fetcher, GenReply, Inference, ModelSwitch, Runner, Searcher,
+};
 use susutaku_mlx::tok::TokKind;
+
+const MEMORY_RECALL_TOP_K: usize = 5;
+const MEMORY_CONTEXT_HEADER: &str = "Earlier relevant conversation:\n";
 
 pub struct ChatUseCase {
     searcher: Arc<dyn Searcher>,
@@ -16,15 +21,18 @@ pub struct ChatUseCase {
     runner: Arc<dyn Runner>,
     engine: Arc<dyn Inference>,
     models: Arc<dyn ModelSwitch>,
+    memory: Option<Arc<dyn ChatMemory>>,
 }
 
 impl ChatUseCase {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         searcher: Arc<dyn Searcher>,
         fetcher: Arc<dyn Fetcher>,
         runner: Arc<dyn Runner>,
         engine: Arc<dyn Inference>,
         models: Arc<dyn ModelSwitch>,
+        memory: Option<Arc<dyn ChatMemory>>,
     ) -> Self {
         Self {
             searcher,
@@ -32,6 +40,7 @@ impl ChatUseCase {
             runner,
             engine,
             models,
+            memory,
         }
     }
 
@@ -77,6 +86,32 @@ impl ChatUseCase {
             .await
             .map_err(|_| "shell task panicked".to_string())?
     }
+
+    /// Recalls similar past exchanges; memory problems degrade to empty.
+    async fn recall_blocking(&self, query: &str) -> Vec<String> {
+        let Some(memory) = self.memory.as_ref().map(Arc::clone) else {
+            return Vec::new();
+        };
+        let owned = query.to_string();
+        let recalled =
+            tokio::task::spawn_blocking(move || memory.recall(&owned, MEMORY_RECALL_TOP_K))
+                .await
+                .ok()
+                .and_then(|r| r.ok())
+                .unwrap_or_default();
+        recalled
+            .iter()
+            .map(|hit| format!("{}: {}", hit.role, hit.text))
+            .collect()
+    }
+
+    async fn remember_blocking(&self, role: &str, text: &str) {
+        let Some(memory) = self.memory.as_ref().map(Arc::clone) else {
+            return;
+        };
+        let (role, text) = (role.to_string(), text.to_string());
+        let _ = tokio::task::spawn_blocking(move || memory.remember(&role, &text)).await;
+    }
 }
 
 impl ChatHandling for ChatUseCase {
@@ -85,6 +120,14 @@ impl ChatHandling for ChatUseCase {
         let allow_tools = cmd.mode == SearchMode::Auto;
 
         let mut context = String::new();
+        let memories = self.recall_blocking(&cmd.message).await;
+        if !memories.is_empty() {
+            context.push_str(MEMORY_CONTEXT_HEADER);
+            for line in memories {
+                context.push_str(&line);
+                context.push('\n');
+            }
+        }
         let mut searched = false;
         if cmd.mode == SearchMode::Force {
             let results = self.search_blocking(&cmd.message).await?;
@@ -136,6 +179,9 @@ impl ChatHandling for ChatUseCase {
                 )
                 .await?;
         }
+
+        self.remember_blocking("user", &cmd.message).await;
+        self.remember_blocking("assistant", &reply.text).await;
 
         Ok(ChatOutcome {
             model: Some(reply.model),

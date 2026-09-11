@@ -93,6 +93,7 @@ const WORKSPACE_MOUNT: &str = "workspace"; // inside the sandbox root staging di
 const ROOTFS_SUBDIR: &str = "rootfs";
 const SANDBOX_SUBDIR: &str = "sandbox";
 const METADATA_FILE: &str = "sandbox-metadata.json";
+const SNAPSHOTS_SUBDIR: &str = "snapshots";
 const URANDOM: &str = "/dev/urandom";
 const ID_BYTES: usize = 16;
 
@@ -311,6 +312,27 @@ impl Sandbox {
     /// Writable workspace (host-side path; mounted at `/workspace` inside).
     pub fn root(&self) -> PathBuf {
         self.root.join(WORKSPACE_MOUNT)
+    }
+
+    /// Copy the workspace into `root/snapshots/<label>`. Lives outside the
+    /// jail (the only writable in-sandbox path is the workspace) and dies
+    /// with `purge()`. Label should be filesystem-safe (e.g. a step number).
+    pub fn snapshot(&self, label: &str) -> Result<PathBuf, Error> {
+        let _gate = self
+            .run_gate
+            .read()
+            .map_err(|e| Error::other(e.to_string()))?;
+        let lc = self
+            .lifecycle
+            .read()
+            .map_err(|e| Error::other(e.to_string()))?;
+        if matches!(*lc, Lifecycle::Purging | Lifecycle::Purged) {
+            return Err(Error::other("sandbox already purged"));
+        }
+        drop(lc);
+        let dst = self.root.join(SNAPSHOTS_SUBDIR).join(label);
+        super::copy_dir_recursive_skip(&self.root.join(WORKSPACE_MOUNT), &dst, SNAPSHOTS_SUBDIR)?;
+        Ok(dst)
     }
 
     pub fn run(&self, cmd: &str) -> Result<String, Error> {

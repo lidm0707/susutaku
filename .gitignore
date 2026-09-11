@@ -13,3 +13,6 @@ playwright/test-results/
 playwright/node_modules/
 playwright/screenshots/
 log/
+check_real/
+ux-snapshots.spec.ts-snapshots/
+design/

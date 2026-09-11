@@ -9,6 +9,10 @@ pub const TABLE_NAME: &str = "kanban_cards";
 pub const NO_SUCH_CARD_MSG: &str = "no such card";
 pub const NO_SUCH_COLUMN_MSG: &str = "no such column";
 
+pub const ACTIVITY_MESSAGE_MAX_CHARS: usize = 500;
+pub const ACTIVITY_LIST_MAX: i64 = 200;
+pub const ACTIVITY_LIST_DEFAULT: i64 = 50;
+
 /// Open transaction on the store pool; repos run multi-statement writes on it.
 pub type DbTx = sqlx::Transaction<'static, sqlx::Postgres>;
 
@@ -65,6 +69,11 @@ pub struct CardRow {
     pub pipeline_id: Option<i64>,
     pub cron: Option<String>,
     pub deadline: Option<String>,
+    /// JSON array of label strings; empty string clears, NULL/None unset.
+    pub labels: Option<String>,
+    /// JSON array of {text, done} objects; empty string clears, NULL/None unset.
+    pub checklist: Option<String>,
+    pub estimate: Option<i32>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -80,6 +89,11 @@ pub struct AddCard<'a> {
     pub title: &'a str,
     pub description: &'a str,
     pub priority: &'a str,
+    /// JSON array of label strings; empty string clears, None unset.
+    pub labels: Option<&'a str>,
+    /// JSON array of {text, done} objects; empty string clears, None unset.
+    pub checklist: Option<&'a str>,
+    pub estimate: Option<i32>,
 }
 
 pub struct MoveCard<'a> {
@@ -97,6 +111,20 @@ pub struct UpdateCard<'a> {
     pub deadline: Option<&'a str>,
     /// None leaves the priority unchanged.
     pub priority: Option<&'a str>,
+    /// None leaves unchanged; empty string clears. Must be a JSON array when set.
+    pub labels: Option<&'a str>,
+    /// None leaves unchanged; empty string clears. Must be a JSON array when set.
+    pub checklist: Option<&'a str>,
+    /// Story points; None leaves the current value unchanged.
+    pub estimate: Option<i32>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ActivityRow {
+    pub id: i64,
+    pub kind: String,
+    pub message: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -205,7 +233,44 @@ ALTER TABLE kanban_cards ADD COLUMN IF NOT EXISTS cron TEXT;
     r#"
 ALTER TABLE kanban_cards ADD COLUMN IF NOT EXISTS deadline TEXT;
 "#,
+    r#"
+ALTER TABLE kanban_cards ADD COLUMN IF NOT EXISTS labels TEXT;
+"#,
+    r#"
+ALTER TABLE kanban_cards ADD COLUMN IF NOT EXISTS checklist TEXT;
+"#,
+    r#"
+ALTER TABLE kanban_cards ADD COLUMN IF NOT EXISTS estimate INT;
+"#,
+    r#"
+CREATE TABLE IF NOT EXISTS activity (
+    id         BIGSERIAL PRIMARY KEY,
+    kind       TEXT NOT NULL,
+    message    TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+"#,
+    r#"
+CREATE INDEX IF NOT EXISTS activity_created_idx ON activity (created_at DESC, id DESC);
+"#,
 ];
+
+const JSON_ARRAY_ERR: &str = "must be a JSON array";
+
+fn validate_card_json(labels: Option<&str>, checklist: Option<&str>) -> Result<(), StoreError> {
+    for (name, value) in [("labels", labels), ("checklist", checklist)] {
+        let Some(text) = value else { continue };
+        if text.is_empty() {
+            continue;
+        }
+        let parsed: serde_json::Value = serde_json::from_str(text)
+            .map_err(|_| StoreError::BadSpec(format!("{name}: invalid JSON")))?;
+        if !parsed.is_array() {
+            return Err(StoreError::BadSpec(format!("{name}: {JSON_ARRAY_ERR}")));
+        }
+    }
+    Ok(())
+}
 
 impl Store {
     pub fn default_url() -> &'static str {
@@ -224,7 +289,8 @@ impl Store {
         let rows = sqlx::query_as!(
             CardRow,
             r#"SELECT id, column_id, project_id, title, description,
-                      priority, position, agent_name, agent_state, assignee, pipeline_id, cron, deadline
+                      priority, position, agent_name, agent_state, assignee, pipeline_id, cron, deadline,
+                      labels, checklist, estimate
                FROM kanban_cards
                WHERE ($1::bigint IS NULL OR project_id = $1)
                ORDER BY column_id, position, id"#,
@@ -236,17 +302,22 @@ impl Store {
     }
 
     pub async fn add(&self, card: AddCard<'_>) -> Result<i64, StoreError> {
+        validate_card_json(card.labels, card.checklist)?;
         let row = sqlx::query_as!(
             NewId,
-            r#"INSERT INTO kanban_cards (column_id, project_id, title, description, priority, position)
+            r#"INSERT INTO kanban_cards (column_id, project_id, title, description, priority, position, labels, checklist, estimate)
                VALUES ($1, $5, $2, $3, $4,
-                       COALESCE((SELECT MAX(position) + 1 FROM kanban_cards WHERE column_id = $1), 0))
+                       COALESCE((SELECT MAX(position) + 1 FROM kanban_cards WHERE column_id = $1), 0),
+                       NULLIF($6, ''), NULLIF($7, ''), $8)
                RETURNING id AS "id: i64""#,
             card.column_id,
             card.title,
             card.description,
             card.priority,
             card.project_id,
+            card.labels,
+            card.checklist,
+            card.estimate,
         )
         .fetch_one(&self.pool)
         .await?;
@@ -257,7 +328,8 @@ impl Store {
         let row = sqlx::query_as!(
             CardRow,
             r#"SELECT id, column_id, project_id, title, description,
-                      priority, position, agent_name, agent_state, assignee, pipeline_id, cron, deadline
+                      priority, position, agent_name, agent_state, assignee, pipeline_id, cron, deadline,
+                      labels, checklist, estimate
                FROM kanban_cards WHERE id = $1"#,
             id
         )
@@ -352,10 +424,14 @@ impl Store {
     }
 
     pub async fn update_card(&self, u: UpdateCard<'_>) -> Result<(), StoreError> {
+        validate_card_json(u.labels, u.checklist)?;
         let res = sqlx::query!(
             r#"UPDATE kanban_cards
                SET title = $2, description = $3, assignee = $4,
-                   deadline = NULLIF($5, ''), priority = COALESCE($6, priority)
+                   deadline = NULLIF($5, ''), priority = COALESCE($6, priority),
+                   labels = CASE WHEN $7::text IS NULL THEN labels WHEN $7::text = '' THEN NULL ELSE $7::text END,
+                   checklist = CASE WHEN $8::text IS NULL THEN checklist WHEN $8::text = '' THEN NULL ELSE $8::text END,
+                   estimate = COALESCE($9::int, estimate)
                WHERE id = $1"#,
             u.id,
             u.title,
@@ -363,6 +439,9 @@ impl Store {
             u.assignee,
             u.deadline,
             u.priority,
+            u.labels,
+            u.checklist,
+            u.estimate,
         )
         .execute(&self.pool)
         .await?;
@@ -402,23 +481,55 @@ impl Store {
         Ok(id)
     }
 
+    fn clamp_message(message: &str) -> String {
+        message.chars().take(ACTIVITY_MESSAGE_MAX_CHARS).collect()
+    }
+
+    pub async fn record_activity(&self, kind: &str, message: &str) -> Result<(), StoreError> {
+        sqlx::query!(
+            r#"INSERT INTO activity (kind, message) VALUES ($1, $2)"#,
+            kind,
+            Self::clamp_message(message),
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn list_activity(&self, limit: i64) -> Result<Vec<ActivityRow>, StoreError> {
+        let limit = limit.clamp(1, ACTIVITY_LIST_MAX);
+        let rows = sqlx::query_as!(
+            ActivityRow,
+            r#"SELECT id, kind, message, created_at FROM activity ORDER BY id DESC LIMIT $1"#,
+            limit
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
     pub async fn begin(&self) -> Result<DbTx, StoreError> {
         let tx = self.pool.begin().await?;
         Ok(tx)
     }
 
     pub async fn add_tx(&self, tx: &mut DbTx, card: AddCard<'_>) -> Result<i64, StoreError> {
+        validate_card_json(card.labels, card.checklist)?;
         let row = sqlx::query_as!(
             NewId,
-            r#"INSERT INTO kanban_cards (column_id, project_id, title, description, priority, position)
+            r#"INSERT INTO kanban_cards (column_id, project_id, title, description, priority, position, labels, checklist, estimate)
                VALUES ($1, $5, $2, $3, $4,
-                       COALESCE((SELECT MAX(position) + 1 FROM kanban_cards WHERE column_id = $1), 0))
+                       COALESCE((SELECT MAX(position) + 1 FROM kanban_cards WHERE column_id = $1), 0),
+                       NULLIF($6, ''), NULLIF($7, ''), $8)
                RETURNING id AS "id: i64""#,
             card.column_id,
             card.title,
             card.description,
             card.priority,
             card.project_id,
+            card.labels,
+            card.checklist,
+            card.estimate,
         )
         .fetch_one(&mut **tx)
         .await?;
@@ -429,7 +540,8 @@ impl Store {
         let row = sqlx::query_as!(
             CardRow,
             r#"SELECT id, column_id, project_id, title, description,
-                      priority, position, agent_name, agent_state, assignee, pipeline_id, cron, deadline
+                      priority, position, agent_name, agent_state, assignee, pipeline_id, cron, deadline,
+                      labels, checklist, estimate
                FROM kanban_cards WHERE id = $1"#,
             id
         )
@@ -439,10 +551,14 @@ impl Store {
     }
 
     pub async fn update_card_tx(&self, tx: &mut DbTx, u: UpdateCard<'_>) -> Result<(), StoreError> {
+        validate_card_json(u.labels, u.checklist)?;
         let res = sqlx::query!(
             r#"UPDATE kanban_cards
                SET title = $2, description = $3, assignee = $4,
-                   deadline = NULLIF($5, ''), priority = COALESCE($6, priority)
+                   deadline = NULLIF($5, ''), priority = COALESCE($6, priority),
+                   labels = CASE WHEN $7::text IS NULL THEN labels WHEN $7::text = '' THEN NULL ELSE $7::text END,
+                   checklist = CASE WHEN $8::text IS NULL THEN checklist WHEN $8::text = '' THEN NULL ELSE $8::text END,
+                   estimate = COALESCE($9::int, estimate)
                WHERE id = $1"#,
             u.id,
             u.title,
@@ -450,6 +566,9 @@ impl Store {
             u.assignee,
             u.deadline,
             u.priority,
+            u.labels,
+            u.checklist,
+            u.estimate,
         )
         .execute(&mut **tx)
         .await?;

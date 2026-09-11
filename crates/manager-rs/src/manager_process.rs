@@ -31,6 +31,15 @@ pub struct AgentInfo {
 }
 
 #[derive(Serialize)]
+pub struct AgentLogs {
+    pub agent: String,
+    pub work_tree: PathBuf,
+    pub runs: u64,
+    pub transcript: Vec<String>,
+    pub last_result: Option<String>,
+}
+
+#[derive(Serialize)]
 pub struct TaskOutcome {
     pub agent: String,
     pub result: Option<String>,
@@ -126,6 +135,23 @@ impl ManagerProcess {
             agents.remove(agent);
         }
         Ok(outcome)
+    }
+
+    pub fn logs(&self, agent: &str) -> Result<AgentLogs, String> {
+        let slot = self.slot(agent)?;
+        let transcript = slot
+            .sandbox
+            .transcript()
+            .into_iter()
+            .map(|e| format!("{:?}: {}", e.role, e.content))
+            .collect();
+        Ok(AgentLogs {
+            agent: agent.to_string(),
+            work_tree: slot.work_tree.clone(),
+            runs: slot.runs.load(Ordering::Relaxed),
+            transcript,
+            last_result: slot.last_result.read().ok().and_then(|r| r.clone()),
+        })
     }
 
     pub fn snapshot(&self) -> Vec<AgentInfo> {

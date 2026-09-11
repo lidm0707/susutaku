@@ -41,6 +41,12 @@ function replyFor(prompt) {
   if (prompt.toLowerCase().includes(SUMMARY_TRIGGER)) {
     return SUMMARY_REPLY;
   }
+  // Contexted (tools-off) prompts echo their first line: the page-context
+  // prefix the chat modal prepends, so e2e can assert the send path.
+  if (prompt.includes("[context:")) {
+    const firstLine = prompt.trim().split("\n")[0] || "";
+    return `${ECHO_PREFIX} ${firstLine}`;
+  }
   const lastLine = prompt.trim().split("\n").pop() || "";
   return `${ECHO_PREFIX} ${lastLine}`;
 }

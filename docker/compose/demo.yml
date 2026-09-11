@@ -4,7 +4,7 @@
 #   Only the web UI is reachable from the host, loopback-only
 #   (127.0.0.1:3334) — pg / backend / mock-model publish NO ports.
 #
-#   docker compose -f docker/docker-compose.demo.yml up --build -d
+#   docker compose -f docker/compose/demo.yml up --build -d
 #   open http://localhost:3334
 name: susutaku-demo
 
@@ -19,14 +19,14 @@ services:
 
   mock-model:
     build:
-      context: ..
-      dockerfile: docker/Dockerfile.mock-model
+      context: ../..
+      dockerfile: docker/mock/Dockerfile.mock-model
     restart: unless-stopped
 
   backend:
     build:
-      context: ..
-      dockerfile: docker/Dockerfile.backend
+      context: ../..
+      dockerfile: docker/backend/Dockerfile.backend
       # Default stage is hub-runtime (hub_stub); we need the API server.
       target: backend-runtime
     extra_hosts:
@@ -47,8 +47,8 @@ services:
 
   web:
     build:
-      context: ..
-      dockerfile: docker/Dockerfile.web
+      context: ../..
+      dockerfile: docker/web/Dockerfile.web
     ports:
       # Loopback-only: reachable from this machine's browser, not the LAN.
       - "127.0.0.1:3334:80"

@@ -15,8 +15,11 @@ import {
   Pencil,
   Plus,
   Trash2,
+  RefreshCw,
+  Hand,
 } from "lucide-react";
 import { Modal } from "../ui/Overlay.jsx";
+import { toast } from "../ui/Toast.jsx";
 import { SplitLayout, type SideItem } from "../ui/SplitLayout.jsx";
 import CodexLogin from "../components/CodexLogin.tsx";
 import ClaudeLogin from "../components/ClaudeLogin.tsx";
@@ -37,6 +40,13 @@ import {
   type ZaiModelAction,
   type ClientEnv,
   type ModelInfo,
+  fetch_local_settings,
+  save_local_settings,
+  fetch_zai_quota,
+  zai_say_hi,
+  type ZaiQuota,
+  fetch_quota_board,
+  type PlatformQuota,
 } from "../lib.js";
 
 type Tab = "client" | "providers" | "users";
@@ -291,10 +301,12 @@ function ProvidersTab() {
 
   return (
     <SplitLayout items={PROVIDER_ITEMS} active={provider} on_pick={(id) => setProvider(id as ProviderTab)} label="ai providers">
+      <QuotaBoard />
       {provider === "zai" && <ZaiProvider />}
       {provider === "codex" && <CodexProvider />}
       {provider === "claude" && <ClaudeProvider />}
       {provider === "local" && <LocalProvider />}
+      {provider === "local" && <LocalEndpoint />}
     </SplitLayout>
   );
 }
@@ -420,6 +432,7 @@ function ZaiProvider() {
       </div>
       {status && <span className="saved-mark">{status}</span>}
       {error && <p className="error">{error}</p>}
+      <ZaiQuotaBlock />
       <Modal
         open={modal !== null}
         title={creating ? "create z.ai model" : "edit token"}
@@ -458,6 +471,165 @@ function ZaiProvider() {
         </form>
       </Modal>
     </div>
+  );
+}
+
+type QuotaState = { quota: ZaiQuota } | { error: true } | null;
+
+const QUOTA_MINT_MAX = 50;
+const QUOTA_LEMON_MAX = 80;
+const REPLY_PREVIEW_LEN = 120;
+
+function quota_mood(pct: number): string {
+  if (pct < QUOTA_MINT_MAX) return "genki";
+  if (pct < QUOTA_LEMON_MAX) return "mma...";
+  return "abunai!";
+}
+
+function reset_time(ms: number): string {
+  const d = new Date(ms);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function ZaiQuotaBlock() {
+  const [state, setState] = useState<QuotaState>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    fetch_zai_quota()
+      .then((quota) => setState({ quota }))
+      .catch(() => setState({ error: true }));
+  }, []);
+
+  async function refresh() {
+    setBusy(true);
+    try {
+      setState({ quota: await fetch_zai_quota() });
+    } catch (err: unknown) {
+      toast(err instanceof Error ? err.message : String(err), "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function say_hi() {
+    setBusy(true);
+    try {
+      const res = await zai_say_hi();
+      toast(res.reply.slice(0, REPLY_PREVIEW_LEN), "success");
+      setState({ quota: await fetch_zai_quota() });
+    } catch (err: unknown) {
+      toast(err instanceof Error ? err.message : String(err), "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (state === null) return null;
+  if ("error" in state) return <p className="model-empty zai-quota-note">quota unavailable</p>;
+
+  const { tokens_used_pct, time_limit_reset_ms } = state.quota;
+  const mood = quota_bar_class(tokens_used_pct);
+
+  return (
+    <section className="zai-quota" aria-label="z.ai quota">
+      <div className="zai-quota-bar" role="progressbar" aria-valuenow={tokens_used_pct} aria-valuemin={0} aria-valuemax={100}>
+        <span className={`zai-quota-fill ${mood}`} style={{ width: `${Math.min(100, Math.max(0, tokens_used_pct))}%` }} />
+      </div>
+      <p className="zai-quota-label">
+        <span>{tokens_used_pct}% used · {quota_mood(tokens_used_pct)}</span>
+        {time_limit_reset_ms !== null && <span>window resets {reset_time(time_limit_reset_ms)}</span>}
+        <span className="zai-quota-actions">
+          <button type="button" className="icon-btn" title="refresh quota" disabled={busy} onClick={refresh}>
+            <RefreshCw size={14} />
+          </button>
+          <button type="button" className="icon-btn" title="say hi" disabled={busy} onClick={say_hi}>
+            <Hand size={14} /> say hi
+          </button>
+        </span>
+      </p>
+    </section>
+  );
+}
+
+type QuotaBoardState = { rows: PlatformQuota[] } | { error: true } | null;
+
+function quota_bar_class(pct: number): string {
+  return pct < QUOTA_MINT_MAX ? "mint" : pct < QUOTA_LEMON_MAX ? "lemon" : "pink";
+}
+
+function QuotaRow({ row }: { row: PlatformQuota }) {
+  return (
+    <li className={`quota-row${row.available ? "" : " muted"}`}>
+      <span className="quota-row-name">{row.platform}</span>
+      {row.available ? (
+        <>
+          {row.tokens_used_pct !== null && (
+            <span
+              className="zai-quota-bar quota-row-bar"
+              role="progressbar"
+              aria-valuenow={row.tokens_used_pct}
+              aria-valuemin={0}
+              aria-valuemax={100}
+            >
+              <span
+                className={`zai-quota-fill ${quota_bar_class(row.tokens_used_pct)}`}
+                style={{ width: `${Math.min(100, Math.max(0, row.tokens_used_pct))}%` }}
+              />
+            </span>
+          )}
+          <span className="quota-row-info">
+            {row.tokens_used_pct !== null && <>{row.tokens_used_pct}%</>}
+            {row.window_used_pct !== null && <span> · win {row.window_used_pct}%</span>}
+            {row.window_reset_ms !== null && <span> · resets {reset_time(row.window_reset_ms)}</span>}
+            {row.tokens_used_pct === null && row.window_used_pct === null && row.window_reset_ms === null && <>—</>}
+          </span>
+        </>
+      ) : (
+        <span className="quota-row-info">unavailable{row.reason ? ` — ${row.reason}` : ""}</span>
+      )}
+    </li>
+  );
+}
+
+function QuotaBoard() {
+  const [state, setState] = useState<QuotaBoardState>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function load() {
+    setBusy(true);
+    try {
+      setState({ rows: await fetch_quota_board() });
+    } catch {
+      setState({ error: true });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  return (
+    <section className="quota-board" aria-label="quota board">
+      <p className="quota-board-head">
+        <span className="quota-board-title">quota board</span>
+        <button type="button" className="icon-btn" title="refresh quota board" disabled={busy} onClick={load}>
+          <RefreshCw size={14} />
+        </button>
+      </p>
+      {state === null && <p className="model-empty">loading…</p>}
+      {state !== null && "error" in state && <p className="model-empty">quota board unavailable</p>}
+      {state !== null && !("error" in state) && (
+        <ul className="quota-board-list">
+          {state.rows.map((row) => (
+            <QuotaRow key={row.platform} row={row} />
+          ))}
+        </ul>
+      )}
+    </section>
   );
 }
 
@@ -526,6 +698,44 @@ function LocalProvider() {
       </select>
       {status && <span className="saved-mark">{status}</span>}
       {error && <p className="error">{error}</p>}
+    </form>
+  );
+}
+
+function LocalEndpoint() {
+  const [endpoint, setEndpoint] = useState("");
+
+  useEffect(() => {
+    fetch_local_settings()
+      .then((s) => setEndpoint(s.endpoint))
+      .catch(() => {});
+  }, []);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    try {
+      await save_local_settings(endpoint.trim());
+      toast("local endpoint saved", "success");
+    } catch (err: unknown) {
+      toast(err instanceof Error ? err.message : String(err), "error");
+    }
+  }
+
+  return (
+    <form className="settings-form" onSubmit={submit}>
+      <h2 className="sub">local model</h2>
+      <label htmlFor="local-endpoint">endpoint</label>
+      <input
+        id="local-endpoint"
+        value={endpoint}
+        onChange={(e: React.ChangeEvent<HTMLInputElement>) => setEndpoint(e.target.value)}
+        placeholder="http://127.0.0.1:8992"
+        autoComplete="off"
+      />
+      <p className="model-empty">openai-compatible endpoint (/v1/chat/completions)</p>
+      <div className="form-row">
+        <button type="submit">save</button>
+      </div>
     </form>
   );
 }

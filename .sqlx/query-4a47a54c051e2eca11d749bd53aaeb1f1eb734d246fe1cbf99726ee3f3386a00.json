@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, column_id, project_id, title, description,\n                      priority, position, agent_name, agent_state, assignee, pipeline_id, cron, deadline\n               FROM kanban_cards WHERE id = $1",
+  "query": "SELECT id, column_id, project_id, title, description,\n                      priority, position, agent_name, agent_state, assignee, pipeline_id, cron, deadline,\n                      labels, checklist, estimate\n               FROM kanban_cards WHERE id = $1",
   "describe": {
     "columns": [
       {
@@ -67,6 +67,21 @@
         "ordinal": 12,
         "name": "deadline",
         "type_info": "Text"
+      },
+      {
+        "ordinal": 13,
+        "name": "labels",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 14,
+        "name": "checklist",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 15,
+        "name": "estimate",
+        "type_info": "Int4"
       }
     ],
     "parameters": {
@@ -87,8 +102,11 @@
       true,
       true,
       true,
+      true,
+      true,
+      true,
       true
     ]
   },
-  "hash": "cc885e62d78bbcdf9c579b1e375f3a132c97f3dfb1b75626d176b48800c78cd7"
+  "hash": "4a47a54c051e2eca11d749bd53aaeb1f1eb734d246fe1cbf99726ee3f3386a00"
 }

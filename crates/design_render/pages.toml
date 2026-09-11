@@ -1,0 +1,62 @@
+# One entry per page / feature state to paint.
+# setup actions run in order after navigation: click, fill, press.
+[[pages]]
+name = "01-login"
+path = "/"
+
+[[pages]]
+name = "02-kanban"
+path = "/kanban"
+auth = true
+
+[[pages]]
+name = "03-kanban-add-task-modal"
+path = "/kanban"
+auth = true
+[[pages.setup]]
+click = '.kanban-add button'
+shot_after = false
+
+[[pages]]
+name = "04-chat-modal"
+path = "/kanban"
+auth = true
+[[pages.setup]]
+click = "button.chat-fab"
+shot_after = false
+
+[[pages]]
+name = "05-machines-popover"
+path = "/kanban"
+auth = true
+[[pages.setup]]
+click = 'button[title="machines"]'
+shot_after = false
+
+[[pages]]
+name = "06-activity-popover"
+path = "/kanban"
+auth = true
+[[pages.setup]]
+click = 'button[title="activity"]'
+shot_after = false
+
+[[pages]]
+name = "07-pipelines"
+path = "/pipelines"
+auth = true
+
+[[pages]]
+name = "08-cronjobs"
+path = "/cronjobs"
+auth = true
+
+[[pages]]
+name = "09-agents"
+path = "/agents"
+auth = true
+
+[[pages]]
+name = "10-settings"
+path = "/settings"
+auth = true

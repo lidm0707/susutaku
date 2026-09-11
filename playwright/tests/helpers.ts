@@ -31,7 +31,7 @@ export async function seedUser() {
   if (!login.ok()) {
     throw new Error(
       `cannot seed e2e user: bootstrap=${res.status()} admin login=${login.status()}. `
-        + `Set E2E_ADMIN_USER / E2E_ADMIN_PASSWORD in docker/docker-compose.playwright.yml.`
+        + `Set E2E_ADMIN_USER / E2E_ADMIN_PASSWORD in docker/compose/playwright.yml.`
     );
   }
   const body = await login.json();

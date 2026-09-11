@@ -8,7 +8,7 @@
 # is seeded through the real auth API using admin credentials provided via
 # env (see tests/helpers.ts + docs/playwright-workflow.md).
 #
-#   docker compose -f docker/docker-compose.playwright.yml up --build --exit-code-from playwright
+#   docker compose -f docker/compose/playwright.yml up --build --exit-code-from playwright
 #
 # Screenshots (UX snapshots) land in playwright/screenshots/ and
 # playwright/test-results/ on the host via bind mounts.
@@ -25,8 +25,8 @@ services:
 
   web:
     build:
-      context: ..
-      dockerfile: docker/Dockerfile.web
+      context: ../..
+      dockerfile: docker/web/Dockerfile.web
     environment:
       # MLX inference needs macOS Metal -> the backend runs on the HOST.
       BACKEND_URL: http://host.docker.internal:${BACKEND_PORT:-8991}
@@ -38,8 +38,8 @@ services:
 
   playwright:
     build:
-      context: ..
-      dockerfile: docker/Dockerfile.playwright
+      context: ../..
+      dockerfile: docker/test/Dockerfile.playwright
     environment:
       # Web is reachable by service name on the internal network only.
       PLAYWRIGHT_BASE_URL: http://web

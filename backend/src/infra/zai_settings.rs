@@ -8,8 +8,12 @@ use serde::{Deserialize, Serialize};
 use zai_api::client::{DEFAULT_MODEL, ENV_API_KEY};
 
 use super::client_env::{self, ClientEnv};
+use super::local_settings;
 
 pub const SETTINGS_FILE: &str = "setting.json";
+/// Override for containers: the deploy stack points this at a volume so
+/// settings survive redeploys.
+pub const SETTINGS_FILE_ENV: &str = "SUSUTAKU_SETTINGS";
 pub const ZAI_SECTION: &str = "zai";
 pub const SYSTEM_SECTION: &str = "system";
 pub const FIELD_API_KEY: &str = "api_key";
@@ -55,6 +59,7 @@ pub struct SettingsState {
     zai: RwLock<ZaiSettings>,
     client_env: RwLock<Option<ClientEnv>>,
     system_prompt: RwLock<String>,
+    local_endpoint: RwLock<String>,
 }
 
 impl SettingsState {
@@ -64,7 +69,30 @@ impl SettingsState {
             zai: RwLock::new(read_file().unwrap_or_default()),
             client_env: RwLock::new(client_env::read(&doc)),
             system_prompt: RwLock::new(read_system_prompt()),
+            local_endpoint: RwLock::new(
+                local_settings::read(&doc)
+                    .map(|s| s.endpoint)
+                    .unwrap_or_default(),
+            ),
         }
+    }
+
+    pub fn local_endpoint(&self) -> String {
+        self.local_endpoint
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    pub fn set_local_endpoint(&self, url: &str) -> Result<(), String> {
+        let mut doc = read_doc();
+        local_settings::write(&mut doc, url);
+        write_doc(&doc)?;
+        *self
+            .local_endpoint
+            .write()
+            .unwrap_or_else(|e| e.into_inner()) = url.to_owned();
+        Ok(())
     }
 
     pub fn client_env(&self) -> Option<ClientEnv> {
@@ -176,38 +204,49 @@ impl SettingsState {
         write_file(&zai)
     }
 
-    /// Key priority: the active model's own key, the saved global key, `$ZAI_API_KEY`.
+    /// Token priority: the active model's own key, the saved global key, `$ZAI_API_KEY`.
+    pub fn zai_token(&self) -> Result<String, String> {
+        let zai = self.zai();
+        let own_key = zai
+            .models
+            .iter()
+            .find(|m| m.model == zai.model.as_deref().unwrap_or(DEFAULT_MODEL))
+            .and_then(ZaiModel::key);
+        match own_key.or(zai.api_key.as_deref()) {
+            Some(k) => Ok(zai_api::client::strip_bearer_scheme(k).to_string()),
+            None => std::env::var(zai_api::client::ENV_API_KEY)
+                .ok()
+                .map(|k| k.trim().to_owned())
+                .filter(|k| !k.is_empty())
+                .ok_or_else(|| format!("no Z.ai key: save one in settings or set {ENV_API_KEY}")),
+        }
+    }
+
     pub fn zai_client(&self) -> Result<zai_api::client::ZaiClient, String> {
         let zai = self.zai();
         let name = zai
             .model
             .clone()
             .unwrap_or_else(|| DEFAULT_MODEL.to_string());
-        let own_key = zai
-            .models
-            .iter()
-            .find(|m| m.model == name)
-            .and_then(ZaiModel::key);
-        let key = own_key.or(zai.api_key.as_deref());
-        let client = match key {
-            Some(k) => zai_api::client::ZaiClient::from_key(k, &name),
-            None => zai_api::client::ZaiClient::from_env()
-                .map_err(|_| format!("no Z.ai key: save one in settings or set {ENV_API_KEY}"))?,
-        };
-        Ok(client)
+        let token = self.zai_token()?;
+        Ok(zai_api::client::ZaiClient::from_key(&token, &name))
     }
 }
 
-fn read_doc() -> serde_json::Value {
-    std::fs::read(SETTINGS_FILE)
+pub(crate) fn read_doc() -> serde_json::Value {
+    std::fs::read(settings_path())
         .ok()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
         .unwrap_or_else(|| serde_json::json!({}))
 }
 
-fn write_doc(doc: &serde_json::Value) -> Result<(), String> {
+fn settings_path() -> String {
+    std::env::var(SETTINGS_FILE_ENV).unwrap_or_else(|_| SETTINGS_FILE.to_owned())
+}
+
+pub(crate) fn write_doc(doc: &serde_json::Value) -> Result<(), String> {
     std::fs::write(
-        SETTINGS_FILE,
+        settings_path(),
         serde_json::to_vec_pretty(doc).map_err(|e| e.to_string())?,
     )
     .map_err(|e| format!("write {SETTINGS_FILE}: {e}"))

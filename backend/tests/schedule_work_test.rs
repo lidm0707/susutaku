@@ -32,6 +32,9 @@ fn card_row(cron: Option<&str>) -> CardRow {
         pipeline_id: Some(PIPE_ID),
         cron: cron.map(str::to_owned),
         deadline: None,
+        labels: None,
+        checklist: None,
+        estimate: None,
     }
 }
 

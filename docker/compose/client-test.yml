@@ -3,8 +3,8 @@
 # that auto-dispatches a probe command to every registering sandbox client and
 # logs the result — no model server needed.
 #
-#   docker compose -f docker/docker-compose.client-test.yml up --build -d
-#   docker compose -f docker/docker-compose.client-test.yml logs hub | grep RESULT
+#   docker compose -f docker/compose/client-test.yml up --build -d
+#   docker compose -f docker/compose/client-test.yml logs hub | grep RESULT
 #
 # Expected: two registrations (backend's worker node + the client container),
 # each with a RESULT showing real sandbox output (uid 0, /workspace).
@@ -21,15 +21,15 @@ services:
 
   hub:
     build:
-      context: ..
-      dockerfile: docker/Dockerfile.backend
+      context: ../..
+      dockerfile: docker/backend/Dockerfile.backend
       target: hub-runtime
     restart: unless-stopped
 
   backend:
     build:
-      context: ..
-      dockerfile: docker/Dockerfile.backend
+      context: ../..
+      dockerfile: docker/backend/Dockerfile.backend
       target: backend-runtime
     environment:
       DATABASE_URL: postgres://susutaku:susutaku@postgres:5432/susutaku_sandbox
@@ -45,8 +45,8 @@ services:
 
   client:
     build:
-      context: ..
-      dockerfile: docker/Dockerfile.client
+      context: ../..
+      dockerfile: docker/backend/Dockerfile.client
     environment:
       SUSUTAKU_HUB_ADDR: hub:8993
       # Worker-only node still inits kanban storage at boot.
