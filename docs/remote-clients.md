@@ -7,8 +7,8 @@ Three kinds of machines:
   for inference. Never runs model code inline.
 - **client machine** — runs the installed `backend` binary in *client mode*:
   it registers with the local-model hub over TCP and executes dispatched
-  commands in its platform sandbox (macOS seatbelt, Linux namespaces,
-  Windows WSL/restricted token). It runs no web UI and no models.
+  commands in the rootless podman sandbox (same as the backend — see
+  `docs/podman-sandbox.md`). It runs no web UI and no models.
 - **web UI** — any browser pointed at `http://<backend>:8991`; talks only to
   the backend, never to local-model or clients directly.
 
@@ -59,6 +59,14 @@ flowchart TD
 
 ## 2. Client machine: register & run dispatched commands (TCP, proto-rs)
 
+Registration requires full machine metadata (`proto_rs::ClientMeta`:
+hostname, os, arch, role, ram_gib). The installer probe decides `role`
+(model|worker) and measures `ram_gib`, then exports them as
+`SUSUTAKU_CLIENT_ROLE` / `SUSUTAKU_CLIENT_RAM_GIB` before launching the
+client node; the client node refuses to run without them, and the hub
+closes the connection of any Register that carries missing/invalid
+metadata.
+
 ```mermaid
 sequenceDiagram
     participant C as client machine
@@ -69,7 +77,7 @@ sequenceDiagram
     H-->>C: ok
     B->>H: POST /api/clients/{id}/command { cmd }
     H->>C: Envelope { id, Command { cmd } }
-    C->>C: run cmd in sandbox<br/>(macOS: seatbelt · Windows: WSL/restricted token · Linux: namespaces)
+    C->>C: run cmd in sandbox<br/>(rootless podman, per-agent work tree if addressed)
     C->>H: Envelope { id, Result { output } }
     H-->>B: 200 { output }
     Note over C,H: heartbeat keeps the link alive,<br/>client reconnects every 3 s if the hub drops
@@ -121,10 +129,11 @@ Backend machine (with a local model server available):
 ./target/release/backend               # API :8991 + manager process + client node
 ```
 
-Client machine (one line):
+Client machine (one line) — `server` is the backend URL; the installer expects
+the local-model server on that same host at :8992:
 
 ```sh
-curl -fsSL "http://<backend-host>:8991/install.sh?role=auto&server=http://<local-model>:8992" | sh
+curl -fsSL "http://<backend-host>:8991/install.sh?role=auto&server=http%3A%2F%2F<backend-host>%3A8991" | sh
 ```
 
 Web UI: open `http://<backend-host>:8991` in a browser (vite dev: `make web`
@@ -141,6 +150,7 @@ curl -X POST http://<local-model>:8992/api/clients/<id>/command \
 Drive an agent sandbox on the backend:
 
 ```sh
+curl http://localhost:8991/api/agents/whereis/fix-login   # which machine holds the agent
 curl http://localhost:8991/api/manager/agents
 curl -X POST http://localhost:8991/api/manager/agents -H 'content-type: application/json' -d '{"agent":"fix-login"}'
 curl -X POST http://localhost:8991/api/manager/agents/fix-login/run -H 'content-type: application/json' -d '{"cmd":"ls"}'
@@ -174,17 +184,45 @@ flowchart TD
     G -->|yes| S[new_in work/agents/<agent>]
 ```
 
-### 6.2 Agent-aware commands for client machines
+### 6.2 Agent-aware commands for client machines — IMPLEMENTED
 
-Today the client-mode backend routes every hub command through one
-process-global sandbox — the envelope carries no agent identity, so clients
-cannot run per-agent work trees like the backend does. Planned:
+Implemented as of the podman sandbox work:
 
-- `proto-rs` `Kind::Command` gains an `agent: String` field.
-- The client node keeps its own `ManagerProcess`; a command addressed to
-  agent X runs in `work/agents/X` on the client, so dispatching
-  `/api/clients/{id}/command` gives the same isolation as the backend's
-  manager API.
+- `proto-rs` `Kind::Command` carries `agent: String` (empty = the
+  process-global sandbox).
+- The client node keeps a `ManagerProcess`: a command addressed to agent X
+  spawns `work/agents/X` on the client and runs there (own work tree,
+  transcript, podman sandbox).
+- `POST /api/clients/{id}/command` accepts `{ cmd, agent }`.
+- `GET /api/clients/{id}/agents` returns the agent names the client's manager
+  holds (proto `Kind::AgentNames` → `AgentNamesResult` round trip).
+- `POST /api/clients/{id}/kick` disconnects the client from the hub.
+- New backend endpoints drive shared machines by hostname:
+  `POST /api/machines/{hostname}/agents/{agent}/run { cmd }`.
+- Web UI machines modal (agent sandboxes tab) lists every machine with the
+  agents it runs (`agents: …`) and its sandbox count; remote machines can be
+  kicked (disconnected) from there.
+  machines; picking one opens an agent console (agent name + command →
+  output) that spawns/runs agents on that machine.
+- Verified end-to-end by the client-test stack:
+  `hub_stub` dispatches a global probe **and** an agent probe
+  (`test-agent`) to every registering client;
+  `docker compose -f docker/compose/client-test.yml logs hub | grep RESULT`
+  must show `STUB-HUB-ROUNDTRIP` and `AGENT-ROUNDTRIP` from each client,
+  and `work/agents/test-agent` must exist inside the client container.
+
+```mermaid
+sequenceDiagram
+    participant B as backend
+    participant H as hub
+    participant C as client machine
+    participant A as ManagerProcess on client
+    B->>H: Command { agent, cmd }
+    H->>C: Envelope { id, Command { agent, cmd } }
+    C->>A: run(agent, cmd)
+    A->>A: sandbox work/agents/<agent> (podman)
+    C->>H: Result { output }
+```
 
 ```mermaid
 sequenceDiagram

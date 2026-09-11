@@ -17,6 +17,10 @@ use tokio::time::{Duration, timeout};
 const HUB_PORT_ENV: &str = "HUB_PORT";
 const DEFAULT_HUB_PORT: u16 = 8993;
 const AUTO_CMD: &str = "echo STUB-HUB-ROUNDTRIP; id -u; pwd";
+/// Proves per-agent work trees on the shared machine: the client node must
+/// spawn `work/agents/<AUTO_AGENT>` and run there (pwd shows the agent dir).
+const AUTO_AGENT: &str = "test-agent";
+const AUTO_AGENT_CMD: &str = "echo AGENT-ROUNDTRIP; pwd";
 const RESULT_TIMEOUT_SECS: u64 = 30;
 
 #[tokio::main]
@@ -41,25 +45,27 @@ async fn main() {
         let ClientConn { id, mut rx, .. } = conn;
         let reg = registry.clone();
         tokio::spawn(async move {
-            let env = Envelope {
-                id,
-                kind: Kind::Command {
-                    cmd: AUTO_CMD.to_string(),
-                },
-            };
-            if let Err(e) = reg.send(id, env).await {
-                eprintln!("[stub] dispatch to {id} failed: {e}");
-                return;
-            }
-            println!("[stub] dispatched to {id}: {AUTO_CMD}");
-            match timeout(Duration::from_secs(RESULT_TIMEOUT_SECS), rx.recv()).await {
-                Ok(Some(res)) => match res.kind {
-                    Kind::Result { output } => {
-                        println!("[stub] RESULT from {id}:\n{output}");
-                    }
-                    other => eprintln!("[stub] unexpected envelope from {id}: {other:?}"),
-                },
-                _ => eprintln!("[stub] result from {id} timed out"),
+            for (agent, cmd) in [
+                (String::new(), AUTO_CMD.to_string()),
+                (AUTO_AGENT.to_string(), AUTO_AGENT_CMD.to_string()),
+            ] {
+                let env = Envelope {
+                    id,
+                    kind: Kind::Command { agent, cmd },
+                };
+                if let Err(e) = reg.send(id, env).await {
+                    eprintln!("[stub] dispatch to {id} failed: {e}");
+                    return;
+                }
+                match timeout(Duration::from_secs(RESULT_TIMEOUT_SECS), rx.recv()).await {
+                    Ok(Some(res)) => match res.kind {
+                        Kind::Result { output } => {
+                            println!("[stub] RESULT from {id}:\n{output}");
+                        }
+                        other => eprintln!("[stub] unexpected envelope from {id}: {other:?}"),
+                    },
+                    _ => eprintln!("[stub] result from {id} timed out"),
+                }
             }
         });
     }

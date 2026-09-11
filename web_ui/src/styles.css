@@ -1657,16 +1657,12 @@ header a {
 
 .kanban {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
   gap: 0.75rem;
   align-items: start;
   flex: 1;
   overflow-y: auto;
   padding-bottom: 1rem;
-}
-
-.kanban.two-cols {
-  grid-template-columns: repeat(2, 1fr);
 }
 
 .kanban-col {
@@ -2598,6 +2594,33 @@ button {
   white-space: nowrap;
 }
 
+.dock-machines-count {
+  color: #888;
+  font-size: 0.68rem;
+}
+
+.machine-kick {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  border: none;
+  background: none;
+  color: #888;
+  cursor: pointer;
+  padding: 0.1rem 0.3rem;
+  font-size: 0.68rem;
+  border-radius: 4px;
+}
+
+.machine-kick:hover {
+  color: #e05a5a;
+}
+
+.machine-kick.armed {
+  color: #e05a5a;
+  border: 1px solid #e05a5a;
+}
+
 .machine-sandbox {
   margin-left: 0.9rem;
 }
@@ -2761,6 +2784,12 @@ button {
 .modal-form {
   flex-direction: column;
   align-items: stretch;
+}
+
+.modal-hint {
+  margin: 0;
+  font-size: 0.72rem;
+  color: #888;
 }
 
 .modal-label {
@@ -3291,6 +3320,124 @@ button {
   box-shadow: 0 0 0 2px rgba(59, 111, 212, 0.35);
 }
 
+.pipe-node-unwired {
+  opacity: 0.6;
+  border-style: dashed;
+}
+
+.pipe-node-flag {
+  margin-left: 0.4rem;
+  font-size: 0.6rem;
+  font-style: normal;
+  color: #c95b5b;
+  border: 1px solid #c95b5b;
+  border-radius: 4px;
+  padding: 0 0.25rem;
+}
+
+.pipe-node-ok {
+  border-color: #3f9d5c;
+}
+
+.pipe-node-failed {
+  border-color: #c95b5b;
+  box-shadow: 0 0 0 2px rgba(201, 91, 91, 0.3);
+}
+
+.pipe-node-io {
+  color: #9a9aa4;
+  font-size: 0.62rem;
+}
+
+.stage-io {
+  display: flex;
+  gap: 0.8rem;
+  color: #9a9aa4;
+  font-size: 0.68rem;
+}
+
+.stage-connect {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-top: 0.3rem;
+}
+
+.stage-connect label {
+  color: #888;
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.stage-connect-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+.stage-connect-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.2rem 0.5rem;
+  border-radius: 6px;
+  border: 1px solid #3a3a44;
+  background: #232329;
+  color: #e6e6ea;
+  font-size: 0.68rem;
+  cursor: pointer;
+}
+
+.stage-connect-chip:hover {
+  border-color: #3b6fd4;
+}
+
+.stage-connect-chip span {
+  color: #888;
+}
+
+.run-note {
+  font-size: 0.7rem;
+  padding: 0.25rem 0.4rem;
+  border-radius: 6px;
+}
+
+.run-note.ok {
+  color: #3f9d5c;
+}
+
+.run-note.failed {
+  color: #c95b5b;
+}
+
+.pipeline-run {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 0.5rem 0.7rem;
+  border-top: 1px solid #2a2a32;
+}
+
+.pipeline-run-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.pipeline-run-output {
+  max-height: 8rem;
+  overflow: auto;
+  margin: 0;
+  padding: 0.4rem;
+  border-radius: 6px;
+  background: #16161a;
+  color: #c8c8d0;
+  font-size: 0.65rem;
+  font-family: ui-monospace, monospace;
+  white-space: pre-wrap;
+}
+
 .pipe-node-stage {
   font-weight: 600;
   font-size: 0.8rem;
@@ -3311,6 +3458,19 @@ button {
   height: 0.55rem;
   background: #3b6fd4;
   border: 1px solid #101014;
+}
+
+/* per-kind port colors: any stays blue, text green, json amber, image pink */
+.pipe-node .react-flow__handle.port-text {
+  background: #3f9d5c;
+}
+
+.pipe-node .react-flow__handle.port-json {
+  background: #c9a13b;
+}
+
+.pipe-node .react-flow__handle.port-image {
+  background: #c95b9c;
 }
 
 .react-flow__edge-path {
@@ -3337,6 +3497,67 @@ button {
 
 .react-flow__controls-button:hover {
   background: #26262e;
+}
+
+/* bottom-center dock: icon-only node creation, n8n-style */
+.pipeline-dock {
+  position: absolute;
+  bottom: 0.7rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10;
+  display: flex;
+  gap: 0.2rem;
+  padding: 0.25rem 0.35rem;
+  border-radius: 10px;
+  border: 1px solid #3a3a44;
+  background: #1c1c22;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+
+.pipeline-dock.armed {
+  border-color: #3b6fd4;
+  box-shadow: 0 0 0 2px rgba(59, 111, 212, 0.35);
+}
+
+.pipeline-dock-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.9rem;
+  height: 1.9rem;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: #c8c8d0;
+  cursor: pointer;
+}
+
+.pipeline-dock-btn:hover {
+  background: #2a2a33;
+  color: #fff;
+}
+
+/* edges: pickable + visible selection, so click + ⌫ unlinks */
+.pipeline-canvas .react-flow__edge {
+  cursor: pointer;
+}
+
+.pipeline-canvas .react-flow__edge .react-flow__edge-path {
+  stroke-width: 2;
+}
+
+.pipeline-canvas .react-flow__edge.selected .react-flow__edge-path {
+  stroke: #3b6fd4;
+  stroke-width: 3;
+}
+
+.pipeline-canvas .react-flow__handle {
+  transition: transform 0.1s ease;
+}
+
+.pipeline-canvas .react-flow__handle:hover {
+  transform: scale(1.4);
 }
 
 .pipeline-inspector {
@@ -4113,4 +4334,157 @@ select.agent-multi {
   bottom: 1rem;
   right: 1rem;
   z-index: 1001;
+}
+
+/* agent outputs review */
+.output-filters {
+  display: flex;
+  gap: 0.25rem;
+  margin-bottom: 0.6rem;
+}
+
+.output-filters button {
+  border: 1px solid #2a2a33;
+  background: transparent;
+  color: #a8a8b3;
+  border-radius: 999px;
+  padding: 0.15rem 0.7rem;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.output-filters button.active {
+  background: #2a2a33;
+  color: #e6e6ea;
+}
+
+.output-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.output-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 1px solid #2a2a33;
+  border-radius: 8px;
+  padding: 0.45rem 0.7rem;
+  cursor: pointer;
+  color: inherit;
+  font-size: 0.8rem;
+}
+
+.output-row:hover {
+  border-color: #3d3d4a;
+}
+
+.output-id {
+  color: #6f6f7a;
+  font-family: monospace;
+}
+
+.output-agent {
+  font-weight: 600;
+  flex: 1;
+}
+
+.output-patch-size {
+  color: #6f6f7a;
+  font-size: 0.72rem;
+}
+
+.output-badge {
+  border-radius: 999px;
+  padding: 0.05rem 0.55rem;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.output-badge.pending {
+  background: #3a3524;
+  color: #d8c07a;
+}
+
+.output-badge.approved {
+  background: #243a2a;
+  color: #8fd4a0;
+}
+
+.output-badge.rejected {
+  background: #3a2424;
+  color: #e09a9a;
+}
+
+.output-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+  font-size: 0.82rem;
+}
+
+.output-detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: #6f6f7a;
+}
+
+.output-detail h3 {
+  margin: 0 0 0.35rem;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #a8a8b3;
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.output-pre {
+  margin: 0;
+  padding: 0.6rem;
+  border-radius: 8px;
+  background: #1a1a21;
+  border: 1px solid #2a2a33;
+  color: #e6e6ea;
+  font-size: 0.75rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 22rem;
+  overflow: auto;
+}
+
+.output-commit {
+  color: #6f6f7a;
+  margin: 0;
+}
+
+.output-transcript summary {
+  cursor: pointer;
+  color: #a8a8b3;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.output-transcript .output-pre {
+  margin-top: 0.35rem;
+  max-height: 14rem;
+}
+
+.output-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  border-top: 1px solid #2a2a33;
+  padding-top: 0.8rem;
 }

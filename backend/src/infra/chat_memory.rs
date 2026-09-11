@@ -1,7 +1,8 @@
 //! Qdrant-backed chat memory adapter: OpenAI-compatible embeddings endpoint +
 //! Qdrant REST. Disabled when `SUSUTAKU_EMBEDDINGS_URL` is unset.
 
-use crate::port::outbound::{ChatMemory, MemoryHit};
+use crate::domain::MemoryHit;
+use crate::port::outbound::ChatMemory;
 
 pub const EMBEDDINGS_URL_ENV: &str = "SUSUTAKU_EMBEDDINGS_URL";
 pub const EMBEDDINGS_MODEL_ENV: &str = "SUSUTAKU_EMBEDDINGS_MODEL";

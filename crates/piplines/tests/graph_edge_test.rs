@@ -10,6 +10,8 @@ fn node(id: &str, stage: &str) -> NodeDef {
         id: id.into(),
         stage: stage.into(),
         params: serde_json::Value::Null,
+        x: None,
+        y: None,
     }
 }
 
@@ -67,6 +69,8 @@ fn params_deserialize_defaults_to_null() {
             id: ID_A.into(),
             stage: STAGE_INGEST.into(),
             params: serde_json::Value::Null,
+            x: None,
+            y: None,
         }
     );
 }
@@ -77,6 +81,8 @@ fn node_with_params_roundtrip() {
         id: ID_A.into(),
         stage: STAGE_INGEST.into(),
         params: serde_json::json!({ "k": [1, 2] }),
+        x: None,
+        y: None,
     };
     let json = serde_json::to_string(&node).expect("serialize");
     let back: NodeDef = serde_json::from_str(&json).expect("deserialize");

@@ -1,22 +1,24 @@
 //! Sandbox integration tests, portable across macOS/Linux/Windows via `sb`.
 
-#[cfg(target_os = "linux")]
-use core_agent::sandbox_jail::linux as sb;
-#[cfg(target_os = "macos")]
-use core_agent::sandbox_jail::macos as sb;
-#[cfg(target_os = "windows")]
-use core_agent::sandbox_jail::windows as sb;
-
-#[cfg(target_os = "linux")]
-use core_agent::sandbox_jail::linux::Role;
-#[cfg(target_os = "macos")]
-use core_agent::sandbox_jail::macos::Role;
-#[cfg(target_os = "windows")]
-use core_agent::sandbox_jail::windows::Role;
+use core_agent::podman as sb;
+use core_agent::podman::Role;
 
 use std::sync::Mutex;
 
 static STATE_LOCK: Mutex<()> = Mutex::new(());
+
+/// The instance state dir always exists while the process runs; what matters
+/// is how many per-sandbox state files it holds.
+fn state_json_count() -> usize {
+    std::fs::read_dir(sb::state_path())
+        .map(|entries| {
+            entries
+                .flatten()
+                .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("json"))
+                .count()
+        })
+        .unwrap_or(0)
+}
 
 const ECHO_CMD: &str = if cfg!(target_os = "windows") {
     "Write-Output hi"
@@ -30,13 +32,13 @@ fn sandbox_run_and_clear() {
     let sandbox = sb::Sandbox::new().unwrap();
     let out = sandbox.run(ECHO_CMD).unwrap();
     assert_eq!(out.trim(), "hi");
-    assert!(sb::state_path().exists());
+    assert_eq!(state_json_count(), 1);
     let t = sandbox.transcript();
     assert_eq!(t.len(), 1);
     drop(sandbox);
-    assert!(sb::state_path().exists());
+    assert_eq!(state_json_count(), 1);
     sb::Sandbox::purge_stale();
-    assert!(!sb::state_path().exists());
+    assert_eq!(state_json_count(), 0);
 }
 
 #[test]
@@ -50,7 +52,7 @@ fn restore_reloads_state() {
     assert_eq!(sandbox.transcript().len(), 1);
     assert_eq!(sandbox.transcript()[0].content, "hello");
     sandbox.purge();
-    assert!(!sb::state_path().exists());
+    assert_eq!(state_json_count(), 0);
 }
 
 #[test]

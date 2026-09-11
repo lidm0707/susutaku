@@ -34,10 +34,10 @@ services:
     environment:
       DATABASE_URL: postgres://susutaku:susutaku@postgres:5432/susutaku_sandbox
       SUSUTAKU_HUB_ADDR: hub:8993
-    # Rootless sandbox needs userns/mount namespaces inside the container.
-    security_opt:
-      - seccomp=unconfined
-      - apparmor=unconfined
+    # Nested rootless podman (see docs/podman-sandbox.md).
+    privileged: true
+    devices:
+      - /dev/fuse:/dev/fuse
     depends_on:
       - postgres
       - hub
@@ -51,9 +51,10 @@ services:
       SUSUTAKU_HUB_ADDR: hub:8993
       # Worker-only node still inits kanban storage at boot.
       DATABASE_URL: postgres://susutaku:susutaku@postgres:5432/susutaku_sandbox
-    security_opt:
-      - seccomp=unconfined
-      - apparmor=unconfined
+    # Nested rootless podman (see docs/podman-sandbox.md).
+    privileged: true
+    devices:
+      - /dev/fuse:/dev/fuse
     depends_on:
       - postgres
       - hub

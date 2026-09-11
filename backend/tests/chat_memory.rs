@@ -4,17 +4,17 @@
 use std::sync::{Arc, Mutex};
 
 use backend::app::ChatUseCase;
-use backend::domain::SearchMode;
-use backend::port::inbound::{ChatCmd, ChatHandling};
+use backend::domain::{BoardResult, ChatCmd, GenReply, MemoryHit, SearchMode, SearchResult};
+use backend::port::inbound::ChatHandling;
 use backend::port::outbound::{
-    ChatMemory, Fetcher, GenReply, Inference, MemoryHit, ModelSwitch, Runner, Searcher,
+    BoardOps, ChatMemory, Fetcher, Inference, ModelSwitch, Runner, Searcher,
 };
 use susutaku_mlx::stats::GenStats;
 use susutaku_mlx::tok::TokKind;
 
 struct NoSearch;
 impl Searcher for NoSearch {
-    fn search(&self, _query: &str) -> Result<Vec<backend::domain::SearchResult>, String> {
+    fn search(&self, _query: &str) -> Result<Vec<SearchResult>, String> {
         Ok(Vec::new())
     }
 }
@@ -100,7 +100,17 @@ fn use_case(memory: Option<Arc<dyn ChatMemory>>) -> ChatUseCase {
         Arc::new(FakeEngine),
         Arc::new(NoModels),
         memory,
+        Arc::new(DenyBoard),
     )
+}
+
+struct DenyBoard;
+
+#[async_trait::async_trait]
+impl BoardOps for DenyBoard {
+    async fn exec(&self, _req: backend::domain::BoardRequest) -> BoardResult {
+        Err("board tools disabled in test".to_string())
+    }
 }
 
 #[tokio::test]
@@ -115,6 +125,7 @@ async fn recalls_before_and_remembers_after() {
             max_tokens: 32,
             tokenizer: TokKind::Normal,
             think: false,
+            board_token: None,
         })
         .await
         .expect("chat ok");
@@ -139,6 +150,7 @@ async fn works_without_memory() {
             max_tokens: 32,
             tokenizer: TokKind::Normal,
             think: false,
+            board_token: None,
         })
         .await
         .expect("chat ok");

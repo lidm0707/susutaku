@@ -13,7 +13,10 @@ use serde::{Deserialize, Serialize};
 use utoipa::OpenApi;
 
 use crate::app::kanban::{CardView, KanbanApp};
-use crate::domain::SearchMode;
+use crate::domain::{
+    AgentConfigDraft, CardMove, CardPatch, ChatCmd, NewCard, NewPipeline, NewProject, NewWorkspace,
+    SearchMode,
+};
 use crate::infra::claude_auth::{ClaudeAuth, LoginStatus as ClaudeLoginStatus};
 use crate::infra::claude_chat;
 use crate::infra::codex_auth;
@@ -24,10 +27,7 @@ use crate::infra::local_settings;
 use crate::infra::provider_quota::QuotaBoard;
 use crate::infra::sandbox_jail::AgentSandbox;
 use crate::infra::zai_settings::{SettingsState, ZaiSettings};
-use crate::port::inbound::{ChatCmd, ChatHandling};
-use crate::port::outbound::{
-    AgentConfigDraft, CardMove, CardPatch, NewCard, NewPipeline, NewProject, NewWorkspace,
-};
+use crate::port::inbound::ChatHandling;
 use crate::port::outbound::{ModelEndpoint, ModelSwitch};
 use prompt_sys::{MAX_PROMPT_CHARS, PromptBuilder, Role as PromptRole};
 use std::path::PathBuf;
@@ -65,8 +65,23 @@ pub fn router<T: ChatHandling + ModelSwitch + 'static>(
         .route("/api/manager/agents/{agent}/run", post(run_agent_command))
         .route("/api/manager/agents/{agent}/logs", get(agent_logs))
         .route("/api/manager/agents/{agent}/finish", post(finish_agent))
-        .with_state(manager);
+        .with_state(ManagerState {
+            manager: manager.clone(),
+            store: kanban_store.clone(),
+        });
     let core = core.merge(manager_router);
+    let machines_router = Router::new()
+        .route("/api/machines", get(machines))
+        .route("/api/machines/{hostname}/kick", post(kick_machine))
+        .route(
+            "/api/machines/{hostname}/agents/{agent}/run",
+            post(run_machine_agent),
+        )
+        .route("/api/agents/whereis/{agent}", get(agent_whereis))
+        .with_state(MachinesState {
+            manager: manager.clone(),
+        });
+    let core = core.merge(machines_router);
     let auth = Router::new()
         .route("/api/auth/codex/start", post(codex_start))
         .route("/api/auth/codex/status", get(codex_status))
@@ -97,13 +112,18 @@ pub fn router<T: ChatHandling + ModelSwitch + 'static>(
             "/api/settings/alerts",
             get(get_alert_settings).post(set_alert_settings),
         )
+        .route("/api/settings/git/repos", get(list_git_repos))
+        .route(
+            "/api/settings/git/repos/{project_id}",
+            put(set_git_repo).delete(remove_git_repo),
+        )
         .route(
             "/api/settings/system-prompt",
             get(get_system_prompt).post(set_system_prompt),
         )
         .route("/api/chat/zai", post(chat_zai))
         .route("/api/sandbox", get(list_sandboxes))
-        .route("/api/machines", get(machines))
+        .route("/api/sandbox/logs", get(sandbox_logs))
         .route("/api/host", get(host_spec_handler))
         .route("/api/sandbox/purge", post(purge_sandbox))
         .route("/api/sandbox/sweep", post(sweep_sandboxes))
@@ -119,10 +139,7 @@ pub fn router<T: ChatHandling + ModelSwitch + 'static>(
             model: model_cfg,
         }));
     let usage = Router::new()
-        .route(
-            "/api/codex/usage/latest",
-            get(codex_usage_latest),
-        )
+        .route("/api/codex/usage/latest", get(codex_usage_latest))
         .route("/api/codex/usage/history", get(codex_usage_history))
         .with_state(usage_store.clone());
     let quota = Router::new()
@@ -174,6 +191,8 @@ fn kanban_router(state: KanbanStore) -> Router {
             "/api/kanban/cards/{id}/agent",
             get(get_agent).put(set_agent),
         )
+        .route("/api/kanban/cards/{id}/resources", get(list_card_resources))
+        .route("/api/pipelines/schema", get(pipeline_schema))
         .route("/api/kanban/cards/{id}/pipeline", put(set_card_pipeline))
         .route("/api/kanban/cards/{id}/run", post(run_card))
         .route("/api/kanban/cards/{id}/schedule", put(set_card_schedule))
@@ -188,10 +207,17 @@ fn kanban_router(state: KanbanStore) -> Router {
             "/api/pipelines/{id}",
             put(update_pipeline).delete(remove_pipeline),
         )
+        .route("/api/pipelines/{id}/test", post(test_pipeline))
         .route("/api/agents", get(list_agents).post(create_agent))
         .route(
             "/api/agents/{id}",
             put(update_agent_cfg).delete(remove_agent_cfg),
+        )
+        .route("/api/agent-outputs", get(list_agent_outputs_handler))
+        .route("/api/agent-outputs/{id}", get(get_agent_output_handler))
+        .route(
+            "/api/agent-outputs/{id}/status",
+            post(set_agent_output_status_handler),
         )
         .with_state(state)
 }
@@ -551,9 +577,15 @@ async fn select_model<T: ModelSwitch>(
 )]
 async fn chat<T: ChatHandling>(
     State(use_case): State<Arc<T>>,
+    headers: axum::http::HeaderMap,
     Json(req): Json<ChatRequest>,
 ) -> Result<Json<ChatReply>, ApiError> {
     let tok = TokKind::parse(req.tokenizer.as_deref());
+    let board_token = headers
+        .get(http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix(BEARER_PREFIX))
+        .map(str::to_string);
     let outcome = use_case
         .execute(ChatCmd {
             message: req.message,
@@ -561,6 +593,7 @@ async fn chat<T: ChatHandling>(
             max_tokens: req.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS),
             tokenizer: tok,
             think: req.think.unwrap_or(false),
+            board_token,
         })
         .await
         .map_err(ApiError::internal)?;
@@ -681,10 +714,7 @@ async fn set_zai_settings(
     state
         .set_zai(req.api_key, req.model)
         .map_err(ApiError::internal)?;
-    if req.say_hi_time.is_some()
-        || req.say_hi_interval_mins.is_some()
-        || req.timezone.is_some()
-    {
+    if req.say_hi_time.is_some() || req.say_hi_interval_mins.is_some() || req.timezone.is_some() {
         state
             .set_zai_schedule(
                 req.say_hi_time.flatten(),
@@ -822,10 +852,7 @@ async fn codex_usage_history(
     let limit = query
         .limit
         .unwrap_or(CODEX_USAGE_HISTORY_DEFAULT_LIMIT)
-        .clamp(
-            1,
-            CODEX_USAGE_HISTORY_MAX_LIMIT,
-        );
+        .clamp(1, CODEX_USAGE_HISTORY_MAX_LIMIT);
     Json(store.history(limit).await.unwrap_or_default())
 }
 
@@ -1040,6 +1067,81 @@ async fn set_alert_settings(
     }))
 }
 
+#[derive(serde::Serialize, utoipa::ToSchema)]
+struct GitRepoReply {
+    project_id: i64,
+    url: String,
+    secret_set: bool,
+}
+
+fn git_repo_reply(repo: &crate::infra::git_repos::GitRepo) -> GitRepoReply {
+    GitRepoReply {
+        project_id: repo.project_id,
+        url: repo.url.clone(),
+        secret_set: repo.secret_set(),
+    }
+}
+
+#[derive(serde::Deserialize, utoipa::ToSchema)]
+struct GitRepoRequest {
+    url: String,
+    /// Omit to keep the stored secret; empty string clears it.
+    secret: Option<String>,
+}
+
+#[derive(serde::Serialize, utoipa::ToSchema)]
+struct GitReposReply {
+    repos: Vec<GitRepoReply>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/settings/git/repos",
+    responses((status = 200, body = GitReposReply))
+)]
+async fn list_git_repos(State(state): State<Arc<SettingsState>>) -> Json<GitReposReply> {
+    Json(GitReposReply {
+        repos: state.git_repos().iter().map(git_repo_reply).collect(),
+    })
+}
+
+#[utoipa::path(
+    put,
+    path = "/api/settings/git/repos/{project_id}",
+    request_body = GitRepoRequest,
+    responses((status = 200, body = GitRepoReply), (status = 500, body = str))
+)]
+async fn set_git_repo(
+    State(state): State<Arc<SettingsState>>,
+    Path(project_id): Path<i64>,
+    Json(req): Json<GitRepoRequest>,
+) -> Result<Json<GitRepoReply>, ApiError> {
+    state
+        .set_git_repo(project_id, &req.url, req.secret.as_deref())
+        .map_err(ApiError::internal)?;
+    let repo = state
+        .git_repo(project_id)
+        .ok_or_else(|| ApiError::internal("repo not found after save"))?;
+    Ok(Json(git_repo_reply(&repo)))
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/settings/git/repos/{project_id}",
+    responses((status = 200, body = GitReposReply), (status = 500, body = str))
+)]
+async fn remove_git_repo(
+    State(state): State<Arc<SettingsState>>,
+    Path(project_id): Path<i64>,
+) -> Result<Json<GitReposReply>, ApiError> {
+    state
+        .remove_git_repo(project_id)
+        .map_err(ApiError::internal)?;
+    Ok(Json(GitReposReply {
+        repos: state.git_repos().iter().map(git_repo_reply).collect(),
+    }))
+}
+
 #[utoipa::path(
     post,
     path = "/api/chat/zai",
@@ -1210,6 +1312,14 @@ struct KanbanState {
 }
 
 type KanbanStore = std::sync::Arc<KanbanState>;
+
+/// State for the manager routes: the process table + where finished task
+/// output is stored.
+#[derive(Clone)]
+struct ManagerState {
+    manager: Arc<manager_rs::ManagerProcess>,
+    store: std::sync::Arc<kanban_rs::Store>,
+}
 
 fn kanban_state(
     store: std::sync::Arc<kanban_rs::Store>,
@@ -1467,6 +1577,60 @@ async fn set_agent(
         .await
         .map_err(kanban_err)?;
     Ok("ok")
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/kanban/cards/{id}/resources",
+    responses((status = 200, body = [ResourceDto]), (status = 404, body = str))
+)]
+async fn list_card_resources(
+    State(state): State<KanbanStore>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+    _user: AuthUser,
+) -> Result<Json<Vec<ResourceDto>>, ApiError> {
+    let rows = state.app.resources.list(id).await.map_err(kanban_err)?;
+    Ok(Json(rows.iter().map(ResourceDto::from).collect()))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/pipelines/schema",
+    responses((status = 200, body = str))
+)]
+async fn pipeline_schema(_user: AuthUser) -> Json<serde_json::Value> {
+    Json(piplines::port::schema())
+}
+
+#[derive(Deserialize, utoipa::ToSchema)]
+struct TestPipelineRequest {
+    #[serde(default)]
+    input: String,
+}
+
+pub const TEST_SEED_DEFAULT: &str = "test";
+
+#[utoipa::path(
+    post,
+    path = "/api/pipelines/{id}/test",
+    request_body = TestPipelineRequest,
+    responses((status = 200, body = crate::app::pipeline_run::RunRecord), (status = 404, body = str), (status = 400, body = str))
+)]
+async fn test_pipeline(
+    State(state): State<KanbanStore>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+    user: AuthUser,
+    body: Option<Json<TestPipelineRequest>>,
+) -> Result<Json<crate::app::pipeline_run::RunRecord>, ApiError> {
+    require_edit(&user)?;
+    let input = body
+        .map(|Json(req)| req.input)
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| TEST_SEED_DEFAULT.to_owned());
+    let record = crate::app::pipeline_run::test_pipeline(&state.app, id, &input)
+        .await
+        .map_err(kanban_err)?;
+    Ok(Json(record))
 }
 
 #[utoipa::path(
@@ -1844,6 +2008,120 @@ async fn list_activity(
     Ok(Json(rows.into_iter().map(ActivityDto::from).collect()))
 }
 
+const OUTPUT_LIST_DEFAULT: i64 = 50;
+
+#[derive(Serialize, utoipa::ToSchema)]
+struct AgentOutputDto {
+    id: i64,
+    agent: String,
+    result: Option<String>,
+    patch: String,
+    commit_oid: Option<String>,
+    transcript: String,
+    status: String,
+    created_at: String,
+}
+
+impl From<kanban_rs::AgentOutputRow> for AgentOutputDto {
+    fn from(r: kanban_rs::AgentOutputRow) -> Self {
+        Self {
+            id: r.id,
+            agent: r.agent,
+            result: r.result,
+            patch: r.patch,
+            commit_oid: r.commit_oid,
+            transcript: r.transcript,
+            status: r.status,
+            created_at: r.created_at.to_rfc3339(),
+        }
+    }
+}
+
+#[derive(Deserialize, utoipa::ToSchema)]
+struct AgentOutputStatusRequest {
+    status: String,
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/agent-outputs",
+    responses((status = 200, body = [AgentOutputDto]), (status = 401, body = str))
+)]
+async fn list_agent_outputs_handler(
+    State(state): State<KanbanStore>,
+    axum::extract::Query(q): axum::extract::Query<AgentOutputStatusQuery>,
+    _user: AuthUser,
+) -> Result<Json<Vec<AgentOutputDto>>, ApiError> {
+    let status = q.status.as_deref().filter(|s| !s.is_empty());
+    let rows = state
+        .store
+        .list_agent_outputs(status, OUTPUT_LIST_DEFAULT)
+        .await
+        .map_err(store_err)?;
+    Ok(Json(rows.into_iter().map(AgentOutputDto::from).collect()))
+}
+
+#[derive(Deserialize, utoipa::ToSchema)]
+struct AgentOutputStatusQuery {
+    status: Option<String>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/agent-outputs/{id}",
+    responses((status = 200, body = AgentOutputDto), (status = 404, body = str))
+)]
+async fn get_agent_output_handler(
+    State(state): State<KanbanStore>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+    _user: AuthUser,
+) -> Result<Json<AgentOutputDto>, ApiError> {
+    let row = state
+        .store
+        .get_agent_output(id)
+        .await
+        .map_err(store_err)?
+        .ok_or_else(|| ApiError(ApiError::NOT_FOUND_MSG.to_string(), StatusCode::NOT_FOUND))?;
+    Ok(Json(AgentOutputDto::from(row)))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/agent-outputs/{id}/status",
+    request_body = AgentOutputStatusRequest,
+    responses((status = 200, body = str), (status = 400, body = str), (status = 404, body = str))
+)]
+async fn set_agent_output_status_handler(
+    State(state): State<KanbanStore>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+    user: AuthUser,
+    Json(req): Json<AgentOutputStatusRequest>,
+) -> Result<&'static str, ApiError> {
+    require_edit(&user)?;
+    let status = match req.status.as_str() {
+        kanban_rs::OUTPUT_STATUS_APPROVED => kanban_rs::OUTPUT_STATUS_APPROVED,
+        kanban_rs::OUTPUT_STATUS_REJECTED => kanban_rs::OUTPUT_STATUS_REJECTED,
+        kanban_rs::OUTPUT_STATUS_PENDING => kanban_rs::OUTPUT_STATUS_PENDING,
+        _ => {
+            return Err(ApiError::bad_request(
+                "status must be approved | rejected | pending",
+            ));
+        }
+    };
+    state
+        .store
+        .set_agent_output_status(id, status)
+        .await
+        .map_err(kanban_err)?;
+    record_activity(
+        &state.store,
+        "agent-output",
+        format!("output #{id} marked {status} by {}", user.0.username),
+    )
+    .await;
+    Ok("ok")
+}
+
 async fn record_activity(store: &kanban_rs::Store, kind: &str, message: impl std::fmt::Display) {
     if let Err(e) = store.record_activity(kind, &message.to_string()).await {
         tracing::warn!(kind, error = %e, "activity log write failed");
@@ -1938,7 +2216,18 @@ struct MachineView {
     hostname: String,
     os: String,
     arch: String,
+    /// "backend" for this machine; hub clients report model|worker.
+    role: String,
+    /// Installed RAM in GiB (probe value for hub clients).
+    ram_gib: u64,
+    /// Reachability: true for this machine; a hub client is ok when its
+    /// round trips through the hub succeeded.
+    ok: bool,
     local: bool,
+    /// Hub client id when the machine is a registered remote worker.
+    client_id: Option<u64>,
+    /// Agent names currently running on this machine.
+    agents: Vec<String>,
     sandboxes: Vec<SandboxDirInfo>,
 }
 
@@ -1949,7 +2238,7 @@ fn model_server_url() -> String {
         .unwrap_or_else(|| MODEL_SERVER_DEFAULT.to_string())
 }
 
-fn sandbox_info(d: &core_agent::sandbox_jail::SandboxDir) -> SandboxDirInfo {
+fn sandbox_info(d: &core_agent::podman::SandboxDir) -> SandboxDirInfo {
     SandboxDirInfo {
         pid: d.pid,
         alive: d.alive,
@@ -1974,52 +2263,88 @@ fn remote_machines(local_hostname: &str) -> Vec<MachineView> {
         return Vec::new();
     };
     rows.iter()
-        .map(|c| MachineView {
-            hostname: c["hostname"].as_str().unwrap_or("client").to_string(),
-            os: c["os"].as_str().unwrap_or_default().to_string(),
-            arch: String::new(),
-            local: false,
-            sandboxes: hub_client_sandbox(&agent, &url, c["id"].as_u64()),
+        .map(|c| {
+            let id = c["id"].as_u64();
+            let agents = hub_client_agents(&agent, &url, id);
+            let sandboxes = hub_client_sandbox(&agent, &url, id);
+            let ok = agents.is_some() || sandboxes.is_some();
+            MachineView {
+                hostname: c["hostname"].as_str().unwrap_or("client").to_string(),
+                os: c["os"].as_str().unwrap_or_default().to_string(),
+                arch: c["arch"].as_str().unwrap_or_default().to_string(),
+                role: c["role"].as_str().unwrap_or_default().to_string(),
+                ram_gib: c["ram_gib"].as_u64().unwrap_or(0),
+                ok,
+                local: false,
+                client_id: id,
+                agents: agents.unwrap_or_default(),
+                sandboxes: sandboxes.unwrap_or_default(),
+            }
         })
         .filter(|m| m.hostname != local_hostname)
         .collect()
 }
 
-fn hub_client_sandbox(agent: &ureq::Agent, url: &str, id: Option<u64>) -> Vec<SandboxDirInfo> {
-    let Some(id) = id else {
-        return Vec::new();
-    };
+/// Agent names a remote client machine currently holds; `None` when the
+/// round trip through the hub failed (machine unreachable).
+fn hub_client_agents(agent: &ureq::Agent, url: &str, id: Option<u64>) -> Option<Vec<String>> {
+    let id = id?;
+    let resp = agent
+        .get(&format!("{url}/api/clients/{id}/agents"))
+        .call()
+        .ok()?;
+    let names = resp.into_json::<Vec<String>>().ok()?;
+    Some(names)
+}
+
+/// Sandbox roots of a remote client; `None` when the `pwd` dispatch through
+/// the hub failed (machine unreachable).
+fn hub_client_sandbox(
+    agent: &ureq::Agent,
+    url: &str,
+    id: Option<u64>,
+) -> Option<Vec<SandboxDirInfo>> {
+    let id = id?;
     let body = serde_json::json!({ "cmd": "pwd" }).to_string();
-    let Ok(resp) = agent
+    let resp = agent
         .post(&format!("{url}/api/clients/{id}/command"))
         .send_string(&body)
-    else {
-        return Vec::new();
-    };
-    let Ok(val) = resp.into_json::<serde_json::Value>() else {
-        return Vec::new();
-    };
+        .ok()?;
+    let val = resp.into_json::<serde_json::Value>().ok()?;
     match val["output"].as_str() {
-        Some(path) if !path.trim().is_empty() => vec![SandboxDirInfo {
+        Some(path) if !path.trim().is_empty() => Some(vec![SandboxDirInfo {
             pid: 0,
             alive: true,
             path: path.trim().to_string(),
-        }],
-        _ => Vec::new(),
+        }]),
+        // reachable but no sandbox yet
+        _ => Some(Vec::new()),
     }
 }
 
-fn machine_views() -> Vec<MachineView> {
+fn machine_views(manager: &manager_rs::ManagerProcess) -> Vec<MachineView> {
+    const GIB: u64 = 1024 * 1024 * 1024;
     let host = host_spec::host_spec();
     let mut views = vec![MachineView {
         hostname: host.hostname.clone(),
         os: host.os,
         arch: host.arch,
+        role: "backend".to_string(),
+        ram_gib: host.memory_bytes / GIB,
+        ok: true,
         local: true,
+        client_id: None,
+        agents: manager.snapshot().into_iter().map(|a| a.agent).collect(),
         sandboxes: AgentSandbox::dirs().iter().map(sandbox_info).collect(),
     }];
     views.extend(remote_machines(&host.hostname));
     views
+}
+
+/// State for the machines routes: agent inventory of this backend.
+#[derive(Clone)]
+struct MachinesState {
+    manager: std::sync::Arc<manager_rs::ManagerProcess>,
 }
 
 #[utoipa::path(
@@ -2027,8 +2352,174 @@ fn machine_views() -> Vec<MachineView> {
     path = "/api/machines",
     responses((status = 200, body = [MachineView]))
 )]
-async fn machines() -> Json<Vec<MachineView>> {
-    Json(tokio::task::spawn_blocking(machine_views).await.unwrap_or_default())
+async fn machines(State(state): State<MachinesState>) -> Json<Vec<MachineView>> {
+    let manager = state.manager;
+    Json(
+        tokio::task::spawn_blocking(move || machine_views(&manager))
+            .await
+            .unwrap_or_default(),
+    )
+}
+
+#[derive(Serialize, utoipa::ToSchema)]
+struct MachineKickReply {
+    hostname: String,
+    kicked: bool,
+}
+
+/// Forcibly disconnect a registered client machine from the hub. The client
+/// node reconnects every 3 s while alive, so this drops dead/stale
+/// registrations; stopping the client process is the real uninstall.
+async fn kick_machine(Path(hostname): Path<String>) -> Result<Json<MachineKickReply>, ApiError> {
+    let lookup = hostname.clone();
+    let kicked = tokio::task::spawn_blocking(move || -> Result<bool, String> {
+        let url = model_server_url();
+        let agent = ureq::AgentBuilder::new()
+            .timeout(std::time::Duration::from_secs(HUB_TIMEOUT_SECS))
+            .build();
+        let rows = agent
+            .get(&format!("{url}/api/clients"))
+            .call()
+            .map_err(|e| format!("hub unreachable: {e}"))?
+            .into_json::<serde_json::Value>()
+            .map_err(|e| format!("hub reply: {e}"))?;
+        let id = rows
+            .as_array()
+            .and_then(|rows| {
+                rows.iter()
+                    .find(|c| c["hostname"].as_str() == Some(lookup.as_str()))
+                    .and_then(|c| c["id"].as_u64())
+            })
+            .ok_or_else(|| format!("machine {lookup} is not registered"))?;
+        let reply = agent
+            .post(&format!("{url}/api/clients/{id}/kick"))
+            .call()
+            .map_err(|e| format!("kick failed: {e}"))?
+            .into_json::<serde_json::Value>()
+            .map_err(|e| format!("kick reply: {e}"))?;
+        Ok(reply["kicked"].as_bool().unwrap_or(false))
+    })
+    .await
+    .map_err(|e| ApiError::bad_request(e.to_string()))?
+    .map_err(ApiError::bad_request)?;
+    Ok(Json(MachineKickReply { hostname, kicked }))
+}
+
+#[derive(Serialize, utoipa::ToSchema)]
+struct SandboxLogEntry {
+    role: String,
+    content: String,
+}
+
+/// Transcript of the workspace sandbox at `path`, read from its persisted
+/// state file (works even if the owning process is gone).
+#[utoipa::path(
+    get,
+    path = "/api/sandbox/logs",
+    params(("path" = String, Query)),
+    responses((status = 200, body = [SandboxLogEntry]), (status = 400, body = str))
+)]
+async fn sandbox_logs(
+    Query(req): Query<SandboxLogsRequest>,
+) -> Result<Json<Vec<SandboxLogEntry>>, ApiError> {
+    let path = std::path::PathBuf::from(&req.path);
+    // Only ever serve persisted sandbox dirs under the temp sandbox prefix —
+    // never arbitrary host paths.
+    let file_name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default();
+    if !file_name.starts_with(core_agent::podman::SANDBOX_PREFIX) {
+        return Err(ApiError::bad_request("not a sandbox directory"));
+    }
+    let history = tokio::task::spawn_blocking(move || core_agent::podman::load_transcript(&path))
+        .await
+        .map_err(|e| ApiError::bad_request(e.to_string()))?
+        .map_err(ApiError::bad_request)?;
+    Ok(Json(
+        history
+            .into_iter()
+            .map(|h| SandboxLogEntry {
+                role: format!("{:?}", h.role).to_lowercase(),
+                content: h.content,
+            })
+            .collect(),
+    ))
+}
+
+#[derive(Deserialize, utoipa::ToSchema)]
+struct SandboxLogsRequest {
+    path: String,
+}
+
+#[derive(Deserialize, utoipa::ToSchema)]
+struct MachineAgentRunRequest {
+    cmd: String,
+}
+
+#[derive(Serialize, utoipa::ToSchema)]
+struct MachineAgentReply {
+    output: String,
+}
+
+/// Dispatch a per-agent command to the shared machine `hostname` (a hub
+/// client). The client node spawns the agent's own work tree on first call,
+/// so this both spawns and runs in one round trip.
+async fn dispatch_machine_agent(
+    hostname: String,
+    agent: String,
+    cmd: String,
+) -> Result<Json<MachineAgentReply>, ApiError> {
+    if agent.is_empty() {
+        return Err(ApiError::bad_request("agent name required"));
+    }
+    let url = model_server_url();
+    let output = tokio::task::spawn_blocking(move || {
+        let agent_ = ureq::AgentBuilder::new()
+            .timeout(std::time::Duration::from_secs(HUB_TIMEOUT_SECS))
+            .build();
+        let rows = agent_
+            .get(&format!("{url}/api/clients"))
+            .call()
+            .map_err(|e| format!("hub unreachable: {e}"))?
+            .into_json::<serde_json::Value>()
+            .map_err(|e| format!("hub reply: {e}"))?;
+        let id = rows
+            .as_array()
+            .and_then(|rows| {
+                rows.iter()
+                    .find(|c| c["hostname"].as_str() == Some(hostname.as_str()))
+                    .and_then(|c| c["id"].as_u64())
+            })
+            .ok_or_else(|| format!("machine {hostname} is not registered"))?;
+        agent_
+            .post(&format!("{url}/api/clients/{id}/command"))
+            .send_string(&serde_json::json!({ "cmd": cmd, "agent": agent }).to_string())
+            .map_err(|e| format!("dispatch failed: {e}"))?
+            .into_json::<serde_json::Value>()
+            .map_err(|e| format!("dispatch reply: {e}"))?["output"]
+            .as_str()
+            .map(str::to_owned)
+            .ok_or_else(|| "dispatch reply missing output".to_string())
+    })
+    .await
+    .map_err(|e| ApiError::bad_request(e.to_string()))?
+    .map_err(ApiError::bad_request)?;
+    Ok(Json(MachineAgentReply { output }))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/machines/{hostname}/agents/{agent}/run",
+    request_body = MachineAgentRunRequest,
+    responses((status = 200, body = MachineAgentReply), (status = 400, body = str))
+)]
+async fn run_machine_agent(
+    Path(hostname): Path<String>,
+    Path(agent): Path<String>,
+    Json(req): Json<MachineAgentRunRequest>,
+) -> Result<Json<MachineAgentReply>, ApiError> {
+    dispatch_machine_agent(hostname, agent, req.cmd).await
 }
 
 #[utoipa::path(
@@ -2084,11 +2575,10 @@ struct AgentRunReply {
     output: String,
 }
 
-async fn manager_list_agents(
-    State(manager): State<Arc<manager_rs::ManagerProcess>>,
-) -> Json<AgentListReply> {
+async fn manager_list_agents(State(state): State<ManagerState>) -> Json<AgentListReply> {
     Json(AgentListReply {
-        agents: manager
+        agents: state
+            .manager
             .snapshot()
             .iter()
             .map(|a| serde_json::to_value(a).unwrap_or_default())
@@ -2097,10 +2587,13 @@ async fn manager_list_agents(
 }
 
 async fn spawn_agent(
-    State(manager): State<Arc<manager_rs::ManagerProcess>>,
+    State(state): State<ManagerState>,
     Json(req): Json<AgentSpawnRequest>,
 ) -> Result<Json<AgentSpawnReply>, ApiError> {
-    let work_tree = manager.spawn(&req.agent).map_err(ApiError::bad_request)?;
+    let work_tree = state
+        .manager
+        .spawn(&req.agent)
+        .map_err(ApiError::bad_request)?;
     Ok(Json(AgentSpawnReply {
         agent: req.agent,
         work_tree: work_tree.display().to_string(),
@@ -2108,11 +2601,11 @@ async fn spawn_agent(
 }
 
 async fn run_agent_command(
-    State(manager): State<Arc<manager_rs::ManagerProcess>>,
+    State(state): State<ManagerState>,
     Path(agent): Path<String>,
     Json(req): Json<AgentRunRequest>,
 ) -> Result<Json<AgentRunReply>, ApiError> {
-    let manager = Arc::clone(&manager);
+    let manager = Arc::clone(&state.manager);
     let cmd_agent = agent.clone();
     let output = tokio::task::spawn_blocking(move || manager.run(&cmd_agent, &req.cmd))
         .await
@@ -2122,45 +2615,101 @@ async fn run_agent_command(
 }
 
 async fn agent_logs(
-    State(manager): State<Arc<manager_rs::ManagerProcess>>,
+    State(state): State<ManagerState>,
     Path(agent): Path<String>,
-) -> Result<Json<manager_rs::AgentLogs>, ApiError> {
-    let logs = tokio::task::spawn_blocking(move || manager.logs(&agent))
+) -> Result<Json<AgentLogsReply>, ApiError> {
+    let manager = state.manager;
+    let logs_agent = agent.clone();
+    let logs = tokio::task::spawn_blocking(move || manager.logs(&logs_agent))
         .await
         .map_err(|e| ApiError::bad_request(e.to_string()))?
         .map_err(ApiError::bad_request)?;
-    Ok(Json(logs))
+    Ok(Json(AgentLogsReply {
+        agent: logs.agent,
+        work_tree: logs.work_tree.display().to_string(),
+        runs: logs.runs,
+        transcript: logs.transcript,
+        last_result: logs.last_result,
+        machine: host_spec::host_spec().hostname,
+    }))
+}
+
+#[derive(Serialize, utoipa::ToSchema)]
+struct AgentLogsReply {
+    agent: String,
+    work_tree: String,
+    runs: u64,
+    transcript: Vec<String>,
+    last_result: Option<String>,
+    /// Hostname of the machine holding this agent's sandbox.
+    machine: String,
+}
+
+#[derive(Serialize, utoipa::ToSchema)]
+struct AgentWhereReply {
+    agent: String,
+    /// Hostname of the machine the agent runs on.
+    machine: String,
+    local: bool,
+}
+
+/// Which machine holds `agent`: the backend's own manager first, then every
+/// registered client machine (hub agent round trip). 404 when nowhere.
+async fn agent_whereis(
+    State(state): State<MachinesState>,
+    Path(agent): Path<String>,
+) -> Result<Json<AgentWhereReply>, ApiError> {
+    if agent.is_empty() {
+        return Err(ApiError::bad_request("agent name required"));
+    }
+    let manager = state.manager;
+    let agent_name = agent.clone();
+    let found = tokio::task::spawn_blocking(move || {
+        if manager.snapshot().iter().any(|a| a.agent == agent_name) {
+            return Some((host_spec::host_spec().hostname, true));
+        }
+        remote_machines(&host_spec::host_spec().hostname)
+            .into_iter()
+            .find(|m| m.agents.contains(&agent_name))
+            .map(|m| (m.hostname, false))
+    })
+    .await
+    .map_err(|e| ApiError::bad_request(e.to_string()))?;
+    match found {
+        Some((machine, local)) => Ok(Json(AgentWhereReply {
+            agent,
+            machine,
+            local,
+        })),
+        None => Err(ApiError::not_found(format!(
+            "agent {agent} is not running on any machine"
+        ))),
+    }
 }
 
 async fn finish_agent(
-    State(manager): State<Arc<manager_rs::ManagerProcess>>,
+    State(state): State<ManagerState>,
     Path(agent): Path<String>,
-) -> Result<Json<manager_rs::TaskOutcome>, ApiError> {
+) -> Result<Json<StoredOutcome>, ApiError> {
     const STATUS_FINISHED: &str = "finished";
     const STATUS_ERROR: &str = "error";
     let settings = Arc::new(SettingsState::load());
     let finish_agent_name = agent.clone();
+    let manager = Arc::clone(&state.manager);
     let outcome = tokio::task::spawn_blocking(move || manager.finish(&finish_agent_name))
         .await
         .map_err(|e| ApiError::bad_request(e.to_string()))?;
     match &outcome {
         Ok(out) => {
-            let (settings, agent, status) = (
-                Arc::clone(&settings),
-                out.agent.clone(),
-                STATUS_FINISHED,
-            );
+            let (settings, agent, status) =
+                (Arc::clone(&settings), out.agent.clone(), STATUS_FINISHED);
             let _ = tokio::task::spawn_blocking(move || {
                 crate::infra::alerts::notify_agent_finished(&settings, &agent, status)
             })
             .await;
         }
         Err(_) => {
-            let (settings, agent, status) = (
-                Arc::clone(&settings),
-                agent.clone(),
-                STATUS_ERROR,
-            );
+            let (settings, agent, status) = (Arc::clone(&settings), agent.clone(), STATUS_ERROR);
             let _ = tokio::task::spawn_blocking(move || {
                 crate::infra::alerts::notify_agent_finished(&settings, &agent, status)
             })
@@ -2168,7 +2717,42 @@ async fn finish_agent(
         }
     }
     let outcome = outcome.map_err(ApiError::bad_request)?;
-    Ok(Json(outcome))
+    // Persist the task output (patch + transcript) before the work tree is
+    // gone; review happens against the stored copy.
+    let transcript = outcome
+        .state
+        .history
+        .iter()
+        .map(|e| format!("{:?}: {}", e.role, e.content))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let output_id = state
+        .store
+        .insert_agent_output(
+            &outcome.agent,
+            outcome.result.as_deref(),
+            &outcome.patch,
+            outcome.commit.as_deref(),
+            &transcript,
+        )
+        .await
+        .map_err(store_err)?;
+    Ok(Json(StoredOutcome {
+        agent: outcome.agent,
+        result: outcome.result,
+        patch: outcome.patch,
+        commit: outcome.commit,
+        output_id,
+    }))
+}
+
+#[derive(Serialize, utoipa::ToSchema)]
+struct StoredOutcome {
+    agent: String,
+    result: Option<String>,
+    patch: String,
+    commit: Option<String>,
+    output_id: i64,
 }
 
 /// Installer for remote sandbox clients; `role` selects auto/model/worker.
@@ -2190,7 +2774,7 @@ async fn install_script(
     };
     let server = q
         .server
-        .unwrap_or_else(|| "http://localhost:3334".to_owned());
+        .unwrap_or_else(|| "http://127.0.0.1:8991".to_owned());
     (
         [
             (
@@ -2253,6 +2837,7 @@ async fn install_script(
         get_agent,
         set_agent,
         run_card,
+        test_pipeline,
         set_card_schedule,
         list_cronjobs,
         list_comments,
@@ -2719,6 +3304,27 @@ impl From<kanban_rs::PipelineRow> for PipelineDto {
     }
 }
 
+#[derive(Serialize, utoipa::ToSchema)]
+struct ResourceDto {
+    id: i64,
+    card_id: i64,
+    name: String,
+    content: String,
+    created_at: String,
+}
+
+impl From<&kanban_rs::ResourceRow> for ResourceDto {
+    fn from(r: &kanban_rs::ResourceRow) -> Self {
+        Self {
+            id: r.id,
+            card_id: r.card_id,
+            name: r.name.clone(),
+            content: r.content.clone(),
+            created_at: r.created_at.to_rfc3339(),
+        }
+    }
+}
+
 #[derive(Deserialize, utoipa::ToSchema)]
 struct AgentConfigRequest {
     name: String,
@@ -2874,6 +3480,10 @@ impl ApiError {
 
     fn bad_request(msg: impl Into<String>) -> Self {
         Self(msg.into(), StatusCode::BAD_REQUEST)
+    }
+
+    fn not_found(msg: impl Into<String>) -> Self {
+        Self(msg.into(), StatusCode::NOT_FOUND)
     }
 }
 

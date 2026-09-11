@@ -7,6 +7,7 @@ fn sample(id: u64) -> Envelope {
     Envelope {
         id,
         kind: Kind::Command {
+            agent: String::new(),
             cmd: "ping".to_string(),
         },
     }
@@ -18,7 +19,7 @@ async fn roundtrip_through_duplex() {
     write_frame(&mut a, &sample(7)).await.expect("write");
     let env = read_frame(&mut b).await.expect("read");
     assert_eq!(env.id, 7);
-    assert!(matches!(env.kind, Kind::Command { ref cmd } if cmd == "ping"));
+    assert!(matches!(env.kind, Kind::Command { ref cmd, .. } if cmd == "ping"));
 }
 
 #[tokio::test]
@@ -77,6 +78,7 @@ async fn write_body_fails_when_peer_dropped_mid_frame() {
     let big = Envelope {
         id: 1,
         kind: Kind::Command {
+            agent: String::new(),
             cmd: "x".repeat(512),
         },
     };
@@ -93,6 +95,7 @@ async fn write_flush_fails_when_peer_dropped_after_buffer_full() {
     let big = Envelope {
         id: 1,
         kind: Kind::Command {
+            agent: String::new(),
             cmd: "y".repeat(512),
         },
     };

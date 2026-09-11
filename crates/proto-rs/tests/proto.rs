@@ -25,9 +25,15 @@ async fn command_round_trip_and_heartbeat() {
         async move {
             client::connect(
                 &addr,
-                "test-host".to_string(),
-                "test-os".to_string(),
-                |cmd| format!("echo:{cmd}"),
+                proto_rs::ClientMeta {
+                    hostname: "test-host".to_string(),
+                    os: "test-os".to_string(),
+                    arch: "aarch64".to_string(),
+                    role: "worker".to_string(),
+                    ram_gib: 16,
+                },
+                |_agent, cmd| format!("echo:{cmd}"),
+                || Vec::new(),
             )
             .await
         }
@@ -43,6 +49,7 @@ async fn command_round_trip_and_heartbeat() {
             Envelope {
                 id: 42,
                 kind: Kind::Command {
+                    agent: String::new(),
                     cmd: "ping".to_string(),
                 },
             },

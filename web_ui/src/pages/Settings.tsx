@@ -163,11 +163,13 @@ function InstallCmd() {
           it downloads the client and registers it as a sandbox client of this server
         </li>
         <li>
-          the client creates its working dirs locally, named <code>susutaku-agent-sandbox-&lt;pid&gt;</code>
+          the client creates one sandbox dir per running agent locally, named
+          <code>susutaku-agent-sandbox-&lt;pid&gt;</code>
         </li>
         <li>
-          once running, the machine shows up under <strong>sandbox</strong> in the sidebar
-          — stale entries (dead clients) can be removed there anytime
+          once running, the machine appears in the <strong>machines</strong> dialog
+          (sidebar) — its per-agent sandboxes are listed under <strong>agent sandboxes</strong>,
+          and stale entries (dead clients) can be removed there anytime
         </li>
       </ol>
 
@@ -180,8 +182,8 @@ function InstallCmd() {
           remove its working dirs: <code>rm -rf ~/susutaku-agent-sandbox-*</code>
         </li>
         <li>
-          on the server, open <strong>sandbox</strong> in the sidebar and press
-          <strong> sweep stale</strong> to clean up the registration — or run
+          on the server, open the <strong>sandbox</strong> page and press
+          <strong> sweep stale</strong> to clean up dead registrations — or run
           <code> curl -X POST {window.location.origin}/api/sandbox/sweep</code>
         </li>
       </ol>

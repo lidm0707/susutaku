@@ -40,6 +40,8 @@ pub enum StoreError {
     AgentTaken,
     #[error("no such agent")]
     NoSuchAgent,
+    #[error("no such agent output")]
+    NoSuchAgentOutput,
     #[error("bad pipeline spec: {0}")]
     BadSpec(String),
     #[error("password too short")]
@@ -135,6 +137,23 @@ pub struct CommentRow {
     pub body: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
+
+/// Stored result of a finished agent task, awaiting human review.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AgentOutputRow {
+    pub id: i64,
+    pub agent: String,
+    pub result: Option<String>,
+    pub patch: String,
+    pub commit_oid: Option<String>,
+    pub transcript: String,
+    pub status: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+pub const OUTPUT_STATUS_PENDING: &str = "pending";
+pub const OUTPUT_STATUS_APPROVED: &str = "approved";
+pub const OUTPUT_STATUS_REJECTED: &str = "rejected";
 
 #[derive(Clone)]
 pub struct Store {
@@ -252,6 +271,34 @@ CREATE TABLE IF NOT EXISTS activity (
 "#,
     r#"
 CREATE INDEX IF NOT EXISTS activity_created_idx ON activity (created_at DESC, id DESC);
+"#,
+    r#"
+CREATE TABLE IF NOT EXISTS pipeline_resources (
+    id         BIGSERIAL PRIMARY KEY,
+    card_id    BIGINT NOT NULL REFERENCES kanban_cards(id) ON DELETE CASCADE,
+    name       TEXT NOT NULL,
+    content    TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (card_id, name)
+);
+"#,
+    r#"
+CREATE INDEX IF NOT EXISTS pipeline_resources_card_idx ON pipeline_resources (card_id, id);
+"#,
+    r#"
+CREATE TABLE IF NOT EXISTS agent_outputs (
+    id         BIGSERIAL PRIMARY KEY,
+    agent      TEXT NOT NULL,
+    result     TEXT,
+    patch      TEXT NOT NULL DEFAULT '',
+    commit_oid TEXT,
+    transcript TEXT NOT NULL DEFAULT '',
+    status     TEXT NOT NULL DEFAULT 'pending',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+"#,
+    r#"
+CREATE INDEX IF NOT EXISTS agent_outputs_status_idx ON agent_outputs (status, id DESC);
 "#,
 ];
 
@@ -640,4 +687,75 @@ struct NewId {
 struct AgentRow {
     agent_name: Option<String>,
     agent_state: Option<String>,
+}
+
+impl Store {
+    pub async fn insert_agent_output(
+        &self,
+        agent: &str,
+        result: Option<&str>,
+        patch: &str,
+        commit_oid: Option<&str>,
+        transcript: &str,
+    ) -> Result<i64, StoreError> {
+        let row = sqlx::query!(
+            r#"INSERT INTO agent_outputs (agent, result, patch, commit_oid, transcript, status)
+               VALUES ($1, $2, $3, $4, $5, $6)
+               RETURNING id AS "id: i64""#,
+            agent,
+            result,
+            patch,
+            commit_oid,
+            transcript,
+            OUTPUT_STATUS_PENDING,
+        )
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(row.id)
+    }
+
+    pub async fn list_agent_outputs(
+        &self,
+        status: Option<&str>,
+        limit: i64,
+    ) -> Result<Vec<AgentOutputRow>, StoreError> {
+        let rows = sqlx::query_as!(
+            AgentOutputRow,
+            r#"SELECT id, agent, result, patch, commit_oid, transcript, status, created_at
+               FROM agent_outputs
+               WHERE ($1::text IS NULL OR status = $1)
+               ORDER BY id DESC LIMIT $2"#,
+            status,
+            limit,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    pub async fn get_agent_output(&self, id: i64) -> Result<Option<AgentOutputRow>, StoreError> {
+        let row = sqlx::query_as!(
+            AgentOutputRow,
+            r#"SELECT id, agent, result, patch, commit_oid, transcript, status, created_at
+               FROM agent_outputs WHERE id = $1"#,
+            id
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
+    pub async fn set_agent_output_status(&self, id: i64, status: &str) -> Result<(), StoreError> {
+        let res = sqlx::query!(
+            r#"UPDATE agent_outputs SET status = $2 WHERE id = $1"#,
+            id,
+            status,
+        )
+        .execute(&self.pool)
+        .await?;
+        if res.rows_affected() == 0 {
+            return Err(StoreError::NoSuchAgentOutput);
+        }
+        Ok(())
+    }
 }

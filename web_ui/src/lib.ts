@@ -122,6 +122,8 @@ export interface PipelineNode {
   id: string;
   stage: string;
   params: unknown;
+  x?: number;
+  y?: number;
 }
 
 export interface PipelineLink {
@@ -595,6 +597,34 @@ export async function sweep_sandboxes(): Promise<{ removed: number }> {
   return res.json();
 }
 
+export interface SandboxLogEntry {
+  role: string;
+  content: string;
+}
+
+export async function fetch_sandbox_logs(path: string): Promise<SandboxLogEntry[]> {
+  const res = await fetch(`${API_BASE}/api/sandbox/logs?path=${encodeURIComponent(path)}`);
+  if (!res.ok) throw new ApiError(res.status, await res.text());
+  return res.json();
+}
+
+export async function run_machine_agent(
+  hostname: string,
+  agent: string,
+  cmd: string,
+): Promise<{ output: string }> {
+  const res = await fetch(
+    `${API_BASE}/api/machines/${encodeURIComponent(hostname)}/agents/${encodeURIComponent(agent)}/run`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cmd }),
+    },
+  );
+  if (!res.ok) throw new ApiError(res.status, await res.text());
+  return res.json();
+}
+
 export async function fetch_workspaces(): Promise<Workspace[]> {
   return (await api("/api/workspaces")).json();
 }
@@ -707,9 +737,14 @@ const CHAT_MAX_TOKENS = 1024;
 
 /// Ask the agent engine a question (same backend as the Chat page).
 export async function chat(message: string): Promise<ChatReply> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  const token = get_token();
+  if (token) headers["Authorization"] = `Bearer ${token}`;
   const res = await fetch(`${API_BASE}/api/chat`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers,
     body: JSON.stringify({ message, max_tokens: CHAT_MAX_TOKENS, search: "auto" }),
   });
   if (!res.ok) throw new ApiError(res.status, await res.text());
@@ -729,12 +764,23 @@ export interface MachineView {
   hostname: string;
   os: string;
   arch: string;
+  role: string;
+  ram_gib: number;
+  ok: boolean;
   local: boolean;
+  client_id: number | null;
+  agents: string[];
   sandboxes: SandboxDir[];
 }
 
 export async function fetch_machines(): Promise<MachineView[]> {
   return (await api("/api/machines")).json();
+}
+
+export async function kick_machine(hostname: string): Promise<{ hostname: string; kicked: boolean }> {
+  const res = await api(`/api/machines/${encodeURIComponent(hostname)}/kick`, { method: "POST" });
+  if (!res.ok) throw new ApiError(res.status, await res.text());
+  return res.json();
 }
 
 export async function fetch_pipelines(): Promise<Pipeline[]> {
@@ -753,6 +799,7 @@ export interface AgentLogs {
   runs: number;
   transcript: string[];
   last_result: string | null;
+  machine: string;
 }
 
 export interface ActivityEntry { id: number; kind: string; message: string; created_at: string }
@@ -779,6 +826,19 @@ export async function fetch_agent_logs(agent: string): Promise<AgentLogs> {
   return (await api(`/api/manager/agents/${encodeURIComponent(agent)}/logs`)).json();
 }
 
+export interface AgentWhere {
+  agent: string;
+  machine: string;
+  local: boolean;
+}
+
+/** Which machine an agent runs on — works for local and remote agents. */
+export async function fetch_agent_machine(agent: string): Promise<AgentWhere> {
+  const res = await api(`/api/agents/whereis/${encodeURIComponent(agent)}`);
+  if (!res.ok) throw new ApiError(res.status, await res.text());
+  return res.json();
+}
+
 export async function run_agent_command(agent: string, cmd: string): Promise<string> {
   const res: { agent: string; output: string } = await (
     await api(`/api/manager/agents/${encodeURIComponent(agent)}/run`, {
@@ -788,6 +848,81 @@ export async function run_agent_command(agent: string, cmd: string): Promise<str
     })
   ).json();
   return res.output;
+}
+
+export interface AgentOutput {
+  id: number;
+  agent: string;
+  result: string | null;
+  patch: string;
+  commit_oid: string | null;
+  transcript: string;
+  status: "pending" | "approved" | "rejected";
+  created_at: string;
+}
+
+export async function fetch_agent_outputs(status?: string): Promise<AgentOutput[]> {
+  const query = status ? `?status=${encodeURIComponent(status)}` : "";
+  return (await api(`/api/agent-outputs${query}`)).json();
+}
+
+export async function set_agent_output_status(id: number, status: AgentOutput["status"]): Promise<void> {
+  await api(`/api/agent-outputs/${id}/status`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ status }),
+  });
+}
+
+export type PortKind = "any" | "text" | "json" | "image";
+
+export interface StagePorts {
+  input: PortKind;
+  output: PortKind;
+  wired: boolean;
+  doc: string;
+  params: { key: string; hint: string; required: boolean }[];
+}
+
+export type PipelineSchema = Record<string, StagePorts>;
+
+export async function fetch_pipeline_schema(): Promise<PipelineSchema> {
+  return (await api("/api/pipelines/schema")).json();
+}
+
+export interface PipelineRunStage {
+  node: string;
+  stage: string;
+  status: "ok" | "failed";
+  note: string;
+}
+
+export interface PipelineRunRecord {
+  pipeline_id: number;
+  pipeline_name: string;
+  status: "ok" | "failed";
+  stages: PipelineRunStage[];
+  output?: string | null;
+  resources: string[];
+  finished_at: string;
+}
+
+export async function test_pipeline(
+  id: number,
+  input: string
+): Promise<PipelineRunRecord> {
+  const res = await api(`/api/pipelines/${id}/test`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ input }),
+  });
+  return res.json();
+}
+
+export async function fetch_card_resources(
+  card_id: number
+): Promise<{ id: number; name: string; content: string; created_at: string }[]> {
+  return (await api(`/api/kanban/cards/${card_id}/resources`)).json();
 }
 
 export async function create_pipeline(name: string, spec: PipelineSpec): Promise<Pipeline> {

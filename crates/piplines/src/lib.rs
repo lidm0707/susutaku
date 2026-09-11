@@ -4,6 +4,7 @@
 pub mod agent;
 pub mod graph;
 pub mod payload;
+pub mod port;
 pub mod stage;
 
 use crate::payload::Payload;

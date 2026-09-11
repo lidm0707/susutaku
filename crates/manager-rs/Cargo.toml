@@ -6,4 +6,5 @@ license.workspace = true
 
 [dependencies]
 core-agent = { workspace = true }
+git-rs = { workspace = true }
 serde = { workspace = true }

@@ -7,7 +7,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
 
 use crate::codec::{read_frame, write_frame};
-use crate::envelope::{Envelope, Kind};
+use crate::envelope::{ClientMeta, Envelope, Kind};
 use crate::{INBOUND_CHANNEL_CAPACITY, OUTBOUND_CHANNEL_CAPACITY};
 
 /// One accepted client: inbound envelopes arrive on `rx`.
@@ -23,12 +23,14 @@ pub struct ClientInfo {
     pub id: u64,
     pub hostname: String,
     pub os: String,
+    pub arch: String,
+    pub role: String,
+    pub ram_gib: u64,
 }
 
 struct Slot {
     tx: mpsc::Sender<Envelope>,
-    hostname: Option<String>,
-    os: Option<String>,
+    meta: Option<ClientMeta>,
 }
 
 /// Maps client_id -> outbound command sender plus reported identity.
@@ -71,10 +73,16 @@ impl Registry {
             .read()
             .map(|c| {
                 c.iter()
-                    .map(|(id, s)| ClientInfo {
-                        id: *id,
-                        hostname: s.hostname.clone().unwrap_or_else(|| format!("client-{id}")),
-                        os: s.os.clone().unwrap_or_default(),
+                    .map(|(id, s)| {
+                        let meta = s.meta.clone().unwrap_or_else(|| empty_meta(*id));
+                        ClientInfo {
+                            id: *id,
+                            hostname: meta.hostname,
+                            os: meta.os,
+                            arch: meta.arch,
+                            role: meta.role,
+                            ram_gib: meta.ram_gib,
+                        }
                     })
                     .collect()
             })
@@ -83,29 +91,31 @@ impl Registry {
 
     fn insert(&self, id: u64, tx: mpsc::Sender<Envelope>) {
         if let Ok(mut clients) = self.clients.write() {
-            clients.insert(
-                id,
-                Slot {
-                    tx,
-                    hostname: None,
-                    os: None,
-                },
-            );
+            clients.insert(id, Slot { tx, meta: None });
         }
     }
 
-    fn set_meta(&self, id: u64, hostname: String, os: String) {
+    fn set_meta(&self, id: u64, meta: ClientMeta) {
         if let Ok(mut clients) = self.clients.write()
             && let Some(slot) = clients.get_mut(&id)
         {
-            slot.hostname = Some(hostname);
-            slot.os = Some(os);
+            slot.meta = Some(meta);
         }
     }
 
     fn remove(&self, id: u64) {
         if let Ok(mut clients) = self.clients.write() {
             clients.remove(&id);
+        }
+    }
+
+    /// Disconnect a client: dropping its outbound channel ends the hub-side
+    /// writer, which closes the socket; the client node reconnects if still
+    /// alive. Returns whether the client was connected.
+    pub fn kick(&self, id: u64) -> bool {
+        match self.clients.write() {
+            Ok(mut clients) => clients.remove(&id).is_some(),
+            Err(_) => false,
         }
     }
 }
@@ -148,6 +158,16 @@ pub async fn serve(
     }
 }
 
+fn empty_meta(id: u64) -> ClientMeta {
+    ClientMeta {
+        hostname: format!("client-{id}"),
+        os: String::new(),
+        arch: String::new(),
+        role: String::new(),
+        ram_gib: 0,
+    }
+}
+
 async fn handle_conn(
     stream: TcpStream,
     id: u64,
@@ -164,8 +184,26 @@ async fn handle_conn(
         }
     });
     while let Ok(env) = read_frame(&mut rd).await {
-        if let Kind::Register { hostname, os } = env.kind {
-            registry.set_meta(id, hostname, os);
+        if let Kind::Register {
+            hostname,
+            os,
+            arch,
+            role,
+            ram_gib,
+        } = env.kind
+        {
+            let meta = ClientMeta {
+                hostname,
+                os,
+                arch,
+                role,
+                ram_gib,
+            };
+            // No metadata, no registration: drop the connection.
+            if !meta.is_valid() {
+                break;
+            }
+            registry.set_meta(id, meta);
             continue;
         }
         if in_tx.send(env).await.is_err() {

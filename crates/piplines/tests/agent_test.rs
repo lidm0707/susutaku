@@ -22,11 +22,15 @@ fn agent_stage_accepted_by_graph() {
                 id: ID_IN.into(),
                 stage: STAGE_INGEST.into(),
                 params: serde_json::Value::Null,
+                x: None,
+                y: None,
             },
             NodeDef {
                 id: ID_PICK.into(),
                 stage: STAGE_AGENT.into(),
                 params: agent_params(AGENT_NAME),
+                x: None,
+                y: None,
             },
         ],
         links: vec![Link {

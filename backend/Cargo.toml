@@ -23,8 +23,8 @@ core-agent = { workspace = true }
 ureq = { workspace = true }
 codex-cli = { path = "../crates/agent_3th_cli/codex_cli" }
 claude-cli = { path = "../crates/agent_3th_cli/claude_cli" }
-zai-api = { path = "../crates/agent_3th_cli/zai_api" }
-ai-interface-layer = { path = "../crates/agent_3th_cli/ai_interface_layer" }
+zai-api = { path = "../crates/cloud_model_api/zai_api" }
+ai-interface-layer = { path = "../crates/cloud_model_api/ai_interface_layer" }
 kanban-rs = { workspace = true }
 codex-usage-rs = { workspace = true }
 manager-rs = { workspace = true }

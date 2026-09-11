@@ -1,0 +1,11 @@
+[package]
+name = "research-rs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+katgpt-pruners = { git = "https://github.com/lidm0707/katgpt-rs", branch = "main", default-features = false, features = [
+    "self_distilling_bandit",
+] }
+katgpt-speculative = { git = "https://github.com/lidm0707/katgpt-rs", branch = "main", default-features = false }

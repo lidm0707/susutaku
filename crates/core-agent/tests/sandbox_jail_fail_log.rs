@@ -1,7 +1,7 @@
 //! Integration test: a failing sandbox command must still be recorded in the
 //! transcript (with its error), so run logs reach the backend and the web UI.
 
-use core_agent::sandbox_jail::Sandbox;
+use core_agent::podman::Sandbox;
 
 fn assert_failure_logged() {
     let work = std::env::temp_dir().join("susutaku-sandbox-fail-log-test");

@@ -27,7 +27,8 @@ susutaku/
 │   ├── pdf-rs/                ← PDF parsing
 │   ├── work/                  ← services on top (cron worker, model service, pdf2csv)
 │   ├── design_render/         ← bin: paints every UI page → bench/design/ PNG + boxes.json
-│   └── agent_3th_cli/         ← claude_cli · codex_cli · zai_api · ai_interface_layer
+│   ├── agent_3th_cli/         ← claude_cli · codex_cli (CLI integrations)
+│   ├── cloud_model_api/       ← zai_api · ai_interface_layer (cloud model HTTP APIs)
 ├── web_ui/                    ← React TS UI (vite): pages/, components/, ui/, api/
 ├── playwright/                ← e2e suite (tests/, fixtures, mock-model server)
 ├── docker/                    ← grouped by purpose:
@@ -41,7 +42,7 @@ susutaku/
 ├── bench/                     ← benchmark/design summaries (coverage, design renders)
 ├── docs/                      ← workflow docs (attachments, playwright, docker)
 ├── attachments/               ← uploaded file storage
-└── piplines/ input/ output/   ← pipeline assets
+├── piplines/ input/ output/   ← pipeline assets
 ```
 
 ## Layout
@@ -56,7 +57,8 @@ susutaku/
 - `crates/kanban-rs` — kanban board model + Postgres store (`query_as!`); hierarchy
   workspace → project → task (card); cards carry per-card agent state (`agent_name`, `agent_state` JSON)
 - `crates/gguf-rs` — GGUF model file parsing
-- `crates/agent_3th_cli/` — third-party CLI integrations (`claude_cli`, `codex_cli`, `zai_api`, `ai_interface_layer`)
+- `crates/agent_3th_cli/` — third-party CLI integrations (`claude_cli`, `codex_cli`)
+- `crates/cloud_model_api/` — cloud model HTTP APIs (`zai_api`, `ai_interface_layer`)
 - `crates/work` — applications/services built on the crates above
 - `attachments/` — file attachment storage (see `docs/attachments.md`)
 - `piplines/`, `input/`, `output/`, `web_ui/` — pipeline and UI assets (`web_ui` includes a Kanban board page backed by `crates/kanban-rs` + Postgres)
@@ -82,6 +84,12 @@ susutaku/
 - Sandbox network is loopback-only (`linux.rs` limitations): agent commands
   inside the sandbox have no internet; `claude`/`codex` CLIs must be baked
   into the image to be usable and run outside the sandbox.
+
+# Podman sandbox
+
+- Nested rootless podman inside the backend container (deploy stack):
+  required compose flags, storage/cgroup fixes, image lifecycle, and a
+  verification checklist — see `docs/podman-sandbox.md`.
 
 ## Kanban Postgres
 

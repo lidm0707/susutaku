@@ -1,9 +1,9 @@
-//! Integration test: real sandbox spawn on Linux (user/mount/pid/net ns +
-//! chroot jail + seccomp). Runs a command, asserts real output and
-//! workspace persistence across runs.
+//! Integration test: real podman sandbox spawn. Runs a command, asserts
+//! real output and workspace persistence across runs. Needs `podman` and
+//! the default image (`make sandbox-image`).
 #![cfg(target_os = "linux")]
 
-use core_agent::sandbox_jail::Sandbox;
+use core_agent::podman::Sandbox;
 
 #[test]
 fn sandbox_runs_command_and_persists_workspace() {

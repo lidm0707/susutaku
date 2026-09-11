@@ -1,5 +1,6 @@
 //! Serializable pipeline graph: node/link spec with validation.
 
+use crate::port;
 use serde::{Deserialize, Serialize};
 
 pub const MAX_NODES: usize = 64;
@@ -36,6 +37,11 @@ pub struct NodeDef {
     pub stage: String,
     #[serde(default)]
     pub params: serde_json::Value,
+    /// Canvas position, persisted so the UI stops re-laying-out saved graphs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub x: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub y: Option<f64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -62,6 +68,13 @@ pub enum GraphError {
     BadLink(String),
     #[error("pipeline graph contains a cycle")]
     Cycle,
+    #[error("port mismatch: {from} ({from_out}) cannot feed {to} ({to_in})")]
+    PortMismatch {
+        from: String,
+        to: String,
+        from_out: port::PortKind,
+        to_in: port::PortKind,
+    },
 }
 
 impl PipelineSpec {
@@ -103,14 +116,24 @@ impl PipelineSpec {
 
     fn validate_links(&self) -> Result<(), GraphError> {
         for link in &self.links {
-            if !self.nodes.iter().any(|n| n.id == link.from) {
+            let Some(src) = self.nodes.iter().find(|n| n.id == link.from) else {
                 return Err(GraphError::BadLink(format!(
                     "unknown source: {}",
                     link.from
                 )));
-            }
-            if !self.nodes.iter().any(|n| n.id == link.to) {
+            };
+            let Some(dst) = self.nodes.iter().find(|n| n.id == link.to) else {
                 return Err(GraphError::BadLink(format!("unknown target: {}", link.to)));
+            };
+            let (_, src_out) = port::ports(&src.stage);
+            let (dst_in, _) = port::ports(&dst.stage);
+            if !port::compatible(src_out, dst_in) {
+                return Err(GraphError::PortMismatch {
+                    from: link.from.clone(),
+                    to: link.to.clone(),
+                    from_out: src_out,
+                    to_in: dst_in,
+                });
             }
         }
         Ok(())

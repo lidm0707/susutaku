@@ -4,16 +4,33 @@ use kanban_rs::{AddCard, AgentConfigRow, AgentConfigUpdate, PipelineRow, Store, 
 
 const TEST_PIPELINE_A: &str = "test-pipeline-a";
 const TEST_PIPELINE_B: &str = "test-pipeline-b";
+const TEST_PIPELINE_LINK: &str = "test-pipeline-link";
 const TEST_AGENT: &str = "test-agent";
 const TEST_COLUMN: &str = "todo";
 const TEST_TITLE: &str = "pipeline test card";
 const TEST_PRIORITY: &str = "normal";
 const VALID_SPEC: &str = r#"{"nodes":[{"id":"a","stage":"ingest","params":null}],"links":[]}"#;
-const BAD_SPEC: &str = r#"{"nodes":[],"links":[]}"#;
+const BAD_SPEC: &str = r#"{"nodes":[{"id":"a","stage":"warp"}],"links":[]}"#;
+
+/// Drop this test's rows left by an earlier crashed run. The two tests in this
+/// binary run in parallel against one DB, so only touch the given names.
+async fn cleanup(store: &Store, pipeline_names: &[&str], agent_name: &str) {
+    for PipelineRow { id, name, .. } in store.list_pipelines().await.expect("list pipelines") {
+        if pipeline_names.contains(&name.as_str()) {
+            let _ = store.remove_pipeline(id).await;
+        }
+    }
+    for row in store.list_agents().await.expect("list agents") {
+        if row.name == agent_name {
+            let _ = store.remove_agent(row.id).await;
+        }
+    }
+}
 
 #[tokio::test]
 async fn pipeline_crud_and_validation() {
     let store = Store::connect(Store::default_url()).await.expect("connect");
+    cleanup(&store, &[TEST_PIPELINE_A, TEST_PIPELINE_B], TEST_AGENT).await;
 
     let id = store
         .create_pipeline(TEST_PIPELINE_A, VALID_SPEC)
@@ -55,6 +72,7 @@ async fn pipeline_crud_and_validation() {
 #[tokio::test]
 async fn agent_crud_and_card_link() {
     let store = Store::connect(Store::default_url()).await.expect("connect");
+    cleanup(&store, &[TEST_PIPELINE_LINK], TEST_AGENT).await;
 
     let cfg = AgentConfigRow {
         id: 0,
@@ -113,7 +131,7 @@ async fn agent_crud_and_card_link() {
         .await
         .expect("add card");
     let pipe_id = store
-        .create_pipeline(TEST_PIPELINE_A, VALID_SPEC)
+        .create_pipeline(TEST_PIPELINE_LINK, VALID_SPEC)
         .await
         .expect("create pipeline for link");
     store

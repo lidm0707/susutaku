@@ -16,12 +16,20 @@ members = [
     "crates/manager-rs",
     "crates/piplines",
     "crates/work",
-    "crates/agent_3th_cli/ai_interface_layer",
-    "crates/agent_3th_cli/zai_api",
+    "crates/cloud_model_api/ai_interface_layer",
+    "crates/cloud_model_api/zai_api",
     "crates/prompt-sys",
     "crates/design_render",
     "crates/prompt_bench",
     "crates/codex-usage-rs",
+    "crates/git-rs",
+    "crates/lsp-rs",
+    "crates/latenspace",
+    "crates/knowledge_graph",
+    "crates/modelless",
+    "crates/token_gate_adapter",
+    "crates/wgpu-rs",
+    "crates/research-rs",
 ]
 
 [workspace.package]
@@ -33,6 +41,11 @@ license = "Apache-2.0"
 hf_loader = { path = "crates/hf_loader" }
 susutaku-mlx = { path = "crates/mlx-rs" }
 gguf-rs = { path = "crates/gguf-rs" }
+git-rs = { path = "crates/git-rs" }
+lsp-rs = { path = "crates/lsp-rs" }
+latenspace = { path = "crates/latenspace" }
+knowledge-graph = { path = "crates/knowledge_graph" }
+token-gate-adapter = { path = "crates/token_gate_adapter" }
 pdf-rs = { path = "crates/pdf-rs" }
 kanban-rs = { path = "crates/kanban-rs" }
 codex-usage-rs = { path = "crates/codex-usage-rs" }
@@ -44,6 +57,8 @@ work = { path = "crates/work" }
 core-agent = { path = "crates/core-agent" }
 proto-rs = { path = "crates/proto-rs" }
 local-model = { path = "crates/local_model" }
+wgpu-rs = { path = "crates/wgpu-rs" }
+research-rs = { path = "crates/research-rs" }
 ureq = "2"
 serde_json = "1"
 pdf-extract = "0.7"

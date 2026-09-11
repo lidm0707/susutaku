@@ -1,18 +1,22 @@
 # Client-node test container: a minimal worker machine that runs the backend
 # binary as a sandbox client (SUSUTAKU_HUB_ADDR points at the hub service).
-# Reuses the built backend artifact from the already-built backend image.
+# Reuses the built backend artifact from the already-built deploy backend
+# image (includes podman + the sandbox image tooling).
 #
-#   docker compose -f docker/docker-compose.client-test.yml up --build -d
+#   docker build -t susutaku-deploy-backend -f docker/backend/Dockerfile.backend .
+#   docker compose -f docker/compose/client-test.yml up --build -d
 #
-# Needs the same security_opt as the backend: the client executes hub
-# commands inside the rootless sandbox (by design, no unsandboxed fallback).
+# Needs privileged + /dev/fuse like the deploy backend: the client executes
+# hub commands inside nested rootless podman (by design, no unsandboxed
+# fallback).
 FROM debian:stable-slim
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
-
-COPY --from=susutaku-sandbox-backend:latest /usr/local/bin/backend /usr/local/bin/backend
+# Agent work trees (work/agents/<name>) are relative to the process cwd;
+# pin it so they land in /app like on the backend.
+WORKDIR /app
+COPY --from=susutaku-deploy-backend:latest /usr/local/bin/backend /usr/local/bin/backend
+COPY --from=susutaku-deploy-backend:latest /etc/containers /etc/containers
+COPY --from=susutaku-deploy-backend:latest /usr/share/susutaku/sandbox /usr/share/susutaku/sandbox
 
 # Client-node identity: registers with the hub as a worker, serves hub
 # commands in its own rootless sandbox.

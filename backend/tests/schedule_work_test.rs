@@ -10,7 +10,7 @@ use backend::app::kanban::KanbanApp;
 use backend::app::schedule_work::{self, ScheduleHandle};
 use backend::port::outbound::{
     MockAgentConfigRepo, MockCardRepo, MockCommentRepo, MockPipelineRepo, MockProjectRepo,
-    MockWorkspaceRepo,
+    MockResourceRepo, MockWorkspaceRepo,
 };
 
 const CARD_ID: i64 = 5;
@@ -49,6 +49,7 @@ fn app(cards: MockCardRepo, pipelines: MockPipelineRepo) -> Arc<KanbanApp> {
         Arc::new(cards),
         Arc::new(MockCommentRepo::new()),
         Arc::new(pipelines),
+        Arc::new(MockResourceRepo::new()),
         Arc::new(MockAgentConfigRepo::new()),
         Arc::new(MockWorkspaceRepo::new()),
         Arc::new(MockProjectRepo::new()),

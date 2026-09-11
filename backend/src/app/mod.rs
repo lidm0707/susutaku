@@ -1,10 +1,12 @@
 //! Application layer: compound services (use cases). Each orchestrates domain
 //! services through ports, never touching infrastructure directly.
 
+pub mod board;
 pub mod chat;
 pub mod kanban;
 pub mod pipeline_run;
 pub mod say_hi;
 pub mod schedule_work;
 
+pub use board::BoardService;
 pub use chat::ChatUseCase;

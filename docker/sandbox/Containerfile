@@ -1,0 +1,15 @@
+# Default sandbox image for agent commands (see core-agent sandbox_jail::podman).
+# Build: make sandbox-image
+FROM debian:stable-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        bash \
+        ca-certificates \
+        curl \
+        git \
+        build-essential \
+        pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV PATH=/usr/bin:/bin:/usr/sbin:/sbin
+WORKDIR /workspace

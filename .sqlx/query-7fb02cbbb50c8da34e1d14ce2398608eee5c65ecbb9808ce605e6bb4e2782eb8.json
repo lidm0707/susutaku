@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO pipeline_resources (card_id, name, content) VALUES ($1, $2, $3)\n               ON CONFLICT (card_id, name) DO UPDATE SET content = EXCLUDED.content, created_at = now()",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "7fb02cbbb50c8da34e1d14ce2398608eee5c65ecbb9808ce605e6bb4e2782eb8"
+}

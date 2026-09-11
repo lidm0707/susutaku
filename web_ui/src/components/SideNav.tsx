@@ -14,6 +14,7 @@ import {
   Workflow,
   MessageSquareText,
   Gauge,
+  GitPullRequest,
 } from "lucide-react";
 import { use_workspaces } from "./WorkspaceContext.tsx";
 import {
@@ -31,6 +32,7 @@ import {
 import { ActivityModal } from "./ActivityModal.tsx";
 import { Modal, PromptModal } from "../ui/Overlay.js";
 import { AgentInspect, MachinesModal } from "./MachinesModal.tsx";
+import { AgentOutputsModal } from "./AgentOutputsModal.tsx";
 import { toast } from "../ui/Toast.js";
 import { use_projects } from "./ProjectContext.tsx";
 import QuotaBoard from "./QuotaBoard.tsx";
@@ -75,7 +77,7 @@ function AgentLogsModal({ agent, on_close }: { agent: string | null; on_close: (
       {logs && agent != null && (
         <div className="agent-logs">
           <div className="agent-logs-meta">
-            <span className="agent-logs-label">work_tree</span>
+            <span className="agent-logs-label">agent {logs.agent} on {logs.machine}</span>
             <code className="dock-agent-path" title={logs.work_tree}>{logs.work_tree}</code>
             <span className="agent-logs-label">{logs.runs} runs</span>
           </div>
@@ -98,6 +100,7 @@ export default function SideNav({ on_chat }: { on_chat: () => void }) {
   const [profile_open, set_profile_open] = useState(false);
   const [pw_open, set_pw_open] = useState(false);
   const [machines_open, set_machines_open] = useState(false);
+  const [outputs_open, set_outputs_open] = useState(false);
   const [logs_agent, set_logs_agent] = useState<string | null>(null);
   const [activity_open, set_activity_open] = useState(false);
   const [quota_open, set_quota_open] = useState(false);
@@ -186,6 +189,18 @@ export default function SideNav({ on_chat }: { on_chat: () => void }) {
         </div>
         <div className="dock-profile">
           <button
+            className={`dock-profile-btn ${outputs_open ? "open" : ""}`}
+            onClick={() => set_outputs_open((v) => !v)}
+            title="agent outputs"
+            aria-haspopup="dialog"
+            aria-expanded={outputs_open}
+          >
+            <GitPullRequest size={16} />
+            <span className="dock-label">outputs</span>
+          </button>
+        </div>
+        <div className="dock-profile">
+          <button
             className={`dock-profile-btn ${activity_open ? "open" : ""}`}
             onClick={toggle_activity}
             title="activity"
@@ -215,6 +230,7 @@ export default function SideNav({ on_chat }: { on_chat: () => void }) {
       <ChangePasswordModal open={pw_open} on_close={() => set_pw_open(false)} on_done={() => nav("/", { replace: true })} />
       <AgentLogsModal agent={logs_agent} on_close={() => set_logs_agent(null)} />
       <MachinesModal open={machines_open} on_close={() => set_machines_open(false)} />
+      <AgentOutputsModal open={outputs_open} on_close={() => set_outputs_open(false)} />
       <ActivityModal open={activity_open} on_close={() => set_activity_open(false)} />
     </nav>
   );

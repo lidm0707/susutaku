@@ -19,6 +19,13 @@ services:
       - deploy-pgdata:/var/lib/postgresql/data
     restart: unless-stopped
 
+  # Vector store for Qdrant chat memory (plan 34). Internal only.
+  qdrant:
+    image: qdrant/qdrant:latest
+    volumes:
+      - deploy-qdrant:/qdrant/storage
+    restart: unless-stopped
+
   mock-model:
     build:
       context: ../..
@@ -42,6 +49,13 @@ services:
       # setting.json (zai keys, system prompt, client env) on a volume so
       # settings survive redeploys.
       SUSUTAKU_SETTINGS: /data/settings/setting.json
+      QDRANT_URL: http://qdrant:6333
+      QDRANT_COLLECTION: ${QDRANT_COLLECTION:-chat_memory}
+      # Unset by default: chat memory off (no embeddings endpoint is bundled;
+      # mock-model serves chat only). Point at an OpenAI-compatible endpoint,
+      # e.g. http://host.docker.internal:11434/v1/embeddings
+      SUSUTAKU_EMBEDDINGS_URL: ${SUSUTAKU_EMBEDDINGS_URL:-}
+      QDRANT_API_KEY: ${QDRANT_API_KEY:-}
     ports:
       # OAuth loopback callback for `codex login`: the browser's redirect to
       # http://localhost:1455 must reach the CLI listener inside the container.
@@ -49,11 +63,21 @@ services:
     volumes:
       - codex-home:/data/codex-home
       - settings:/data/settings
+      # podman storage + sandbox image cache survive redeploys
+      - podman-storage:/var/lib/containers/storage
     security_opt:
       - seccomp=unconfined
       - apparmor=unconfined
+    devices:
+      # rootless podman storage (fuse-overlayfs) inside the container
+      - /dev/fuse:/dev/fuse
+    # Nested rootless podman needs writable /proc/sys + cgroups, which no
+    # combination of sysctls/devices can give inside an unprivileged
+    # container — privileged is the supported mode for podman-in-podman.
+    privileged: true
     depends_on:
       - postgres
+      - qdrant
       - mock-model
     restart: unless-stopped
 
@@ -72,5 +96,7 @@ services:
 
 volumes:
   deploy-pgdata:
+  deploy-qdrant:
   codex-home:
   settings:
+  podman-storage:

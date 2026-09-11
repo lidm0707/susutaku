@@ -12,6 +12,7 @@ import {
   fetch_cronjobs,
   fetch_pipelines,
   fetch_users,
+  fetch_agent_machine,
   move_card,
   remove_card,
   set_agent,
@@ -135,6 +136,7 @@ export default function Kanban() {
   const [agentFor, setAgentFor] = useState<Card | null>(null);
   const [agentName, setAgentName] = useState("");
   const [agentState, setAgentState] = useState("{}");
+  const [agentMachine, setAgentMachine] = useState<string | null>(null);
   const [savedAgents, setSavedAgents] = useState<Agent[]>([]);
   const [pipeFor, setPipeFor] = useState<Card | null>(null);
   const [pipePick, setPipePick] = useState("");
@@ -242,6 +244,12 @@ export default function Kanban() {
     setAgentState(
       card.agent_state ? JSON.stringify(card.agent_state, null, 2) : "{}"
     );
+    setAgentMachine(null);
+    if (card.agent_name) {
+      fetch_agent_machine(card.agent_name)
+        .then((w) => setAgentMachine(w.machine))
+        .catch(() => setAgentMachine(""));
+    }
     fetch_agents().then(setSavedAgents).catch(() => setSavedAgents([]));
   }
 
@@ -677,9 +685,7 @@ export default function Kanban() {
         </button>
       </div>
       {view === VIEW_BOARD ? (
-        <section
-          className={visibleColumns.length === COLUMNS.length ? "kanban" : "kanban two-cols"}
-        >
+        <section className="kanban">
           {visibleColumns.map((col) => (
           <div
             key={col.id}
@@ -858,6 +864,15 @@ export default function Kanban() {
               onChange={(e) => setAgentName(e.target.value)}
               placeholder="agent name (e.g. qwen-agent)"
             />
+            {agentName.trim() && (
+              <p className="modal-hint">
+                {agentMachine == null
+                  ? "checking where this agent runs…"
+                  : agentMachine
+                    ? `runs on ${agentMachine}`
+                    : "not running on any machine right now"}
+              </p>
+            )}
             <textarea
               value={agentState}
               onChange={(e) => setAgentState(e.target.value)}

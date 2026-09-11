@@ -1,10 +1,6 @@
 //! Chat memory port: long-term semantic storage of chat exchanges.
 
-/// One recalled past exchange.
-pub struct MemoryHit {
-    pub role: String,
-    pub text: String,
-}
+use crate::domain::MemoryHit;
 
 /// Port: remembers chat entries and recalls the ones similar to a query.
 pub trait ChatMemory: Send + Sync + 'static {

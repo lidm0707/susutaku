@@ -3,7 +3,7 @@ use proto_rs::envelope::{Envelope, Kind};
 use proto_rs::server::{self, ClientConn, Registry};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
 
@@ -28,6 +28,38 @@ async fn registry_default_is_empty() {
 }
 
 #[tokio::test]
+async fn register_without_metadata_is_refused() {
+    let (listener, addr) = bind_loopback().await;
+    let registry = Arc::new(Registry::new());
+    let mut connected = spawn_serve(listener, Arc::clone(&registry)).await;
+
+    let mut stream = TcpStream::connect(addr).await.expect("connect");
+    let _conn = connected.recv().await.expect("conn");
+    write_frame(
+        &mut stream,
+        &Envelope {
+            id: 1,
+            kind: Kind::Register {
+                hostname: "h".into(),
+                os: "o".into(),
+                arch: String::new(),
+                role: String::new(),
+                ram_gib: 0,
+            },
+        },
+    )
+    .await
+    .expect("register");
+    // No metadata, no registration: the hub closes the socket and the
+    // registry stays empty.
+    let mut buf = [0u8; 16];
+    let n = stream.read(&mut buf).await.expect("read after refusal");
+    assert_eq!(n, 0, "hub must close the socket without replying");
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    assert!(registry.ids().is_empty());
+}
+
+#[tokio::test]
 async fn outbound_write_error_breaks_writer_and_frees_registry() {
     let (listener, addr) = bind_loopback().await;
     let registry = Arc::new(Registry::new());
@@ -43,6 +75,7 @@ async fn outbound_write_error_breaks_writer_and_frees_registry() {
                 Envelope {
                     id: i,
                     kind: Kind::Command {
+                        agent: String::new(),
                         cmd: "x".repeat(1024 * 1024),
                     },
                 },
@@ -158,6 +191,9 @@ async fn inbound_envelope_reaches_conn_rx_and_register_is_skipped() {
             kind: Kind::Register {
                 hostname: "h".into(),
                 os: "o".into(),
+                arch: "aarch64".into(),
+                role: "worker".into(),
+                ram_gib: 16,
             },
         },
     )
@@ -167,7 +203,10 @@ async fn inbound_envelope_reaches_conn_rx_and_register_is_skipped() {
         &mut stream,
         &Envelope {
             id: 2,
-            kind: Kind::Command { cmd: "hi".into() },
+            kind: Kind::Command {
+                agent: String::new(),
+                cmd: "hi".into(),
+            },
         },
     )
     .await
@@ -175,7 +214,7 @@ async fn inbound_envelope_reaches_conn_rx_and_register_is_skipped() {
 
     let env = conn.rx.recv().await.expect("inbound");
     assert_eq!(env.id, 2);
-    assert!(matches!(env.kind, Kind::Command { ref cmd } if cmd == "hi"));
+    assert!(matches!(env.kind, Kind::Command { ref cmd, .. } if cmd == "hi"));
 
     drop(conn.rx);
     write_frame(

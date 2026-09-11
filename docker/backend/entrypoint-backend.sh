@@ -14,4 +14,13 @@ if [ -n "$CONTAINER_IP" ]; then
         "TCP4:127.0.0.1:1455" &
 fi
 
+# Build the default sandbox image once (cached in the podman storage volume
+# across restarts; skipped when it already exists).
+if command -v podman >/dev/null 2>&1 \
+    && ! podman image exists localhost/susutaku-sandbox:latest; then
+    podman build -f /usr/share/susutaku/sandbox/Containerfile \
+        -t localhost/susutaku-sandbox:latest /usr/share/susutaku/sandbox \
+        || echo "sandbox image build failed; sandbox runs will error until it exists"
+fi
+
 exec /usr/local/bin/backend

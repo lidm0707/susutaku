@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use zai_api::client::{DEFAULT_MODEL, ENV_API_KEY};
 
 use super::client_env::{self, ClientEnv};
+use super::git_repos::{self, GitRepo};
 use super::local_settings;
 
 pub const SETTINGS_FILE: &str = "setting.json";
@@ -40,7 +41,8 @@ pub fn parse_hhmm(value: &str) -> Result<(u32, u32), String> {
         if p.len() != 2 || !p.bytes().all(|b| b.is_ascii_digit()) {
             return Err(format!("invalid time {value:?}: expected HH:MM"));
         }
-        p.parse::<u32>().map_err(|_| format!("invalid time {value:?}"))
+        p.parse::<u32>()
+            .map_err(|_| format!("invalid time {value:?}"))
     };
     let (h, m) = (parse(parts[0])?, parse(parts[1])?);
     if h >= HOURS || m >= MINUTES {
@@ -96,6 +98,7 @@ pub struct SettingsState {
     system_prompt: RwLock<String>,
     local_endpoint: RwLock<String>,
     alert_webhook: RwLock<Option<String>>,
+    git_repos: RwLock<Vec<GitRepo>>,
 }
 
 impl SettingsState {
@@ -111,6 +114,7 @@ impl SettingsState {
                     .unwrap_or_default(),
             ),
             alert_webhook: RwLock::new(super::alerts::read_webhook()),
+            git_repos: RwLock::new(git_repos::read(&doc)),
         }
     }
 
@@ -155,6 +159,80 @@ impl SettingsState {
             .local_endpoint
             .write()
             .unwrap_or_else(|e| e.into_inner()) = url.to_owned();
+        Ok(())
+    }
+
+    /// Repo URLs with `secret_set` flags; secrets never leave the backend.
+    pub fn git_repos(&self) -> Vec<GitRepo> {
+        self.git_repos
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    pub fn git_repo(&self, project_id: i64) -> Option<GitRepo> {
+        self.git_repos()
+            .into_iter()
+            .find(|r| r.project_id == project_id)
+    }
+
+    /// `secret: None` keeps the stored secret; `Some("")` clears it.
+    pub fn set_git_repo(
+        &self,
+        project_id: i64,
+        url: &str,
+        secret: Option<&str>,
+    ) -> Result<(), String> {
+        let url = url.trim();
+        git_repos::validate_url(url)?;
+        if let Some(s) = secret.filter(|s| !s.is_empty()) {
+            git_repos::validate_secret(s)?;
+        }
+        let stored_secret = self.git_repo(project_id).and_then(|r| r.secret);
+        let mut repos = self.git_repos.write().unwrap_or_else(|e| e.into_inner());
+        let entry = match repos.iter_mut().find(|r| r.project_id == project_id) {
+            Some(entry) => {
+                entry.url = url.to_owned();
+                entry
+            }
+            None => {
+                repos.push(GitRepo {
+                    project_id,
+                    url: url.to_owned(),
+                    secret: None,
+                });
+                repos.last_mut().ok_or("repos is empty")?
+            }
+        };
+        match secret {
+            Some(s) => {
+                let s = s.trim();
+                entry.secret = (!s.is_empty()).then(|| s.to_owned());
+            }
+            None => entry.secret = stored_secret,
+        }
+        let snap = repos.clone();
+        drop(repos);
+        self.write_git_repos(&snap)
+    }
+
+    pub fn remove_git_repo(&self, project_id: i64) -> Result<(), String> {
+        let mut repos = self.git_repos.write().unwrap_or_else(|e| e.into_inner());
+        let before = repos.len();
+        repos.retain(|r| r.project_id != project_id);
+        if repos.len() == before {
+            return Err(format!("repo for project {project_id} not found"));
+        }
+        let snap = repos.clone();
+        drop(repos);
+        self.write_git_repos(&snap)
+    }
+
+    fn write_git_repos(&self, repos: &[GitRepo]) -> Result<(), String> {
+        let mut doc = read_doc();
+        git_repos::write(&mut doc, repos);
+        write_doc(&doc)?;
+        *self.git_repos.write().unwrap_or_else(|e| e.into_inner()) = repos.to_owned();
         Ok(())
     }
 

@@ -7,7 +7,8 @@ use std::sync::RwLock;
 use susutaku_mlx::stats::GenStats;
 use susutaku_mlx::tok::TokKind;
 
-use crate::port::outbound::{GenReply, Inference, ModelEndpoint, ModelSwitch, ReplyRx};
+use crate::domain::{GenReply, ReplyRx};
+use crate::port::outbound::{Inference, ModelEndpoint, ModelSwitch};
 
 const HTTP_OK_RANGE: std::ops::Range<u16> = 200..300;
 const MODELS_PATH: &str = "/api/models";

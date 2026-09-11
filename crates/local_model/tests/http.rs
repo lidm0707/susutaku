@@ -78,9 +78,15 @@ async fn hub_registration_and_dispatch() {
     let client_task = tokio::spawn(async move {
         client::connect(
             &tcp_str,
-            "worker-1".to_string(),
-            "macos".to_string(),
-            |cmd| format!("ran:{cmd}"),
+            proto_rs::ClientMeta {
+                hostname: "worker-1".to_string(),
+                os: "macos".to_string(),
+                arch: "aarch64".to_string(),
+                role: "worker".to_string(),
+                ram_gib: 16,
+            },
+            |_agent, cmd| format!("ran:{cmd}"),
+            || Vec::new(),
         )
         .await
     });
@@ -112,6 +118,16 @@ async fn hub_registration_and_dispatch() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert!(body.contains("ran:ls"), "command body: {body}");
+
+    let (status, body) = request(
+        http_addr,
+        "POST",
+        "/api/clients/1/command",
+        &serde_json::json!({ "cmd": "ls", "agent": "fix-login" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("ran:ls"), "agent command body: {body}");
 
     client_task.abort();
 }

@@ -4,11 +4,12 @@
 use std::sync::Arc;
 
 use crate::domain::{
-    Prompt, SearchMode, SearchResult, TOOL_RESULT_HEADER, TOOL_ROUNDS_MAX, ToolCall,
+    BoardOp, BoardRequest, ChatCmd, ChatOutcome, GenReply, Prompt, SearchMode, SearchResult,
+    TOOL_RESULT_HEADER, TOOL_ROUNDS_MAX, ToolCall,
 };
-use crate::port::inbound::{ChatCmd, ChatHandling, ChatOutcome};
+use crate::port::inbound::ChatHandling;
 use crate::port::outbound::{
-    ChatMemory, Fetcher, GenReply, Inference, ModelSwitch, Runner, Searcher,
+    BoardOps, ChatMemory, Fetcher, Inference, ModelSwitch, Runner, Searcher,
 };
 use susutaku_mlx::tok::TokKind;
 
@@ -22,6 +23,7 @@ pub struct ChatUseCase {
     engine: Arc<dyn Inference>,
     models: Arc<dyn ModelSwitch>,
     memory: Option<Arc<dyn ChatMemory>>,
+    board: Arc<dyn BoardOps>,
 }
 
 impl ChatUseCase {
@@ -33,6 +35,7 @@ impl ChatUseCase {
         engine: Arc<dyn Inference>,
         models: Arc<dyn ModelSwitch>,
         memory: Option<Arc<dyn ChatMemory>>,
+        board: Arc<dyn BoardOps>,
     ) -> Self {
         Self {
             searcher,
@@ -41,6 +44,7 @@ impl ChatUseCase {
             engine,
             models,
             memory,
+            board,
         }
     }
 
@@ -85,6 +89,36 @@ impl ChatUseCase {
         tokio::task::spawn_blocking(move || runner.run(&owned))
             .await
             .map_err(|_| "shell task panicked".to_string())?
+    }
+
+    fn board_op(call: &ToolCall) -> Option<BoardOp> {
+        match call {
+            ToolCall::PipelineCreate(name) => Some(BoardOp::CreatePipeline { name: name.clone() }),
+            ToolCall::CardCreate { project_id, title } => Some(BoardOp::CreateCard {
+                project_id: *project_id,
+                title: title.clone(),
+            }),
+            ToolCall::CardLink {
+                card_id,
+                pipeline_id,
+            } => Some(BoardOp::LinkPipeline {
+                card_id: *card_id,
+                pipeline_id: *pipeline_id,
+            }),
+            ToolCall::CardSchedule { card_id, cron } => Some(BoardOp::SetCron {
+                card_id: *card_id,
+                cron: Some(cron.clone()),
+            }),
+            ToolCall::BoardList => Some(BoardOp::Summary),
+            _ => None,
+        }
+    }
+
+    async fn board_blocking(&self, token: Option<String>, op: BoardOp) -> String {
+        match self.board.exec(BoardRequest { token, op }).await {
+            Ok(out) => out,
+            Err(e) => format!("error: {e}"),
+        }
     }
 
     /// Recalls similar past exchanges; memory problems degrade to empty.
@@ -135,7 +169,12 @@ impl ChatHandling for ChatUseCase {
             context.push_str(&Prompt::format_results(&cmd.message, &results));
         }
 
-        let mut prompt = Prompt::build(&cmd.message, &context, allow_tools);
+        let mut prompt = Prompt::build(
+            &cmd.message,
+            &context,
+            allow_tools,
+            cmd.board_token.is_some(),
+        );
         let mut reply = self
             .infer(prompt, cmd.max_tokens, cmd.tokenizer, cmd.think)
             .await?;
@@ -160,8 +199,21 @@ impl ChatHandling for ChatUseCase {
                     context.push_str(TOOL_RESULT_HEADER);
                     context.push_str(&out);
                 }
+                call if Self::board_op(&call).is_some() => {
+                    let token = cmd.board_token.clone();
+                    let op = Self::board_op(&call).expect("matched guard");
+                    let out = self.board_blocking(token, op).await;
+                    context.push_str(TOOL_RESULT_HEADER);
+                    context.push_str(&out);
+                }
+                _ => unreachable!("next_call only yields parsed variants"),
             }
-            prompt = Prompt::build(&cmd.message, &context, allow_tools);
+            prompt = Prompt::build(
+                &cmd.message,
+                &context,
+                allow_tools,
+                cmd.board_token.is_some(),
+            );
             reply = self
                 .infer(prompt, cmd.max_tokens, cmd.tokenizer, cmd.think)
                 .await?;
@@ -172,7 +224,7 @@ impl ChatHandling for ChatUseCase {
         if allow_tools && rounds > 0 && ToolCall::parse(&reply.text).is_some() {
             reply = self
                 .infer(
-                    Prompt::build(&cmd.message, &context, false),
+                    Prompt::build(&cmd.message, &context, false, false),
                     cmd.max_tokens,
                     cmd.tokenizer,
                     cmd.think,

@@ -25,8 +25,16 @@ FROM debian:stable-slim AS backend-runtime
 # socat: relays the published 1455 callback port to codex's 127.0.0.1 listener.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl nodejs npm socat \
+        podman fuse-overlayfs nftables \
     && rm -rf /var/lib/apt/lists/* \
     && npm install -g @openai/codex
+# Nested rootless podman: OrbStack-style cgroup hierarchies don't support
+# nested controllers, so containers run without their own cgroups.
+RUN mkdir -p /etc/containers/containers.conf.d \
+    && printf '[containers]\ncgroups = "disabled"\n' \
+        > /etc/containers/containers.conf.d/99-nested.conf
+# Sandbox base image is built once at container start (see entrypoint).
+COPY docker/sandbox/Containerfile /usr/share/susutaku/sandbox/Containerfile
 COPY docker/backend/entrypoint-backend.sh /usr/local/bin/docker-entrypoint
 RUN chmod +x /usr/local/bin/docker-entrypoint
 COPY --from=build /app/target/release/backend /usr/local/bin/backend

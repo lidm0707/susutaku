@@ -9,6 +9,7 @@ pub mod client_node;
 pub mod codex_auth;
 pub mod codex_chat;
 pub mod codex_usage;
+pub mod git_repos;
 pub mod host_spec;
 pub mod install;
 pub mod kanban;

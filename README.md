@@ -44,7 +44,8 @@ plan → pipeline of stages → manager process spawns sandboxed agents → resu
 | `crates/kanban-rs` | Kanban model + Postgres store (plan/task tracking) |
 | `crates/pdf-rs` | PDF parsing |
 | `crates/gguf-rs` | GGUF model file parsing |
-| `crates/agent_3th_cli/` | `claude_cli`, `codex_cli`, `zai_api`, `ai_interface_layer` |
+| `crates/agent_3th_cli/` | `claude_cli`, `codex_cli` |
+| `crates/cloud_model_api/` | `zai_api`, `ai_interface_layer` |
 | `crates/work` | Applications/services built on the crates above |
 | `crates/queue-rs` | Queueing |
 | `crates/prompt-sys` | Prompt handling |

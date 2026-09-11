@@ -6,13 +6,16 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use kanban_rs::{
     AddCard, AgentConfigRow, AgentConfigUpdate, AgentState, CardRow, CommentRow, DbTx, MoveCard,
-    PipelineRow, ProjectRow, Store, StoreError, UpdateCard, WorkspaceRow,
+    PipelineRow, ProjectRow, ResourceRow, Store, StoreError, UpdateCard, UpsertResource,
+    WorkspaceRow,
 };
 
+use crate::domain::{
+    AgentConfigDraft, CardMove, CardPatch, NewCard, NewPipeline, NewProject, NewWorkspace,
+};
 use crate::port::outbound::{
-    AgentConfigDraft, AgentConfigRepo, CardMove, CardPatch, CardRepo, CardTx, CommentRepo,
-    CommentTx, NewCard, NewPipeline, NewProject, NewWorkspace, PipelineRepo, PipelineTx,
-    ProjectRepo, WorkspaceRepo,
+    AgentConfigRepo, CardRepo, CardTx, CommentRepo, CommentTx, PipelineRepo, PipelineTx,
+    ProjectRepo, ResourceRepo, WorkspaceRepo,
 };
 
 pub const DATABASE_URL_ENV: &str = "DATABASE_URL";
@@ -297,6 +300,17 @@ impl PipelineTx for PgPipelineTx {
 
     async fn rollback(self: Box<Self>) -> Result<(), StoreError> {
         rollback_tx(self.tx).await
+    }
+}
+
+#[async_trait]
+impl ResourceRepo for PgKanban {
+    async fn upsert<'a>(&self, res: UpsertResource<'a>) -> Result<(), StoreError> {
+        self.store().upsert_resource(res).await
+    }
+
+    async fn list(&self, card_id: i64) -> Result<Vec<ResourceRow>, StoreError> {
+        self.store().list_resources(card_id).await
     }
 }
 

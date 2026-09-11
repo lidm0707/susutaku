@@ -28,6 +28,10 @@ pub const DEFAULT_HTTP_PORT: u16 = 8992;
 pub const DEFAULT_TCP_PORT: u16 = 8993;
 pub const SERVER_URL_ENV: &str = "SUSUTAKU_LOCAL_MODEL_URL";
 pub const HUB_ADDR_ENV: &str = "SUSUTAKU_HUB_ADDR";
+/// Client registration metadata (see `proto_rs::ClientMeta`): the hub refuses
+/// machines that register without these.
+pub const CLIENT_ROLE_ENV: &str = "SUSUTAKU_CLIENT_ROLE";
+pub const CLIENT_RAM_ENV: &str = "SUSUTAKU_CLIENT_RAM_GIB";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Role {
@@ -171,6 +175,8 @@ if [ "$role" = model ]; then
 else
     export {SERVER_URL_ENV}="http://$server_host:{DEFAULT_HTTP_PORT}"
     export {HUB_ADDR_ENV}="$server_host:{DEFAULT_TCP_PORT}"
+    export {CLIENT_ROLE_ENV}="$role"
+    export {CLIENT_RAM_ENV}="$ram_gib"
     nohup ./target/release/backend >{INSTALL_ROOT}/backend.log 2>&1 &
     echo "backend started (pid $!), registers with hub $server_host:{DEFAULT_TCP_PORT}"
     echo "logs: {INSTALL_ROOT}/backend.log"

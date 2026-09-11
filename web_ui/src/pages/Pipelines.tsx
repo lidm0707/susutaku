@@ -11,6 +11,7 @@ import {
   type Edge,
   type Node,
   type NodeProps,
+  type FinalConnectionState,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import {
@@ -18,6 +19,7 @@ import {
   Globe,
   Image,
   Package,
+  Play,
   Plus,
   Save,
   Search,
@@ -33,8 +35,13 @@ import {
   update_pipeline,
   fetch_agents,
   upload_attachment,
+  fetch_pipeline_schema,
+  test_pipeline,
   type Pipeline,
   type PipelineSpec,
+  type PipelineSchema,
+  type PipelineRunRecord,
+  type PortKind,
 } from "../lib.js";
 import { PromptModal } from "../ui/Overlay.js";
 import { toast } from "../ui/Toast.js";
@@ -56,92 +63,110 @@ const STAGES = [
 
 type Stage = (typeof STAGES)[number];
 
-/// Stage picker metadata: the 4 basic nodes with icon + one-liner.
-const BASIC_NODES: {
-  stage: Stage;
-  label: string;
-  desc: string;
-  Icon: typeof Globe;
-}[] = [
+// palette = stages wired to a runtime engine (mirrors backend WIRED_STAGES);
+// legacy stages (old saved specs) stay parseable and are flagged in the UI
+const BASIC_NODES: { stage: Stage; label: string; desc: string; Icon: typeof Globe }[] = [
   { stage: "fetch", label: "fetch", desc: "download a url", Icon: Globe },
   { stage: "search", label: "search", desc: "search the web", Icon: Search },
   { stage: "ref_image", label: "reference image", desc: "attach an image", Icon: Image },
   { stage: "agent", label: "agent", desc: "pick which agent runs", Icon: Bot },
+  { stage: "transform", label: "transform", desc: "upper / lower / trim", Icon: Workflow },
   { stage: "output_resource", label: "output", desc: "save the result", Icon: Package },
 ];
 const BASIC_STAGES = new Set(BASIC_NODES.map((n) => n.stage));
-
-/// Per-stage param fields + usage shown in the inspector.
-const STAGE_FIELDS: Partial<Record<Stage, { key: string; hint: string }[]>> = {
-  fetch: [
-    { key: "url", hint: "http(s) url to fetch" },
-    { key: "method", hint: "http method, default GET" },
-  ],
-  search: [{ key: "query", hint: "web search query" }],
-  ref_image: [{ key: "path", hint: "uploaded image path" }],
-  agent: [{ key: "agent", hint: "agent name from Agents settings" }],
-  output_resource: [{ key: "name", hint: "resource name to write result to" }],
-};
-
-/// How to use each node: what it does, what input it takes, what it emits.
-const STAGE_DOCS: Record<Stage, string> = {
-  fetch:
-    "downloads the resource at params.url and emits the raw body as text downstream. " +
-    "usually the first node; drag from its bottom dot into the next node's top dot.",
-  search:
-    "runs params.query as a web search and emits the results as text. " +
-    "pair it with a model_infer/raw node to summarize the hits.",
-  ref_image:
-    "upload an image from this machine; it is stored on the server under attachments/ " +
-    "and the stored path is attached to the payload for later nodes. " +
-    "place it before a model_infer/raw node that can read the image.",
-  output_resource:
-    "writes the incoming payload to the resource named params.name. " +
-    "use as the last node of a branch; it passes the payload through.",
-  agent:
-    "selects the configured agent (params.agent, from Agents settings) for the downstream " +
-    "model_infer/raw nodes. place it before the node that calls the model.",
-  ingest:
-    "legacy: reads the input payload into the pipeline. kept for old saved specs.",
-  parse:
-    "legacy: parses raw text (e.g. json) into a structured payload. kept for old specs.",
-  transform:
-    "legacy: reshapes the payload fields. kept for old saved specs.",
-  model_infer:
-    "legacy: sends the payload to the selected model and emits the reply. kept for old specs.",
-  render:
-    "legacy: renders the payload to its final text form. kept for old specs.",
-};
 
 const DEBOUNCE_MS = 800;
 const SAVING_MARK = "saving…";
 const SAVED_MARK = "saved";
 
+/// CSS handle class per port kind, so the user sees what connects to what.
+const PORT_CLASS: Record<PortKind, string> = {
+  any: "port-any",
+  text: "port-text",
+  json: "port-json",
+  image: "port-image",
+};
+
+function ports_compatible(schema: PipelineSchema, out: string, inp: string): boolean {
+  const src = schema[out];
+  const dst = schema[inp];
+  if (!src || !dst) return true;
+  return src.output === "any" || dst.input === "any" || src.output === dst.input;
+}
+
 const NODE_X_STEP = 280;
 const NODE_Y_STEP = 110;
 const NODE_ORIGIN_X = 60;
 const NODE_ORIGIN_Y = 40;
+/// px radius around a handle where a drop still connects (n8n-style magnet).
+const DOCK_DROP_RADIUS = 32;
 
-type FlowData = { stage: Stage; params: string };
+type FlowData = {
+  stage: Stage;
+  params: string;
+  input?: PortKind;
+  output?: PortKind;
+  run?: RunStatusKind;
+};
 
 type FlowNode = Node<FlowData>;
 
+/// Per-node run status from the latest test run: undefined = not run.
+type RunStatusKind = "ok" | "failed";
+const run_by_node = (run: PipelineRunRecord | null): Map<string, RunStatusKind> => {
+  const map = new Map<string, RunStatusKind>();
+  if (run) for (const s of run.stages) map.set(s.node, s.status);
+  return map;
+};
+
 function StageNode({ data, selected }: NodeProps<FlowNode>) {
+  const unwired = SCHEMA[data.stage] && SCHEMA[data.stage].wired === false;
+  const cls = [
+    selected ? "pipe-node selected" : "pipe-node",
+    unwired ? "pipe-node-unwired" : "",
+    data.run ? `pipe-node-${data.run}` : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
   return (
-    <div className={selected ? "pipe-node selected" : "pipe-node"} title={STAGE_DOCS[data.stage]}>
-      <Handle type="target" position={Position.Top} />
-      <span className="pipe-node-stage">{data.stage}</span>
+    <div className={cls} title={SCHEMA[data.stage]?.doc ?? data.stage}>
+      <Handle
+        type="target"
+        position={Position.Top}
+        className={data.input ? PORT_CLASS[data.input] : ""}
+      />
+      <span className="pipe-node-stage">
+        {data.stage}
+        {unwired && <em className="pipe-node-flag">not wired</em>}
+      </span>
+      <span className="pipe-node-io">
+        in {data.input ?? "any"} → out {data.output ?? "any"}
+      </span>
       <span className="pipe-node-params">{data.params === "{}" ? "no params" : data.params}</span>
-      <Handle type="source" position={Position.Bottom} />
+      <Handle
+        type="source"
+        position={Position.Bottom}
+        className={data.output ? PORT_CLASS[data.output] : ""}
+      />
     </div>
   );
 }
 
 const NODE_TYPES = { stage: StageNode };
 
-function layout(spec: PipelineSpec): { nodes: FlowNode[]; edges: Edge[] } {
+/// Ports per stage, from the backend schema (fetched once at module load).
+let SCHEMA: PipelineSchema = {};
+
+function stage_ports(stage: string): { input?: PortKind; output?: PortKind } {
+  const p = SCHEMA[stage];
+  return p ? { input: p.input, output: p.output } : {};
+}
+
+function layout(spec: PipelineSpec, run: PipelineRunRecord | null): { nodes: FlowNode[]; edges: Edge[] } {
   const ns = spec.nodes ?? [];
   const ls = spec.links ?? [];
+  const status = run_by_node(run);
+  // stored positions win; auto-place only nodes saved without x/y
   const depth = new Map(ns.map((n) => [n.id, 0]));
   for (let pass = 0; pass < ns.length; pass++) {
     for (const l of ls) {
@@ -154,11 +179,21 @@ function layout(spec: PipelineSpec): { nodes: FlowNode[]; edges: Edge[] } {
     const d = depth.get(n.id) ?? 0;
     const row = perDepth.get(d) ?? 0;
     perDepth.set(d, row + 1);
+    const auto_x = NODE_ORIGIN_X + d * NODE_X_STEP;
+    const auto_y = NODE_ORIGIN_Y + row * NODE_Y_STEP;
     return {
       id: n.id,
       type: "stage",
-      position: { x: NODE_ORIGIN_X + d * NODE_X_STEP, y: NODE_ORIGIN_Y + row * NODE_Y_STEP },
-      data: { stage: (n.stage as Stage) || "custom", params: JSON.stringify(n.params ?? {}, null, 2) },
+      position: {
+        x: n.x ?? auto_x,
+        y: n.y ?? auto_y,
+      },
+      data: {
+        stage: (n.stage as Stage) || "custom",
+        params: JSON.stringify(n.params ?? {}, null, 2),
+        run: status.get(n.id),
+        ...stage_ports(n.stage),
+      },
     };
   });
   const edges: Edge[] = ls
@@ -178,19 +213,24 @@ function ParamField({
   id,
   param_key,
   hint,
+  required,
   value,
   on_change,
 }: {
   id: string;
   param_key: string;
   hint: string;
+  required: boolean;
   value: string;
   on_change: (key: string, value: string) => void;
 }) {
   const [local, setLocal] = useState(value);
   return (
     <div className="stage-field">
-      <label>{param_key}</label>
+      <label>
+        {param_key}
+        {required ? " *" : ""}
+      </label>
       <input
         key={`${id}:${param_key}`}
         value={local}
@@ -223,7 +263,7 @@ function to_spec(nodes: FlowNode[], edges: Edge[]): PipelineSpec {
       } catch {
         params = {};
       }
-      return { id: n.id, stage: n.data.stage, params };
+      return { id: n.id, stage: n.data.stage, params, x: n.position.x, y: n.position.y };
     }),
     links: edges
       .filter((e) => nodes.some((n) => n.id === e.source) && nodes.some((n) => n.id === e.target))
@@ -245,13 +285,26 @@ export default function Pipelines() {
   const [, setError] = useState("");
   const [status, setStatus] = useState("");
   const [newOpen, setNewOpen] = useState(false);
+  const [testOpen, setTestOpen] = useState(false);
+  const [run, setRun] = useState<PipelineRunRecord | null>(null);
+  const [, setSchemaTick] = useState(0);
   const dragRef = useRef(false);
+  // source node of a handle drag released on empty canvas (n8n-style "pick
+  // next node" flow); consumed by the dock
+  const pendingSourceRef = useRef<string | null>(null);
+  const [dockArmed, setDockArmed] = useState(false);
   const saveTimer = useRef<number | null>(null);
   const dirtyRef = useRef(false);
   const lastSpecRef = useRef("");
 
   useEffect(() => {
     load_pipelines();
+    fetch_pipeline_schema()
+      .then((s) => {
+        SCHEMA = s;
+        setSchemaTick((t) => t + 1);
+      })
+      .catch(() => {});
   }, []);
 
   async function handle(err: unknown) {
@@ -277,8 +330,8 @@ export default function Pipelines() {
       .catch(() => setAgentNames([]));
   }, []);
 
-  function load_flow(p: Pipeline) {
-    const { nodes: ns, edges: es } = layout(p.spec || { nodes: [], links: [] });
+  function load_flow(p: Pipeline, run_record: PipelineRunRecord | null = run) {
+    const { nodes: ns, edges: es } = layout(p.spec || { nodes: [], links: [] }, run_record);
     setNodes(ns);
     setEdges(es);
     return { ns, es };
@@ -287,6 +340,7 @@ export default function Pipelines() {
   function pick(p: Pipeline) {
     setError("");
     setStatus("");
+    setRun(null);
     setSelected(p.id);
     set_focus({ kind: "pipeline", id: p.id, name: p.name });
     setName(p.name);
@@ -313,32 +367,63 @@ export default function Pipelines() {
     }
   }
 
-  function spawn_node(stage: Stage = "fetch") {
+  function spawn_node(stage: Stage = "fetch", connect_from?: string) {
     const taken = new Set(nodes.map((n) => n.id));
     let i = nodes.length + 1;
     while (taken.has(`node-${i}`)) i++;
     const id = `node-${i}`;
+    const src_node = connect_from ? nodes.find((n) => n.id === connect_from) : undefined;
     const row = nodes.filter((n) => n.position.x === NODE_ORIGIN_X).length;
-    setNodes([
-      ...nodes,
-      {
-        id,
-        type: "stage",
-        position: { x: NODE_ORIGIN_X, y: NODE_ORIGIN_Y + row * NODE_Y_STEP },
-        data: { stage, params: "{}" },
+    const node: FlowNode = {
+      id,
+      type: "stage",
+      position: {
+        x: src_node ? src_node.position.x + NODE_X_STEP : NODE_ORIGIN_X,
+        y: src_node ? src_node.position.y : NODE_ORIGIN_Y + row * NODE_Y_STEP,
       },
-    ]);
+      data: { stage, params: "{}", ...stage_ports(stage) },
+    };
+    setNodes([...nodes, node]);
+    if (src_node) {
+      setEdges(
+        addEdge(
+          { source: src_node.id, target: id, animated: true, id: `e-${src_node.id}-${id}-new` },
+          edges
+        )
+      );
+    }
     setEditId(id);
     setEditStage(stage);
     setEditParams("{}");
   }
 
+  /// Stages whose input accepts the edited node's output — the "connects to" row.
+  function connect_suggestions(stage: Stage): { stage: Stage; label: string; desc: string; Icon: typeof Globe }[] {
+    const src = SCHEMA[stage];
+    if (!src) return [];
+    return BASIC_NODES.filter((n) => ports_compatible(SCHEMA, stage, n.stage));
+  }
+
   const on_connect = useCallback(
-    (c: Connection) =>
+    (c: Connection) => {
+      pendingSourceRef.current = null;
+      setDockArmed(false);
       setEdges((es) =>
         addEdge({ ...c, animated: true, id: `e-${c.source}-${c.target}-${es.length}` }, es)
-      ),
+      );
+    },
     [setEdges]
+  );
+
+  // n8n pattern: drag from an out port and drop on empty canvas arms the
+  // dock — the next dock click spawns that stage already linked to the source.
+  const on_connect_end = useCallback(
+    (_: MouseEvent | TouchEvent, state: FinalConnectionState) => {
+      if (!state.fromNode || state.isValid) return;
+      pendingSourceRef.current = state.fromNode.id;
+      setDockArmed(true);
+    },
+    []
   );
 
   function select_node(n: FlowNode | null) {
@@ -366,9 +451,33 @@ export default function Pipelines() {
       setError("node ids must be unique");
       return;
     }
+    // a stage change can invalidate existing links: drop those, so the spec
+    // never keeps wiring the run would reject
+    if (use_stage !== node.data.stage) {
+      const keep = (e: Edge) => {
+        if (e.source !== editId && e.target !== editId) return true;
+        const other = nodes.find((n) => n.id === (e.source === editId ? e.target : e.source));
+        if (!other) return false;
+        return e.source === editId
+          ? ports_compatible(SCHEMA, use_stage, other.data.stage)
+          : ports_compatible(SCHEMA, other.data.stage, use_stage);
+      };
+      setEdges(edges.filter(keep));
+    }
     setNodes((ns) =>
       ns.map((n) =>
-        n.id === editId ? { ...n, id, data: { ...n.data, stage: use_stage, params: use_params } } : n
+        n.id === editId
+          ? {
+              ...n,
+              id,
+              data: {
+                ...n.data,
+                stage: use_stage,
+                params: use_params,
+                ...stage_ports(use_stage),
+              },
+            }
+          : n
       )
     );
     if (id !== editId) {
@@ -482,6 +591,29 @@ export default function Pipelines() {
     }
   }
 
+  async function run_test(seed_text: string) {
+    if (selected == null || selected === "new") return;
+    setError("");
+    try {
+      await do_save(false);
+      const record = await test_pipeline(selected, seed_text);
+      setRun(record);
+      const status_map = run_by_node(record);
+      setNodes((ns) =>
+        ns.map((n) => ({
+          ...n,
+          data: { ...n.data, run: status_map.get(n.id) },
+        }))
+      );
+      toast(
+        record.status === "ok" ? "pipeline test passed" : "pipeline test failed",
+        record.status === "ok" ? "success" : "error"
+      );
+    } catch (err) {
+      handle(err);
+    }
+  }
+
   const editor = useMemo(() => selected != null, [selected]);
 
   return (
@@ -524,6 +656,9 @@ export default function Pipelines() {
               <button className="kanban-mini" onClick={() => spawn_node()} title="add node">
                 <Plus size={13} /> node
               </button>
+              <button className="kanban-mini" onClick={() => setTestOpen(true)} disabled={selected == null || selected === "new"} title="test run with seed text">
+                <Play size={13} /> test
+              </button>
               <button className="kanban-mini" onClick={del} disabled={selected == null || selected === "new"} title="delete pipeline">
                 <Trash2 size={13} />
               </button>
@@ -539,6 +674,14 @@ export default function Pipelines() {
                 onNodesChange={onNodesChange}
                 onEdgesChange={onEdgesChange}
                 onConnect={on_connect}
+                onConnectEnd={on_connect_end}
+                connectionRadius={DOCK_DROP_RADIUS}
+                isValidConnection={(c) => {
+                  const src = nodes.find((n) => n.id === c.source);
+                  const dst = nodes.find((n) => n.id === c.target);
+                  if (!src || !dst) return false;
+                  return ports_compatible(SCHEMA, src.data.stage, dst.data.stage);
+                }}
                 nodeTypes={NODE_TYPES}
                 onNodeClick={(_, n) => select_node(n as FlowNode)}
                 onPaneClick={() => select_node(null)}
@@ -575,7 +718,7 @@ export default function Pipelines() {
                 </div>
                 {!BASIC_STAGES.has(editStage) ? (
                   <>
-                    <span className="stage-hint">legacy node ({editStage}) — switch to a basic type:</span>
+                    <span className="stage-hint">legacy node ({editStage}) — not wired to an engine, switch to a wired type:</span>
                     <div className="stage-picker">
                       {BASIC_NODES.map(({ stage, label, desc, Icon }) => (
                         <button key={stage} type="button" className="stage-card" onClick={() => { setEditStage(stage); apply_edit(stage); }}>
@@ -602,8 +745,12 @@ export default function Pipelines() {
                         </button>
                       ))}
                     </div>
-                    <span className="stage-hint">{STAGE_DOCS[editStage]}</span>
-                    {STAGE_FIELDS[editStage]!.map(({ key, hint }) =>
+                    <span className="stage-hint">{SCHEMA[editStage]?.doc ?? ""}</span>
+                    <div className="stage-io">
+                      <span>in: {SCHEMA[editStage]?.input ?? "any"}</span>
+                      <span>out: {SCHEMA[editStage]?.output ?? "any"}</span>
+                    </div>
+                    {(SCHEMA[editStage]?.params ?? []).map(({ key, hint, required }) =>
                       editStage === "ref_image" && key === "path" ? (
                         <div key={key} className="stage-field">
                           <label>image</label>
@@ -614,7 +761,7 @@ export default function Pipelines() {
                         </div>
                       ) : editStage === "agent" && key === "agent" && agentNames.length > 0 ? (
                         <div key={key} className="stage-field">
-                          <label>{key}</label>
+                          <label>{key}{required ? " *" : ""}</label>
                           <select
                             value={String(parse_params(editParams)[key] ?? "")}
                             onChange={(e) => edit_param(key, e.target.value)}
@@ -633,19 +780,82 @@ export default function Pipelines() {
                           hint={hint}
                           value={String(parse_params(editParams)[key] ?? "")}
                           on_change={edit_param}
+                          required={required}
                         />
                       )
                     )}
+                    <div className="stage-connect">
+                      <label>connects to</label>
+                      <div className="stage-connect-row">
+                        {connect_suggestions(editStage).map(({ stage, label, desc, Icon }) => (
+                          <button
+                            key={stage}
+                            type="button"
+                            className="stage-connect-chip"
+                            title={`add a ${label} node and link it`}
+                            onClick={() => {
+                              apply_edit();
+                              spawn_node(stage, editId ?? undefined);
+                            }}
+                          >
+                            <Icon size={13} />
+                            {label}
+                            <span>{desc}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
                   </>
                 )}
+                {run && editId && (() => {
+                  const st = run.stages.find((s) => s.node === editId);
+                  return st ? (
+                    <div className={st.status === "ok" ? "run-note ok" : "run-note failed"}>
+                      <strong>{st.status}</strong> {st.note}
+                    </div>
+                  ) : null;
+                })()}
                 <button type="button" className="pipeline-inspector-del" onClick={remove_node}>
                   <Trash2 size={13} /> remove node
                 </button>
               </div>
             )}
-            {!editId && (
+            {!editId && !run && (
               <div className="pipeline-hint">
-                click a node to edit · drag from bottom dot to top dot to link · del removes selected
+                click a node to edit · drag bottom dot to top dot to link · drop on canvas then
+                pick a dock icon to link the next node · click edge + ⌫ to unlink
+              </div>
+            )}
+            <div className={dockArmed ? "pipeline-dock armed" : "pipeline-dock"}>
+              {BASIC_NODES.map(({ stage, label, desc, Icon }) => (
+                <button
+                  key={stage}
+                  type="button"
+                  className="pipeline-dock-btn"
+                  title={`${label} — ${SCHEMA[stage]?.doc ?? desc}`}
+                  aria-label={`add ${label} node`}
+                  onClick={() => {
+                    const src = pendingSourceRef.current;
+                    pendingSourceRef.current = null;
+                    setDockArmed(false);
+                    spawn_node(stage, src ?? undefined);
+                  }}
+                >
+                  <Icon size={15} />
+                </button>
+              ))}
+            </div>
+            {run && !editId && (
+              <div className="pipeline-run">
+                <div className="pipeline-run-head">
+                  <span className={run.status === "ok" ? "run-note ok" : "run-note failed"}>
+                    test {run.status} · {run.stages.filter((s) => s.status === "ok").length}/{run.stages.length} nodes
+                  </span>
+                  <button type="button" className="icon-btn" onClick={() => { setRun(null); load_flow(pipelines.find((p) => p.id === selected)!, null); }} title="clear run">
+                    <X size={14} />
+                  </button>
+                </div>
+                {run.output && <pre className="pipeline-run-output">{run.output}</pre>}
               </div>
             )}
           </div>
@@ -665,6 +875,16 @@ export default function Pipelines() {
         on_submit={(v) => {
           setNewOpen(false);
           start_new(v);
+        }}
+      />
+      <PromptModal
+        open={testOpen}
+        title="test pipeline"
+        placeholder="seed text…"
+        on_close={() => setTestOpen(false)}
+        on_submit={(v) => {
+          setTestOpen(false);
+          run_test(v);
         }}
       />
     </main>

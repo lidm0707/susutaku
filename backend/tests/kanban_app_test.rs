@@ -6,11 +6,12 @@ use std::sync::Arc;
 use kanban_rs::{CardRow, PipelineRow, StoreError};
 use mockall::predicate::eq;
 
-use backend::app::kanban::{CardService, CommentService, KanbanApp, PipelineService};
+use backend::app::kanban::KanbanApp;
 use backend::app::pipeline_run;
+use backend::domain::{CardService, CommentService, NewCard, NewPipeline, PipelineService};
 use backend::port::outbound::{
     MockAgentConfigRepo, MockCardRepo, MockCardTx, MockCommentRepo, MockCommentTx,
-    MockPipelineRepo, MockPipelineTx, MockProjectRepo, MockWorkspaceRepo, NewCard, NewPipeline,
+    MockPipelineRepo, MockPipelineTx, MockProjectRepo, MockResourceRepo, MockWorkspaceRepo,
 };
 
 const CARD_ID: i64 = 5;
@@ -18,7 +19,8 @@ const PIPE_ID: i64 = 7;
 const PIPE_NAME: &str = "ingest-render";
 const SPEC_OK: &str = r#"{"nodes":[{"id":"a","stage":"ingest"},{"id":"b","stage":"render"}],"links":[{"from":"a","to":"b"}]}"#;
 const SPEC_AGENT: &str = r#"{"nodes":[{"id":"a","stage":"ingest"},{"id":"bot","stage":"agent","params":{"agent":"qwen"}}],"links":[{"from":"a","to":"bot"}]}"#;
-const SPEC_FAIL: &str = r#"{"nodes":[{"id":"a","stage":"ingest"},{"id":"f","stage":"fetch"}],"links":[{"from":"a","to":"f"}]}"#;
+const SPEC_FAIL: &str = r#"{"nodes":[{"id":"a","stage":"ingest"},{"id":"f","stage":"parse"}],"links":[{"from":"a","to":"f"}]}"#;
+const SPEC_REF_IMAGE: &str = r#"{"nodes":[{"id":"a","stage":"ingest"},{"id":"i","stage":"ref_image","params":{"path":"REPLACED"}}],"links":[{"from":"a","to":"i"}]}"#;
 
 fn card_row(id: i64, pipeline_id: Option<i64>) -> CardRow {
     CardRow {
@@ -65,6 +67,7 @@ async fn card_views_join_pipeline_names_in_app_layer() {
         Arc::new(cards),
         Arc::new(MockCommentRepo::new()),
         Arc::new(pipelines),
+        Arc::new(MockResourceRepo::new()),
         Arc::new(MockAgentConfigRepo::new()),
         Arc::new(MockWorkspaceRepo::new()),
         Arc::new(MockProjectRepo::new()),
@@ -185,6 +188,7 @@ fn runner_app(cards: MockCardRepo, pipelines: MockPipelineRepo) -> KanbanApp {
         Arc::new(cards),
         Arc::new(MockCommentRepo::new()),
         Arc::new(pipelines),
+        Arc::new(MockResourceRepo::new()),
         Arc::new(MockAgentConfigRepo::new()),
         Arc::new(MockWorkspaceRepo::new()),
         Arc::new(MockProjectRepo::new()),
@@ -276,6 +280,53 @@ async fn run_card_pipeline_unwired_stage_fails_run_with_note() {
             .note
             .contains("not wired")
     );
+}
+
+#[tokio::test]
+async fn run_card_pipeline_ref_image_loads_file_into_payload() {
+    let dir = std::env::temp_dir().join(format!(
+        "susutaku-ref-image-test-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let img_path = dir.join("img.bin");
+    std::fs::write(&img_path, [0u8, 1, 2, 3]).expect("write image");
+
+    let mut cards = MockCardRepo::new();
+    let mut pipelines = MockPipelineRepo::new();
+    cards
+        .expect_get()
+        .with(eq(CARD_ID))
+        .returning(|id| Ok(Some(card_row(id, Some(PIPE_ID)))));
+    cards
+        .expect_set_agent()
+        .withf(|_, a: &kanban_rs::AgentState| {
+            a.state["run"]["stages"][1]["status"] == "ok"
+                && a.state["run"]["stages"][1]["note"]
+                    .as_str()
+                    .is_some_and(|n| n.contains("loaded image"))
+        })
+        .returning(|_, _| Ok(()));
+    let spec: &'static str = Box::leak(
+        SPEC_REF_IMAGE
+            .replace("REPLACED", &img_path.to_string_lossy())
+            .into_boxed_str(),
+    );
+    pipelines.expect_list().returning(move || {
+        let mut row = pipeline_row(PIPE_ID, PIPE_NAME);
+        row.spec = spec.into();
+        Ok(vec![row])
+    });
+
+    let record = pipeline_run::run_card_pipeline(&runner_app(cards, pipelines), CARD_ID)
+        .await
+        .expect("ran");
+    assert_eq!(record.status, pipeline_run::StageStatus::Ok);
+
+    std::fs::remove_dir_all(&dir).ok();
 }
 
 #[tokio::test]

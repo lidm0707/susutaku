@@ -9,12 +9,14 @@ use std::sync::Arc;
 use std::sync::RwLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use core_agent::sandbox_jail::Sandbox;
+use core_agent::podman::Sandbox;
 use core_agent::sandbox_abstract_layer::{Role, SandboxState};
+use git_rs::GitRepo;
 use serde::Serialize;
 
 /// Root directory holding every agent work tree.
 pub const AGENTS_ROOT: &str = "work/agents";
+pub const EMPTY_PATCH: &str = "";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -45,6 +47,8 @@ pub struct TaskOutcome {
     pub result: Option<String>,
     pub state: SandboxState,
     pub work_tree: PathBuf,
+    pub patch: String,
+    pub commit: Option<String>,
 }
 
 struct AgentSlot {
@@ -52,6 +56,8 @@ struct AgentSlot {
     work_tree: PathBuf,
     runs: AtomicU64,
     last_result: RwLock<Option<String>>,
+    /// HEAD when the agent was spawned: base for the task diff.
+    base_commit: Option<String>,
 }
 
 pub struct ManagerProcess {
@@ -79,6 +85,10 @@ impl ManagerProcess {
         let work_tree = PathBuf::from(AGENTS_ROOT).join(sanitize(agent));
         reclaim_stale(&work_tree);
         let sandbox = Sandbox::new_in(&work_tree).map_err(|e| e.to_string())?;
+        let base_commit = GitRepo::open_or_init(&work_tree)
+            .ok()
+            .and_then(|repo| repo.head_oid().ok())
+            .map(|oid| oid.to_string());
         agents.insert(
             agent.to_string(),
             Arc::new(AgentSlot {
@@ -86,6 +96,7 @@ impl ManagerProcess {
                 work_tree: work_tree.clone(),
                 runs: AtomicU64::new(0),
                 last_result: RwLock::new(None),
+                base_commit,
             }),
         );
         Ok(work_tree)
@@ -111,10 +122,12 @@ impl ManagerProcess {
         Ok(())
     }
 
-    /// Finishes the agent's task: returns result + sandbox state (cwd and
-    /// transcript), then tears the sandbox and its work tree down.
+    /// Finishes the agent's task: captures the task patch (committing pending
+    /// work first), returns result + sandbox state (cwd and transcript), then
+    /// tears the sandbox and its work tree down.
     pub fn finish(&self, agent: &str) -> Result<TaskOutcome, String> {
         let slot = self.slot(agent)?;
+        let (patch, commit) = capture_patch(&slot.work_tree, &slot.base_commit, agent);
         let state = SandboxState {
             cwd: slot
                 .sandbox
@@ -129,6 +142,8 @@ impl ManagerProcess {
             result: slot.last_result.read().ok().and_then(|r| r.clone()),
             state,
             work_tree: slot.work_tree.clone(),
+            patch,
+            commit,
         };
         slot.sandbox.purge();
         if let Ok(mut agents) = self.agents.write() {
@@ -191,6 +206,19 @@ fn sanitize(agent: &str) -> String {
             }
         })
         .collect()
+}
+
+/// Best-effort task patch capture; teardown must proceed even if git fails.
+fn capture_patch(work_tree: &Path, base: &Option<String>, agent: &str) -> (String, Option<String>) {
+    let captured =
+        GitRepo::open(work_tree).and_then(|repo| repo.task_patch(base.as_deref(), agent));
+    match captured {
+        Ok(task) => (task.patch, task.commit),
+        Err(e) => {
+            eprintln!("[manager] patch capture failed for {agent}: {e}");
+            (EMPTY_PATCH.to_string(), None)
+        }
+    }
 }
 
 /// A work tree is empty when it does not exist or holds no entries.

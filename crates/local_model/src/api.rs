@@ -62,6 +62,9 @@ pub struct GenReplyDto {
 #[derive(Deserialize)]
 pub struct CommandRequest {
     pub cmd: String,
+    /// Non-empty addresses the client's per-agent manager (own work tree).
+    #[serde(default)]
+    pub agent: String,
 }
 
 #[derive(Serialize)]
@@ -134,6 +137,20 @@ async fn clients(State(state): State<Arc<AppState>>) -> Json<Vec<proto_rs::serve
     Json(state.hub.registry().list())
 }
 
+#[derive(Serialize)]
+struct KickReply {
+    kicked: bool,
+}
+
+async fn kick_client(
+    State(state): State<Arc<AppState>>,
+    Path(client_id): Path<u64>,
+) -> Json<KickReply> {
+    Json(KickReply {
+        kicked: state.hub.registry().kick(client_id),
+    })
+}
+
 async fn client_command(
     State(state): State<Arc<AppState>>,
     Path(client_id): Path<u64>,
@@ -141,10 +158,22 @@ async fn client_command(
 ) -> Result<Json<CommandReply>, (StatusCode, String)> {
     let output = state
         .hub
-        .dispatch(client_id, req.cmd)
+        .dispatch(client_id, req.cmd, req.agent)
         .await
         .map_err(|e| (StatusCode::GATEWAY_TIMEOUT, e))?;
     Ok(Json(CommandReply { output }))
+}
+
+async fn client_agents(
+    State(state): State<Arc<AppState>>,
+    Path(client_id): Path<u64>,
+) -> Result<Json<Vec<String>>, (StatusCode, String)> {
+    state
+        .hub
+        .agent_names(client_id)
+        .await
+        .map(Json)
+        .map_err(|e| (StatusCode::GATEWAY_TIMEOUT, e))
 }
 
 async fn health() -> impl IntoResponse {
@@ -159,5 +188,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/inference", post(inference))
         .route("/api/clients", get(clients))
         .route("/api/clients/{id}/command", post(client_command))
+        .route("/api/clients/{id}/kick", post(kick_client))
+        .route("/api/clients/{id}/agents", get(client_agents))
         .with_state(state)
 }

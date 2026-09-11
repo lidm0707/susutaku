@@ -27,6 +27,16 @@ services:
       - susutaku-pgdata:/var/lib/postgresql/data
     restart: unless-stopped
 
+  # Vector store for Qdrant chat memory (plan 34). Memory itself stays
+  # disabled unless SUSUTAKU_EMBEDDINGS_URL is set (host ollama etc.).
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "127.0.0.1:6333:6333"
+    volumes:
+      - susutaku-qdrant:/qdrant/storage
+    restart: unless-stopped
+
   web:
     build:
       context: ../..
@@ -52,9 +62,17 @@ services:
       - "8991:8991"
     environment:
       DATABASE_URL: postgres://susutaku:susutaku@postgres:5432/susutaku
+      QDRANT_URL: http://qdrant:6333
+      QDRANT_COLLECTION: ${QDRANT_COLLECTION:-chat_memory}
+      # Unset by default: chat memory off. Point at any OpenAI-compatible
+      # embeddings endpoint, e.g. http://host.docker.internal:11434/v1/embeddings
+      SUSUTAKU_EMBEDDINGS_URL: ${SUSUTAKU_EMBEDDINGS_URL:-}
+      QDRANT_API_KEY: ${QDRANT_API_KEY:-}
     depends_on:
       - postgres
+      - qdrant
     restart: unless-stopped
 
 volumes:
   susutaku-pgdata:
+  susutaku-qdrant:

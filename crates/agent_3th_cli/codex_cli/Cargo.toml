@@ -5,8 +5,8 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-ai-interface-layer = { path = "../ai_interface_layer" }
-zai-api = { path = "../zai_api" }
+ai-interface-layer = { path = "../../cloud_model_api/ai_interface_layer" }
+zai-api = { path = "../../cloud_model_api/zai_api" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 ureq = { workspace = true, features = ["json"] }

@@ -4,10 +4,11 @@ use std::time::Duration;
 
 use backend::api;
 use backend::app::ChatUseCase;
+use backend::app::board::BoardService;
 use backend::infra::chat_memory;
+use backend::infra::client_node::ClientNode;
 use backend::infra::codex_auth::codex_home;
 use backend::infra::codex_usage;
-use backend::infra::client_node::ClientNode;
 use backend::infra::kanban;
 use backend::infra::local_settings;
 use backend::infra::model_client::RemoteModel;
@@ -82,10 +83,12 @@ fn spawn_health_log(manager: Arc<ManagerProcess>) {
 #[tokio::main]
 async fn main() {
     init_tracing();
+    let kanban_store = Arc::new(kanban::connect().await);
     let model = Arc::new(RemoteModel::new(&local_model_url()));
     let sandbox = Arc::new(AgentSandbox::restore().expect("agent sandbox init"));
     spawn_client_node(sandbox.clone()).await;
     let codex_workspace = sandbox.root();
+    let board = Arc::new(BoardService::new(kanban_store.clone()));
     let use_case = Arc::new(ChatUseCase::new(
         Arc::new(DuckDuckGo),
         Arc::new(PageFetcher),
@@ -93,9 +96,9 @@ async fn main() {
         model.clone(),
         model.clone(),
         chat_memory(),
+        board,
     ));
 
-    let kanban_store = Arc::new(kanban::connect().await);
     let usage_store = Arc::new(codex_usage::connect().await);
     codex_usage::spawn_scheduler(usage_store.clone(), codex_home());
     let manager = ManagerProcess::new();

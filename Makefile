@@ -83,6 +83,10 @@ mock-model:
 	docker run -d --name susutaku-mock-model -p $(MODEL_PORT):8992 $(MOCK_IMAGE)
 	@echo "mock model: http://localhost:$(MODEL_PORT)"
 
+## sandbox-image: build the default podman sandbox image used by agent jails
+sandbox-image:
+	podman build -f docker/sandbox/Containerfile -t localhost/susutaku-sandbox:latest .
+
 # --- containerized stacks ------------------------------------------------
 
 ## e2e: full stack in docker (pg + mock-model + backend + web + playwright)
