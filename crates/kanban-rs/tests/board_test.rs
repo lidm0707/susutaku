@@ -1,11 +1,12 @@
 use kanban_rs::{Board, BoardError, Priority};
 
 #[test]
-fn default_board_has_three_columns() {
+fn default_board_has_four_columns() {
     let board = Board::with_default_columns();
-    assert_eq!(board.columns().len(), 3);
+    assert_eq!(board.columns().len(), 4);
     assert_eq!(board.columns()[0].id, "todo");
     assert_eq!(board.columns()[2].id, "done");
+    assert_eq!(board.columns()[3].id, "failed");
 }
 
 #[test]
@@ -63,7 +64,7 @@ fn card_priority_and_edit() {
 fn remove_column() {
     let mut board = Board::with_default_columns();
     board.remove_column("doing").unwrap();
-    assert_eq!(board.columns().len(), 2);
+    assert_eq!(board.columns().len(), 3);
     assert!(matches!(
         board.remove_column("doing"),
         Err(BoardError::NoSuchColumn(_))

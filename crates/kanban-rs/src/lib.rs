@@ -23,5 +23,9 @@ pub use user::{
 };
 pub use workspace::{DEFAULT_PROJECT_NAME, DEFAULT_WORKSPACE_NAME, ProjectRow, WorkspaceRow};
 
-pub const DEFAULT_COLUMNS: [(&str, &str); 3] =
-    [("todo", "To Do"), ("doing", "Doing"), ("done", "Done")];
+pub const DEFAULT_COLUMNS: [(&str, &str); 4] = [
+    ("todo", "To Do"),
+    ("doing", "Doing"),
+    ("done", "Done"),
+    ("failed", "Failed"),
+];

@@ -4,7 +4,7 @@
 //! (verified in the backend Docker container).
 #![cfg(target_os = "linux")]
 
-use core_agent::sandbox::linux::{NetworkPolicyChoice, Sandbox, SandboxLimits};
+use core_agent::sandbox_jail::linux::{NetworkPolicyChoice, Sandbox, SandboxLimits};
 
 #[test]
 fn sandbox_isolation_guarantees_hold() {

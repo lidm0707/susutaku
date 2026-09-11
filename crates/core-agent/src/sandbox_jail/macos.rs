@@ -199,13 +199,19 @@ impl Sandbox {
             }
             Err(e) => return Err(e),
         };
-        let text = output_text(&out)?;
+        let result = output_text(&out);
         drop(root);
-        self.record(HistoryEntry {
+        // Failed commands stay in the transcript with their stderr so the
+        // run logs API shows why a run produced nothing.
+        let entry = HistoryEntry {
             role: Role::Tool,
-            content: format!("$ {cmd}\n{text}"),
-        });
-        Ok(text)
+            content: match &result {
+                Ok(text) => format!("$ {cmd}\n{text}"),
+                Err(e) => format!("$ {cmd}\n<error> {e}"),
+            },
+        };
+        self.record(entry);
+        result
     }
 
     pub fn push_context(&self, role: Role, content: impl Into<String>) {

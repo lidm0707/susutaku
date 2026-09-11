@@ -3,7 +3,7 @@
 //! workspace persistence across runs.
 #![cfg(target_os = "linux")]
 
-use core_agent::sandbox::Sandbox;
+use core_agent::sandbox_jail::Sandbox;
 
 #[test]
 fn sandbox_runs_command_and_persists_workspace() {

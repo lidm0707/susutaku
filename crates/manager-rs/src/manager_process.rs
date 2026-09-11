@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::sync::RwLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use core_agent::sandbox::Sandbox;
+use core_agent::sandbox_jail::Sandbox;
 use core_agent::sandbox_abstract_layer::{Role, SandboxState};
 use serde::Serialize;
 

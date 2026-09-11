@@ -1,7 +1,7 @@
 //! Sandbox adapter: agent shell tool backed by core_agent's macOS sandbox.
 
 use crate::port::outbound::Runner;
-use core_agent::sandbox::{Sandbox, SandboxDir};
+use core_agent::sandbox_jail::{Sandbox, SandboxDir};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -39,12 +39,12 @@ impl AgentSandbox {
 
     /// All sandbox dirs with owning-process liveness.
     pub fn dirs() -> Vec<SandboxDir> {
-        core_agent::sandbox::list_dirs()
+        core_agent::sandbox_jail::list_dirs()
     }
 
     /// Delete another (ideally dead) backend's sandbox dir.
     pub fn purge_dir(pid: u32) -> Result<bool, String> {
-        core_agent::sandbox::purge_dir(pid)
+        core_agent::sandbox_jail::purge_dir(pid)
     }
 
     /// Delete dirs of dead PIDs; returns how many were removed.

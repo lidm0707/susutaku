@@ -365,13 +365,21 @@ impl Sandbox {
         if let Ok(mut lc) = self.lifecycle.write() {
             *lc = Lifecycle::Running;
         }
-        let result = self.run_inner(cmd, limits, network).and_then(|text| {
-            self.record(HistoryEntry {
-                role: Role::Tool,
-                content: format!("$ {cmd}\n{text}"),
-            })
-            .map(|_| text)
-        });
+        let result = self.run_inner(cmd, limits, network);
+        // Failed and timed-out commands must still land in the transcript so
+        // the run logs API (and the web UI) shows why a jail run went silent.
+        let entry = HistoryEntry {
+            role: Role::Tool,
+            content: match &result {
+                Ok(text) => format!("$ {cmd}\n{text}"),
+                Err(e) => format!("$ {cmd}\n<error> {e}"),
+            },
+        };
+        let recorded = self.record(entry);
+        let result = match result {
+            Ok(text) => recorded.map(|_| text),
+            Err(e) => Err(e),
+        };
         if let Ok(mut lc) = self.lifecycle.write() {
             if *lc == Lifecycle::Running {
                 *lc = Lifecycle::Idle;

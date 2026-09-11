@@ -22,8 +22,10 @@ import {
   create_project,
   create_workspace,
   fetch_agent_logs,
+  fetch_activity,
   get_token,
   logout,
+  type ActivityEntry,
   type AgentLogs,
 } from "../lib.js";
 import { ActivityModal } from "./ActivityModal.tsx";
@@ -42,6 +44,16 @@ const ITEMS = [
 ];
 
 const MIN_PASSWORD_LEN = 8;
+const ACTIVITY_POLL_MS = 15000;
+const ACTIVITY_SEEN_KEY = "susutaku_activity_seen_id";
+
+function read_seen_activity_id(): number {
+  return Number(localStorage.getItem(ACTIVITY_SEEN_KEY) ?? 0);
+}
+
+function latest_activity_id(entries: ActivityEntry[]): number {
+  return entries.reduce((max, e) => Math.max(max, e.id), 0);
+}
 
 function AgentLogsModal({ agent, on_close }: { agent: string | null; on_close: () => void }) {
   const [logs, set_logs] = useState<AgentLogs | null>(null);
@@ -89,6 +101,21 @@ export default function SideNav({ on_chat }: { on_chat: () => void }) {
   const [logs_agent, set_logs_agent] = useState<string | null>(null);
   const [activity_open, set_activity_open] = useState(false);
   const [quota_open, set_quota_open] = useState(false);
+  const [latest_activity, set_latest_activity] = useState(0);
+  const [seen_activity, set_seen_activity] = useState(read_seen_activity_id);
+  const has_new_activity = latest_activity > seen_activity;
+
+  useEffect(() => {
+    if (!get_token()) return;
+    const tick = () => {
+      fetch_activity()
+        .then((entries: ActivityEntry[]) => set_latest_activity(latest_activity_id(entries)))
+        .catch(() => {});
+    };
+    tick();
+    const timer = setInterval(tick, ACTIVITY_POLL_MS);
+    return () => clearInterval(timer);
+  }, []);
 
   if (!get_token()) return null;
 
@@ -104,6 +131,10 @@ export default function SideNav({ on_chat }: { on_chat: () => void }) {
 
   function toggle_activity() {
     set_activity_open((v) => !v);
+    if (!activity_open && latest_activity > seen_activity) {
+      set_seen_activity(latest_activity);
+      localStorage.setItem(ACTIVITY_SEEN_KEY, String(latest_activity));
+    }
   }
 
   return (
@@ -163,6 +194,7 @@ export default function SideNav({ on_chat }: { on_chat: () => void }) {
           >
             <Activity size={16} />
             <span className="dock-label">activity</span>
+            {has_new_activity && <span className="activity-alert-dot" aria-label="new activity" />}
           </button>
         </div>
         <div className="dock-profile">

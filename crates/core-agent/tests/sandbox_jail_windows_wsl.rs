@@ -3,8 +3,8 @@
 
 #![cfg(windows)]
 
-use core_agent::sandbox::windows as sb;
-use core_agent::sandbox::windows::WindowsExec;
+use core_agent::sandbox_jail::windows as sb;
+use core_agent::sandbox_jail::windows::WindowsExec;
 
 use std::path::Path;
 use std::sync::RwLock;

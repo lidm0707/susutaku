@@ -8,8 +8,8 @@
 
 #![cfg(windows)]
 
-use core_agent::sandbox::windows as sb;
-use core_agent::sandbox::windows::Role;
+use core_agent::sandbox_jail::windows as sb;
+use core_agent::sandbox_jail::windows::Role;
 
 use std::sync::Mutex;
 

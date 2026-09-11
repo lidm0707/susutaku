@@ -1,5 +1,6 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use backend::api;
 use backend::app::ChatUseCase;
@@ -10,7 +11,7 @@ use backend::infra::client_node::ClientNode;
 use backend::infra::kanban;
 use backend::infra::local_settings;
 use backend::infra::model_client::RemoteModel;
-use backend::infra::sandbox::AgentSandbox;
+use backend::infra::sandbox_jail::AgentSandbox;
 use backend::infra::search::{DuckDuckGo, PageFetcher};
 use backend::port::outbound::ChatMemory;
 use manager_rs::ManagerProcess;
@@ -21,6 +22,7 @@ const DEFAULT_LOG_LEVEL: &str = "info";
 const SERVER_URL: &str = "http://127.0.0.1:8992";
 const SERVER_URL_ENV: &str = "SUSUTAKU_LOCAL_MODEL_URL";
 const HUB_ADDR_ENV: &str = "SUSUTAKU_HUB_ADDR";
+const HEALTH_INTERVAL: Duration = Duration::from_secs(5 * 60);
 
 fn env_or(key: &str, default: &str) -> String {
     std::env::var(key).unwrap_or_else(|_| default.to_string())
@@ -55,6 +57,28 @@ fn init_tracing() {
     tracing_subscriber::fmt().with_env_filter(filter).init();
 }
 
+fn spawn_health_log(manager: Arc<ManagerProcess>) {
+    tokio::spawn(async move {
+        let start = tokio::time::Instant::now() + HEALTH_INTERVAL;
+        let mut tick = tokio::time::interval_at(start, HEALTH_INTERVAL);
+        loop {
+            tick.tick().await;
+            let agents = manager.snapshot();
+            if agents.is_empty() {
+                tracing::info!("health: no agents");
+            }
+            for a in agents {
+                tracing::info!(
+                    "health: agent {} runs {} work_tree {}",
+                    a.agent,
+                    a.runs,
+                    a.work_tree.display()
+                );
+            }
+        }
+    });
+}
+
 #[tokio::main]
 async fn main() {
     init_tracing();
@@ -74,6 +98,8 @@ async fn main() {
     let kanban_store = Arc::new(kanban::connect().await);
     let usage_store = Arc::new(codex_usage::connect().await);
     codex_usage::spawn_scheduler(usage_store.clone(), codex_home());
+    let manager = ManagerProcess::new();
+    spawn_health_log(manager.clone());
     let addr = SocketAddr::from(([0, 0, 0, 0], PORT));
     let listener = tokio::net::TcpListener::bind(addr).await.expect("bind");
     tracing::info!("backend listening on http://{addr}");
@@ -85,7 +111,7 @@ async fn main() {
             codex_workspace,
             kanban_store,
             usage_store,
-            ManagerProcess::new(),
+            manager,
             model.clone(),
         ),
     )

@@ -22,7 +22,7 @@ use crate::infra::codex_chat;
 use crate::infra::host_spec::{self, HostSpec};
 use crate::infra::local_settings;
 use crate::infra::provider_quota::QuotaBoard;
-use crate::infra::sandbox::AgentSandbox;
+use crate::infra::sandbox_jail::AgentSandbox;
 use crate::infra::zai_settings::{SettingsState, ZaiSettings};
 use crate::port::inbound::{ChatCmd, ChatHandling};
 use crate::port::outbound::{
@@ -1949,7 +1949,7 @@ fn model_server_url() -> String {
         .unwrap_or_else(|| MODEL_SERVER_DEFAULT.to_string())
 }
 
-fn sandbox_info(d: &core_agent::sandbox::SandboxDir) -> SandboxDirInfo {
+fn sandbox_info(d: &core_agent::sandbox_jail::SandboxDir) -> SandboxDirInfo {
     SandboxDirInfo {
         pid: d.pid,
         alive: d.alive,

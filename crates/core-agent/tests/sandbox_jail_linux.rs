@@ -10,8 +10,8 @@
 
 #![cfg(target_os = "linux")]
 
-use core_agent::sandbox::linux as sb;
-use core_agent::sandbox::linux::{NetworkPolicyChoice, Role, SandboxLimits};
+use core_agent::sandbox_jail::linux as sb;
+use core_agent::sandbox_jail::linux::{NetworkPolicyChoice, Role, SandboxLimits};
 use std::time::Duration;
 
 fn sb_with_timeout(secs: u64) -> sb::Sandbox {
@@ -295,7 +295,7 @@ fn transcript_and_set_cwd() {
     // Absolute/.. paths are rejected, never stored.
     assert!(
         s.set_cwd("../../etc").is_err() || {
-            let t = core_agent::sandbox::linux::Sandbox::transcript(&s);
+            let t = core_agent::sandbox_jail::linux::Sandbox::transcript(&s);
             true
         }
     );

@@ -7,7 +7,7 @@ use std::time::Duration;
 use proto_rs::client;
 use tokio::time::sleep;
 
-use crate::infra::sandbox::AgentSandbox;
+use crate::infra::sandbox_jail::AgentSandbox;
 use crate::port::outbound::Runner;
 
 const OS_NAME: &str = std::env::consts::OS;

@@ -629,6 +629,16 @@ button:disabled {
   border-radius: 999px;
 }
 
+.activity-alert-dot {
+  position: absolute;
+  top: 0.2rem;
+  right: 0.2rem;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 999px;
+  background: #e07a7a;
+}
+
 .dot.alive {
   background: #4ade80;
 }

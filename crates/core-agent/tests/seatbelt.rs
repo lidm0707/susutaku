@@ -2,7 +2,7 @@
 
 #![cfg(target_os = "macos")]
 
-use core_agent::sandbox::macos::{
+use core_agent::sandbox_jail::macos::{
     ExecutionMode, Sandbox, execution_mode, seatbelt_command, seatbelt_profile,
 };
 use core_agent::sandbox_abstract_layer::{Guarantee, SandboxLayer};

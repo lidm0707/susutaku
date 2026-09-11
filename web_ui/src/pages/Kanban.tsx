@@ -38,6 +38,7 @@ const COLUMNS = [
   { id: "todo", title: "To Do" },
   { id: "doing", title: "Doing" },
   { id: "done", title: "Done" },
+  { id: "failed", title: "Failed" },
 ] as const;
 
 const PRIORITIES = ["low", "normal", "high", "critical"] as const;

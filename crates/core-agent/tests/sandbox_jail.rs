@@ -1,18 +1,18 @@
 //! Sandbox integration tests, portable across macOS/Linux/Windows via `sb`.
 
 #[cfg(target_os = "linux")]
-use core_agent::sandbox::linux as sb;
+use core_agent::sandbox_jail::linux as sb;
 #[cfg(target_os = "macos")]
-use core_agent::sandbox::macos as sb;
+use core_agent::sandbox_jail::macos as sb;
 #[cfg(target_os = "windows")]
-use core_agent::sandbox::windows as sb;
+use core_agent::sandbox_jail::windows as sb;
 
 #[cfg(target_os = "linux")]
-use core_agent::sandbox::linux::Role;
+use core_agent::sandbox_jail::linux::Role;
 #[cfg(target_os = "macos")]
-use core_agent::sandbox::macos::Role;
+use core_agent::sandbox_jail::macos::Role;
 #[cfg(target_os = "windows")]
-use core_agent::sandbox::windows::Role;
+use core_agent::sandbox_jail::windows::Role;
 
 use std::sync::Mutex;
 

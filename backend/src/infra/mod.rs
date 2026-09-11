@@ -15,6 +15,6 @@ pub mod kanban;
 pub mod local_settings;
 pub mod model_client;
 pub mod provider_quota;
-pub mod sandbox;
+pub mod sandbox_jail;
 pub mod search;
 pub mod zai_settings;
