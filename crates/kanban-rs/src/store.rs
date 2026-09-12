@@ -46,6 +46,8 @@ pub enum StoreError {
     SkillTaken,
     #[error("no such agent output")]
     NoSuchAgentOutput,
+    #[error("no such chat thread")]
+    NoSuchChatThread,
     #[error("bad pipeline spec: {0}")]
     BadSpec(String),
     #[error("password too short")]
@@ -192,6 +194,9 @@ CREATE TABLE IF NOT EXISTS users (
 ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN NOT NULL DEFAULT FALSE;
 "#,
     r#"
+ALTER TABLE agent_settings ADD COLUMN IF NOT EXISTS allowed_tools TEXT[] NOT NULL DEFAULT '{}';
+"#,
+    r#"
 CREATE TABLE IF NOT EXISTS auth_sessions (
     token      TEXT PRIMARY KEY,
     user_id    BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -317,6 +322,26 @@ CREATE TABLE IF NOT EXISTS agent_outputs (
 "#,
     r#"
 CREATE INDEX IF NOT EXISTS agent_outputs_status_idx ON agent_outputs (status, id DESC);
+"#,
+    r#"
+CREATE TABLE IF NOT EXISTS chat_threads (
+    id         BIGSERIAL PRIMARY KEY,
+    agent      TEXT NOT NULL,
+    title      TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+"#,
+    r#"
+CREATE TABLE IF NOT EXISTS chat_messages (
+    id         BIGSERIAL PRIMARY KEY,
+    thread_id  BIGINT NOT NULL REFERENCES chat_threads(id) ON DELETE CASCADE,
+    role       TEXT NOT NULL,
+    text       TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+"#,
+    r#"
+CREATE INDEX IF NOT EXISTS chat_messages_thread_idx ON chat_messages (thread_id, id);
 "#,
 ];
 

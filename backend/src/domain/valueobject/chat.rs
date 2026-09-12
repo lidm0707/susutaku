@@ -14,6 +14,9 @@ pub struct ChatCmd {
     /// Caller bearer token; when present, kanban board tools are offered and
     /// the token is passed to them for role checks. None disables board tools.
     pub board_token: Option<String>,
+    /// Chat agent name; when set, the agent's configured tool allow-list
+    /// (`agent_settings.allowed_tools`) restricts which tools it may use.
+    pub agent: Option<String>,
 }
 
 /// Driving-adapter response: one completed chat turn.

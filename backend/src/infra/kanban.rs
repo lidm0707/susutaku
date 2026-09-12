@@ -320,6 +320,10 @@ impl AgentConfigRepo for PgKanban {
         self.store().list_agents().await
     }
 
+    async fn by_name(&self, name: &str) -> Result<Option<AgentConfigRow>, StoreError> {
+        self.store().agent_by_name(name).await
+    }
+
     async fn create(&self, cfg: AgentConfigDraft) -> Result<AgentConfigRow, StoreError> {
         let row = AgentConfigRow {
             id: 0,
@@ -328,6 +332,7 @@ impl AgentConfigRepo for PgKanban {
             persona: cfg.persona,
             prompt: cfg.prompt,
             output: cfg.output,
+            allowed_tools: cfg.allowed_tools,
         };
         let id = self.store().create_agent(&row).await?;
         Ok(AgentConfigRow { id, ..row })
@@ -341,6 +346,7 @@ impl AgentConfigRepo for PgKanban {
             persona: Box::leak(cfg.persona.into_boxed_str()),
             prompt: Box::leak(cfg.prompt.into_boxed_str()),
             output: Box::leak(cfg.output.into_boxed_str()),
+            allowed_tools: Box::leak(cfg.allowed_tools.into_boxed_slice()),
         };
         self.store().update_agent(upd).await
     }

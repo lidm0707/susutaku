@@ -4,10 +4,12 @@ use piplines::graph::{
     GraphError, Link, NodeDef, PipelineSpec, STAGE_AGENT, STAGE_FETCH, STAGE_INGEST,
     STAGE_OUTPUT_RESOURCE, STAGE_PARSE, STAGE_REF_IMAGE, STAGE_TRANSFORM,
 };
-use piplines::port::{PortKind, compatible, ports};
+use piplines::port::{PortKind, compatible, ports, schema_text};
 
 const ID_A: &str = "a";
 const ID_B: &str = "b";
+const SCHEMA_REQUIRED_MARK: &str = "agent (required";
+const SCHEMA_NO_UNWIRED: &str = "model_infer";
 
 fn node(id: &str, stage: &str) -> NodeDef {
     node_with_params(id, stage, serde_json::Value::Null)
@@ -25,6 +27,16 @@ fn node_with_params(id: &str, stage: &str, params: serde_json::Value) -> NodeDef
 
 fn spec(nodes: Vec<NodeDef>, links: Vec<Link>) -> PipelineSpec {
     PipelineSpec { nodes, links }
+}
+
+#[test]
+fn schema_text_lists_wired_stages_with_required_params() {
+    let text = schema_text();
+    for stage in piplines::port::WIRED_STAGES {
+        assert!(text.contains(stage), "missing stage {stage} in:\n{text}");
+    }
+    assert!(text.contains(SCHEMA_REQUIRED_MARK));
+    assert!(!text.contains(SCHEMA_NO_UNWIRED));
 }
 
 #[test]

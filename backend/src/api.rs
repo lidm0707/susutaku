@@ -18,7 +18,7 @@ use crate::app::kanban::{CardView, KanbanApp};
 use crate::app::{BoardService, ChatUseCase};
 use crate::domain::{
     AgentConfigDraft, CardMove, CardPatch, ChatCmd, NewCard, NewPipeline, NewProject, NewWorkspace,
-    SearchMode,
+    SearchMode, ToolSet,
 };
 use crate::infra::claude_auth::{ClaudeAuth, LoginStatus as ClaudeLoginStatus};
 use crate::infra::claude_chat;
@@ -34,7 +34,7 @@ use crate::infra::zai_chat::ZaiEngine;
 use crate::infra::zai_settings::{SettingsState, ZaiSettings};
 use crate::port::inbound::ChatHandling;
 use crate::port::outbound::{
-    BoardOps, ChatMemory, Fetcher, ModelEndpoint, ModelSwitch, Runner, Searcher,
+    AgentConfigRepo, BoardOps, ChatMemory, Fetcher, ModelEndpoint, ModelSwitch, Runner, Searcher,
 };
 use prompt_sys::{MAX_PROMPT_CHARS, PromptBuilder, Role as PromptRole};
 use proto_rs::AgentBrief;
@@ -52,7 +52,9 @@ struct ZaiChatDeps {
     models: Arc<dyn ModelSwitch>,
     memory: Option<Arc<dyn ChatMemory>>,
     board: Arc<dyn BoardOps>,
+    agents: Arc<dyn AgentConfigRepo>,
     settings: Arc<SettingsState>,
+    store: std::sync::Arc<kanban_rs::Store>,
 }
 
 fn zai_chat_deps<T: ModelSwitch + 'static>(
@@ -67,8 +69,10 @@ fn zai_chat_deps<T: ModelSwitch + 'static>(
         runner,
         models: models as Arc<dyn ModelSwitch>,
         memory: crate::infra::chat_memory::from_env().map(|m| Arc::new(m) as Arc<dyn ChatMemory>),
-        board: Arc::new(BoardService::new(kanban_store)),
+        board: Arc::new(BoardService::new(kanban_store.clone())),
+        agents: Arc::new(crate::infra::kanban::PgKanban::new(kanban_store.clone())),
         settings,
+        store: kanban_store,
     })
 }
 
@@ -167,6 +171,14 @@ pub fn router<T: ChatHandling + ModelSwitch + 'static>(
             get(get_system_prompt).post(set_system_prompt),
         )
         .route("/api/chat/zai", post(chat_zai))
+        .route(
+            "/api/chat/threads",
+            get(list_chat_threads).post(create_chat_thread),
+        )
+        .route(
+            "/api/chat/threads/{id}",
+            get(list_chat_messages).delete(delete_chat_thread),
+        )
         .route("/api/sandbox", get(list_sandboxes))
         .route("/api/sandbox/logs", get(sandbox_logs))
         .route("/api/host", get(host_spec_handler))
@@ -393,6 +405,13 @@ fn require_edit(user: &AuthUser) -> Result<(), ApiError> {
     role.can_edit()
         .then_some(())
         .ok_or_else(|| ApiError(FORBIDDEN_MSG.to_string(), StatusCode::FORBIDDEN))
+}
+
+/// Validates the per-agent tool allow-list (search|fetch|shell|board).
+fn valid_tools(names: &[String]) -> Result<Vec<String>, ApiError> {
+    ToolSet::from_names(names)
+        .map(|_| names.to_vec())
+        .map_err(ApiError::bad_request)
 }
 
 async fn auth_from_headers(
@@ -653,6 +672,7 @@ async fn chat<T: ChatHandling>(
             tokenizer: tok,
             think: req.think.unwrap_or(false),
             board_token,
+            agent: req.agent.clone(),
         })
         .await
         .map_err(ApiError::internal)?;
@@ -1278,10 +1298,11 @@ async fn chat_zai(
         deps.models.clone(),
         deps.memory.clone(),
         deps.board.clone(),
+        deps.agents.clone(),
     );
     let message = match build_system_message(&req.system)? {
         Some(sys) => format!("{}\n\n{}", sys.content, req.message),
-        None => req.message,
+        None => req.message.clone(),
     };
     let outcome = zai
         .execute(ChatCmd {
@@ -1291,10 +1312,26 @@ async fn chat_zai(
             tokenizer: TokKind::Normal,
             think: false,
             board_token,
+            agent: req.agent.clone(),
         })
         .await
         .map_err(ApiError::internal)?;
     note_chat_reply(manager, req.agent, &outcome.text).await;
+    if let Some(thread_id) = req.thread_id {
+        let store = deps.store.clone();
+        let (user_text, reply_text) = (req.message, outcome.text.clone());
+        tokio::spawn(async move {
+            if let Err(e) = store.add_chat_message(thread_id, "user", &user_text).await {
+                tracing::warn!("chat transcript save (user) failed: {e}");
+            }
+            if let Err(e) = store
+                .add_chat_message(thread_id, "assistant", &reply_text)
+                .await
+            {
+                tracing::warn!("chat transcript save (assistant) failed: {e}");
+            }
+        });
+    }
     const ZERO_TPS: f64 = 0.0;
     Ok(Json(ChatReply {
         model: outcome.model,
@@ -1306,6 +1343,48 @@ async fn chat_zai(
         decode_tokens: outcome.stats.decode_tokens,
         decode_tps: ZERO_TPS,
     }))
+}
+
+async fn list_chat_threads(
+    Extension(deps): Extension<Arc<ZaiChatDeps>>,
+) -> Result<Json<Vec<kanban_rs::ChatThreadRow>>, ApiError> {
+    let rows = deps.store.list_chat_threads().await.map_err(store_err)?;
+    Ok(Json(rows))
+}
+
+#[derive(Deserialize, utoipa::ToSchema)]
+struct NewChatThread {
+    agent: String,
+    #[serde(default)]
+    title: String,
+}
+
+async fn create_chat_thread(
+    Extension(deps): Extension<Arc<ZaiChatDeps>>,
+    Json(req): Json<NewChatThread>,
+) -> Result<Json<kanban_rs::ChatThreadRow>, ApiError> {
+    let row = deps
+        .store
+        .create_chat_thread(&req.agent, &req.title)
+        .await
+        .map_err(store_err)?;
+    Ok(Json(row))
+}
+
+async fn list_chat_messages(
+    Extension(deps): Extension<Arc<ZaiChatDeps>>,
+    Path(id): Path<i64>,
+) -> Result<Json<Vec<kanban_rs::ChatMessageRow>>, ApiError> {
+    let rows = deps.store.list_chat_messages(id).await.map_err(store_err)?;
+    Ok(Json(rows))
+}
+
+async fn delete_chat_thread(
+    Extension(deps): Extension<Arc<ZaiChatDeps>>,
+    Path(id): Path<i64>,
+) -> Result<StatusCode, ApiError> {
+    deps.store.delete_chat_thread(id).await.map_err(store_err)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[derive(Deserialize, utoipa::ToSchema)]
@@ -2059,6 +2138,7 @@ async fn create_agent(
     Json(req): Json<AgentConfigRequest>,
 ) -> Result<Json<AgentConfigDto>, ApiError> {
     require_edit(&user)?;
+    let allowed_tools = valid_tools(&req.allowed_tools)?;
     let row = state
         .app
         .agents
@@ -2068,6 +2148,7 @@ async fn create_agent(
             persona: req.persona.unwrap_or_default(),
             prompt: req.prompt.unwrap_or_default(),
             output: req.output.unwrap_or_default(),
+            allowed_tools,
         })
         .await
         .map_err(cfg_err)?;
@@ -2087,6 +2168,7 @@ async fn update_agent_cfg(
     Json(req): Json<AgentConfigRequest>,
 ) -> Result<&'static str, ApiError> {
     require_edit(&user)?;
+    let allowed_tools = valid_tools(&req.allowed_tools)?;
     state
         .app
         .agents
@@ -2098,6 +2180,7 @@ async fn update_agent_cfg(
                 persona: req.persona.unwrap_or_default(),
                 prompt: req.prompt.unwrap_or_default(),
                 output: req.output.unwrap_or_default(),
+                allowed_tools,
             },
         )
         .await
@@ -3359,6 +3442,8 @@ struct ZaiChatRequest {
     /// Agent name from the chat modal; registers the exchange with the
     /// manager so the agent shows in machines with its transcript.
     agent: Option<String>,
+    /// Server-side thread id; when set, the turn is stored in Postgres.
+    thread_id: Option<i64>,
 }
 
 #[derive(Deserialize, utoipa::ToSchema)]
@@ -3609,6 +3694,9 @@ struct AgentConfigRequest {
     persona: Option<String>,
     prompt: Option<String>,
     output: Option<String>,
+    /// Tool allow-list (search|fetch|shell|board); empty = all tools.
+    #[serde(default)]
+    allowed_tools: Vec<String>,
 }
 
 #[derive(Serialize, utoipa::ToSchema)]
@@ -3619,6 +3707,7 @@ struct AgentConfigDto {
     persona: String,
     prompt: String,
     output: String,
+    allowed_tools: Vec<String>,
 }
 
 impl From<kanban_rs::AgentConfigRow> for AgentConfigDto {
@@ -3630,6 +3719,7 @@ impl From<kanban_rs::AgentConfigRow> for AgentConfigDto {
             persona: r.persona,
             prompt: r.prompt,
             output: r.output,
+            allowed_tools: r.allowed_tools,
         }
     }
 }

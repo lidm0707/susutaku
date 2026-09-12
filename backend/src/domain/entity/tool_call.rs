@@ -9,7 +9,7 @@ pub enum ToolCall {
     CardCreate { project_id: i64, title: String },
     CardSchedule { card_id: i64, cron: String },
     CardLink { card_id: i64, pipeline_id: i64 },
-    PipelineCreate(String),
+    PipelineCreate { name: String, spec: Option<String> },
     BoardList,
 }
 
@@ -65,7 +65,19 @@ impl ToolCall {
                     pipeline_id: pipeline_id.parse().ok()?,
                 })
             }
-            TOOL_PIPELINE_CREATE => Some(Self::PipelineCreate(arg.to_string())),
+            TOOL_PIPELINE_CREATE => {
+                let (name, spec) = match arg.split_once(' ') {
+                    Some((name, spec)) => (name, Some(spec.trim())),
+                    None => (arg, None),
+                };
+                if name.is_empty() {
+                    return None;
+                }
+                Some(Self::PipelineCreate {
+                    name: name.to_string(),
+                    spec: spec.map(str::to_string),
+                })
+            }
             TOOL_BOARD_LIST => Some(Self::BoardList),
             _ => None,
         }

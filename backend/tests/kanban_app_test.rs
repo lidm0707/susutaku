@@ -350,15 +350,33 @@ async fn run_card_pipeline_ref_image_loads_file_into_payload() {
 }
 
 #[tokio::test]
-async fn run_card_pipeline_without_pipeline_is_no_such_pipeline() {
+async fn run_card_pipeline_without_pipeline_persists_failed_run() {
     let mut cards = MockCardRepo::new();
     cards
         .expect_get()
         .with(eq(CARD_ID))
         .returning(|id| Ok(Some(card_row(id, None))));
+    // Pipeline missing: the run cannot start, but a failed run is still
+    // persisted and the card moves to the failed column.
+    expect_run_moves_todo_to(&mut cards, COLUMN_FAILED);
+    cards
+        .expect_set_agent()
+        .withf(|_, a: &kanban_rs::AgentState| {
+            a.name == "pipeline-runner"
+                && a.state["run"]["status"] == "failed"
+                && a.state["run"]["stages"].as_array().is_some_and(|s| {
+                    s.len() == 1
+                        && s[0]["note"]
+                            .as_str()
+                            .is_some_and(|n| n.contains("no such pipeline"))
+                })
+        })
+        .returning(|_, _| Ok(()));
 
-    let err = pipeline_run::run_card_pipeline(&runner_app(cards, MockPipelineRepo::new()), CARD_ID)
-        .await
-        .expect_err("no pipeline");
-    assert!(matches!(err, StoreError::NoSuchPipeline));
+    let record =
+        pipeline_run::run_card_pipeline(&runner_app(cards, MockPipelineRepo::new()), CARD_ID)
+            .await
+            .expect("failed run persisted");
+    assert_eq!(record.status, pipeline_run::StageStatus::Failed);
+    assert_eq!(record.pipeline_id, pipeline_run::PIPELINE_ID_NONE);
 }

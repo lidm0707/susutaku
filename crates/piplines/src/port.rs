@@ -122,6 +122,40 @@ const DOC_REF_IMAGE: &str = "loads the uploaded image at path into the payload a
 const DOC_UNWIRED: &str =
     "not wired to an engine yet: fails at run time. kept for old saved specs.";
 
+const SCHEMA_REQUIRED_TAG: &str = "required";
+const SCHEMA_OPTIONAL_TAG: &str = "optional";
+const SCHEMA_NO_PARAMS: &str = "no params";
+
+/// One line per runnable (wired) stage, for model prompts: the doc plus its
+/// params with required/optional tags. Unwired stages are omitted: they fail
+/// at run time, so a model must never emit them.
+pub fn schema_text() -> String {
+    let mut lines: Vec<String> = Vec::new();
+    for stage in WIRED_STAGES {
+        let s = stage_schema(stage);
+        let params = if s.params.is_empty() {
+            SCHEMA_NO_PARAMS.to_owned()
+        } else {
+            let items = s
+                .params
+                .iter()
+                .map(|p| {
+                    let tag = if p.required {
+                        SCHEMA_REQUIRED_TAG
+                    } else {
+                        SCHEMA_OPTIONAL_TAG
+                    };
+                    format!("{} ({}: {})", p.key, tag, p.hint)
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("params: {items}")
+        };
+        lines.push(format!("{stage} — {}; {params}", s.doc));
+    }
+    lines.join("\n")
+}
+
 pub fn stage_schema(stage: &str) -> StageSchema {
     let (input, output) = ports(stage);
     let params: &[ParamSpec] = match stage {

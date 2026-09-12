@@ -1,15 +1,17 @@
-use std::env;
 use std::fmt::Display;
 
 use serde_json::Value;
 
 pub const API_URL: &str = "https://api.duckduckgo.com/";
-pub const ENV_API_KEY: &str = "WEB_SEARCH_API_KEY";
+pub const PARAM_QUERY: &str = "q";
+pub const PARAM_FORMAT: &str = "format";
 pub const FORMAT_PARAM: &str = "json";
-pub const NO_KEY_NOTE: &str = "web_search: key present";
+pub const PARAM_NO_HTML: &str = "no_html";
 
 /// Hard cap on returned results (prompt size guard).
-pub const MAX_RESULTS: usize = 8;
+pub const MAX_RESULTS: usize = 5;
+/// Shown when the Instant Answer API yields nothing useful.
+pub const NO_RESULTS_NOTE: &str = "No useful DuckDuckGo Instant Answer results were found for: ";
 /// Snippets longer than this are truncated.
 pub const SNIPPET_MAX: usize = 300;
 
@@ -36,22 +38,16 @@ impl SearchResult {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
-pub enum KeyState {
-    Present,
-    Missing,
-}
-
-pub fn key_state() -> KeyState {
-    match env::var(ENV_API_KEY) {
-        Ok(v) if !v.trim().is_empty() => KeyState::Present,
-        _ => KeyState::Missing,
-    }
-}
-
 pub fn search(query: &str) -> Result<Vec<SearchResult>, String> {
-    let url = build_url(query);
-    let body = ureq::get(&url)
+    let results = request(&build_url(query))?;
+    if results.is_empty() {
+        return Err(format!("{NO_RESULTS_NOTE}{query}"));
+    }
+    Ok(results)
+}
+
+pub fn request(url: &str) -> Result<Vec<SearchResult>, String> {
+    let body = ureq::get(url)
         .call()
         .map_err(|e| e.to_string())?
         .into_string()
@@ -60,15 +56,24 @@ pub fn search(query: &str) -> Result<Vec<SearchResult>, String> {
 }
 
 pub fn build_url(query: &str) -> String {
-    let encoded: String = query
-        .chars()
-        .map(|c| match c {
-            ' ' => "+".to_string(),
-            c if c.is_ascii_alphanumeric() || "-._~".contains(c) => c.to_string(),
-            c => format!("%{:02X}", c as u32),
-        })
-        .collect();
-    format!("{API_URL}?q={encoded}&format={FORMAT_PARAM}")
+    let encoded = encode_query(query);
+    format!("{API_URL}?{PARAM_QUERY}={encoded}&{PARAM_FORMAT}={FORMAT_PARAM}&{PARAM_NO_HTML}=1")
+}
+
+/// Form-style percent-encoding: spaces as `+`, unreserved bytes as-is,
+/// everything else percent-encoded over the raw UTF-8 bytes.
+fn encode_query(query: &str) -> String {
+    const UNRESERVED: &str = "-._~";
+    let mut out = String::with_capacity(query.len());
+    for &b in query.as_bytes() {
+        match b {
+            b' ' => out.push('+'),
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' => out.push(b as char),
+            b if UNRESERVED.as_bytes().contains(&b) => out.push(b as char),
+            b => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
 }
 
 pub fn parse(body: &str) -> Vec<SearchResult> {
@@ -128,11 +133,7 @@ fn collect_topics(topics: &[Value], out: &mut Vec<SearchResult>) {
         };
         if let (Some(text), Some(url)) = (clean(item["Text"].as_str()), item["FirstURL"].as_str()) {
             let title = text.split(" - ").next().unwrap_or(&text).to_string();
-            let snippet = if text.len() > SNIPPET_MAX {
-                format!("{}…", &text[..SNIPPET_MAX])
-            } else {
-                text
-            };
+            let snippet = truncate(&text);
             out.push(SearchResult {
                 title,
                 url: url.to_string(),
@@ -149,4 +150,13 @@ fn clean(value: Option<&str>) -> Option<String> {
         return None;
     }
     Some(crate::toolcall::fetch::strip_tags(text))
+}
+
+/// Char-boundary-safe truncation to `SNIPPET_MAX` chars.
+fn truncate(text: &str) -> String {
+    if text.chars().count() <= SNIPPET_MAX {
+        return text.to_string();
+    }
+    let head: String = text.chars().take(SNIPPET_MAX).collect();
+    format!("{head}\u{2026}")
 }

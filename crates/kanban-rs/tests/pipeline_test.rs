@@ -81,6 +81,7 @@ async fn agent_crud_and_card_link() {
         persona: "".into(),
         prompt: "".into(),
         output: "".into(),
+        allowed_tools: vec!["search".into(), "board".into()],
     };
     let id = store.create_agent(&cfg).await.expect("create agent");
     assert!(matches!(
@@ -91,6 +92,16 @@ async fn agent_crud_and_card_link() {
     let rows = store.list_agents().await.expect("list agents");
     let found = rows.iter().find(|r| r.id == id).expect("agent row");
     assert_eq!(found.model, "qwen3.8-27b-4bit");
+    assert_eq!(
+        found.allowed_tools,
+        vec!["search".to_string(), "board".to_string()]
+    );
+    let by_name = store
+        .agent_by_name(TEST_AGENT)
+        .await
+        .expect("agent_by_name")
+        .expect("agent found");
+    assert_eq!(by_name.id, id);
 
     store
         .update_agent(AgentConfigUpdate {
@@ -100,9 +111,16 @@ async fn agent_crud_and_card_link() {
             persona: "tester",
             prompt: "hi",
             output: "text",
+            allowed_tools: &[],
         })
         .await
         .expect("update agent");
+    let cleared = store
+        .agent_by_name(TEST_AGENT)
+        .await
+        .expect("agent_by_name")
+        .expect("agent found");
+    assert!(cleared.allowed_tools.is_empty());
     assert!(matches!(
         store
             .update_agent(AgentConfigUpdate {
@@ -112,6 +130,7 @@ async fn agent_crud_and_card_link() {
                 persona: "",
                 prompt: "",
                 output: "",
+                allowed_tools: &[],
             })
             .await,
         Err(StoreError::NoSuchAgent)

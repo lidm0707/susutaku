@@ -3,6 +3,7 @@
 pub mod agent_cfg;
 pub mod board;
 pub mod card;
+pub mod chat;
 pub mod pipeline;
 pub mod resource;
 pub mod skill;
@@ -15,6 +16,7 @@ pub use board::{Board, BoardError, Column};
 pub use card::{
     Card, CardId, PRIORITY_CRITICAL, PRIORITY_HIGH, PRIORITY_LOW, PRIORITY_NORMAL, Priority,
 };
+pub use chat::{ChatMessageRow, ChatThreadRow, ROLE_ASSISTANT, ROLE_USER};
 pub use pipeline::PipelineRow;
 pub use resource::{ResourceRow, UpsertResource};
 pub use skill::{NewSkill, SkillRow};

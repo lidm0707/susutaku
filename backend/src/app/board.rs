@@ -38,14 +38,15 @@ impl BoardService {
 
 const FORBIDDEN: &str = "forbidden: editor role required";
 const CRON_HINT: &str = " (5-field cron, UTC, e.g. 0 */5 * * * for every 5 hours)";
+const EMPTY_SPEC: &str = r#"{"nodes":[],"links":[]}"#;
 
 #[async_trait]
 impl BoardOps for BoardService {
     async fn exec(&self, req: BoardRequest) -> BoardResult {
         self.editor(&req.token).await?;
         match req.op {
-            BoardOp::CreatePipeline { name } => {
-                let spec = serde_json::json!({ "stages": [] }).to_string();
+            BoardOp::CreatePipeline { name, spec } => {
+                let spec = spec.unwrap_or_else(|| EMPTY_SPEC.to_owned());
                 let id = self
                     .store
                     .create_pipeline(&name, &spec)

@@ -1,4 +1,5 @@
-//! Per-agent configuration (model, persona, prompt, output) in Postgres.
+//! Per-agent configuration (model, persona, prompt, output, allowed tools) in
+//! Postgres.
 
 use serde::{Deserialize, Serialize};
 
@@ -14,6 +15,7 @@ pub struct AgentConfigRow {
     pub persona: String,
     pub prompt: String,
     pub output: String,
+    pub allowed_tools: Vec<String>,
 }
 
 pub struct AgentConfigUpdate<'a> {
@@ -23,29 +25,44 @@ pub struct AgentConfigUpdate<'a> {
     pub persona: &'a str,
     pub prompt: &'a str,
     pub output: &'a str,
+    pub allowed_tools: &'a [String],
 }
 
 impl Store {
     pub async fn list_agents(&self) -> Result<Vec<AgentConfigRow>, StoreError> {
         let rows = sqlx::query_as!(
             AgentConfigRow,
-            r#"SELECT id, name, model, persona, prompt, output FROM agent_settings ORDER BY id"#
+            r#"SELECT id, name, model, persona, prompt, output, allowed_tools
+               FROM agent_settings ORDER BY id"#
         )
         .fetch_all(&self.pool)
         .await?;
         Ok(rows)
     }
 
+    pub async fn agent_by_name(&self, name: &str) -> Result<Option<AgentConfigRow>, StoreError> {
+        let row = sqlx::query_as!(
+            AgentConfigRow,
+            r#"SELECT id, name, model, persona, prompt, output, allowed_tools
+               FROM agent_settings WHERE name = $1"#,
+            name
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
     pub async fn create_agent(&self, cfg: &AgentConfigRow) -> Result<i64, StoreError> {
         let row = sqlx::query!(
-            r#"INSERT INTO agent_settings (name, model, persona, prompt, output)
-               VALUES ($1, $2, $3, $4, $5)
+            r#"INSERT INTO agent_settings (name, model, persona, prompt, output, allowed_tools)
+               VALUES ($1, $2, $3, $4, $5, $6)
                RETURNING id AS "id: i64""#,
             cfg.name,
             cfg.model,
             cfg.persona,
             cfg.prompt,
             cfg.output,
+            &cfg.allowed_tools,
         )
         .fetch_one(&self.pool)
         .await
@@ -59,7 +76,8 @@ impl Store {
     pub async fn update_agent(&self, upd: AgentConfigUpdate<'_>) -> Result<(), StoreError> {
         let res = sqlx::query!(
             r#"UPDATE agent_settings
-               SET name = $2, model = $3, persona = $4, prompt = $5, output = $6
+               SET name = $2, model = $3, persona = $4, prompt = $5, output = $6,
+                   allowed_tools = $7
                WHERE id = $1"#,
             upd.id,
             upd.name,
@@ -67,6 +85,7 @@ impl Store {
             upd.persona,
             upd.prompt,
             upd.output,
+            upd.allowed_tools,
         )
         .execute(&self.pool)
         .await

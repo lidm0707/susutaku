@@ -105,6 +105,7 @@ pub trait ResourceRepo: Send + Sync {
 #[async_trait]
 pub trait AgentConfigRepo: Send + Sync {
     async fn list(&self) -> Result<Vec<AgentConfigRow>, StoreError>;
+    async fn by_name(&self, name: &str) -> Result<Option<AgentConfigRow>, StoreError>;
     async fn create(&self, cfg: AgentConfigDraft) -> Result<AgentConfigRow, StoreError>;
     async fn update(&self, id: i64, cfg: AgentConfigDraft) -> Result<(), StoreError>;
     async fn remove(&self, id: i64) -> Result<(), StoreError>;

@@ -30,6 +30,9 @@ pub const STAGE_NOTE_PASSTHROUGH: &str = "payload passed through";
 pub const STAGE_NOTE_OUTPUT: &str = "captured pipeline output";
 pub const STAGE_NOTE_RESOURCE: &str = "stored resource: ";
 pub const TEXT_SEP: &str = "\n\n";
+pub const NODE_PREPARE: &str = "pipeline";
+pub const STAGE_PREPARE: &str = "prepare";
+pub const PIPELINE_ID_NONE: i64 = 0;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
 #[serde(rename_all = "snake_case")]
@@ -70,6 +73,40 @@ pub async fn run_card_pipeline(app: &KanbanApp, card_id: i64) -> Result<RunRecor
         .get(card_id)
         .await?
         .ok_or(StoreError::NoSuchCard)?;
+    let outcome = match load_spec(app, &card).await {
+        Ok((spec, pipeline_id, pipeline_name)) => {
+            move_to_column(app, card_id, &card.column_id, COLUMN_DOING).await?;
+            execute(&spec, seed_payload(&card), pipeline_id, &pipeline_name).await
+        }
+        // The run cannot start: still record a failed run so the card moves
+        // to the failed column instead of silently staying put.
+        Err(e) => RunOutcome {
+            record: RunRecord {
+                pipeline_id: card.pipeline_id.unwrap_or(PIPELINE_ID_NONE),
+                pipeline_name: String::new(),
+                status: StageStatus::Failed,
+                stages: vec![RunStage {
+                    node: NODE_PREPARE.to_owned(),
+                    stage: STAGE_PREPARE.to_owned(),
+                    status: StageStatus::Failed,
+                    note: e.to_string(),
+                }],
+                output: None,
+                resources: Vec::new(),
+                finished_at: now_iso(),
+            },
+            agent_name: RUNNER_NAME.to_owned(),
+            resources: Vec::new(),
+        },
+    };
+    persist(app, card_id, &card, outcome).await
+}
+
+/// Load and validate the spec attached to the card, if any.
+async fn load_spec(
+    app: &KanbanApp,
+    card: &CardRow,
+) -> Result<(PipelineSpec, i64, String), StoreError> {
     let pipeline_id = card.pipeline_id.ok_or(StoreError::NoSuchPipeline)?;
     let pipeline = app
         .pipelines
@@ -82,10 +119,7 @@ pub async fn run_card_pipeline(app: &KanbanApp, card_id: i64) -> Result<RunRecor
         serde_json::from_str(&pipeline.spec).map_err(|e| StoreError::BadSpec(e.to_string()))?;
     spec.validate()
         .map_err(|e| StoreError::BadSpec(e.to_string()))?;
-    move_to_column(app, card_id, &card.column_id, COLUMN_DOING).await?;
-
-    let outcome = execute(&spec, seed_payload(&card), pipeline_id, &pipeline.name).await;
-    persist(app, card_id, &card, outcome).await
+    Ok((spec, pipeline_id, pipeline.name.clone()))
 }
 
 /// Move a card unless it already sits in the target column.

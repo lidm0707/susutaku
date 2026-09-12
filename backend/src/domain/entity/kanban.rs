@@ -61,4 +61,6 @@ pub struct AgentConfigDraft {
     pub persona: String,
     pub prompt: String,
     pub output: String,
+    /// Tool allow-list (search|fetch|shell|board); empty = all tools.
+    pub allowed_tools: Vec<String>,
 }

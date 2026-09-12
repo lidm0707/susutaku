@@ -5,16 +5,19 @@ use std::sync::Arc;
 
 use crate::domain::{
     BoardOp, BoardRequest, ChatCmd, ChatOutcome, GenReply, Prompt, SearchMode, SearchResult,
-    TOOL_RESULT_HEADER, TOOL_ROUNDS_MAX, ToolCall,
+    TOOL_DENIED, TOOL_RESULT_HEADER, TOOL_ROUNDS_MAX, ToolCall, ToolKind, ToolSet,
 };
 use crate::port::inbound::ChatHandling;
 use crate::port::outbound::{
-    BoardOps, ChatMemory, Fetcher, Inference, ModelSwitch, Runner, Searcher,
+    AgentConfigRepo, BoardOps, ChatMemory, Fetcher, Inference, ModelSwitch, Runner, Searcher,
 };
+use susutaku_mlx::stats::GenStats;
 use susutaku_mlx::tok::TokKind;
 
 const MEMORY_RECALL_TOP_K: usize = 5;
 const MEMORY_CONTEXT_HEADER: &str = "Earlier relevant conversation:\n";
+const TOOL_ERROR: &str = "tool failed: ";
+const TOOL_FALLBACK_NOTE: &str = "(the model could not finish this run; try again)";
 
 pub struct ChatUseCase {
     searcher: Arc<dyn Searcher>,
@@ -24,6 +27,7 @@ pub struct ChatUseCase {
     models: Arc<dyn ModelSwitch>,
     memory: Option<Arc<dyn ChatMemory>>,
     board: Arc<dyn BoardOps>,
+    agents: Arc<dyn AgentConfigRepo>,
 }
 
 impl ChatUseCase {
@@ -36,6 +40,7 @@ impl ChatUseCase {
         models: Arc<dyn ModelSwitch>,
         memory: Option<Arc<dyn ChatMemory>>,
         board: Arc<dyn BoardOps>,
+        agents: Arc<dyn AgentConfigRepo>,
     ) -> Self {
         Self {
             searcher,
@@ -45,6 +50,19 @@ impl ChatUseCase {
             models,
             memory,
             board,
+            agents,
+        }
+    }
+
+    /// Resolves the named agent's tool allow-list; unknown/unnamed agents get
+    /// the full set. Store errors degrade to the full set (fail open).
+    async fn agent_tools(&self, agent: Option<&str>) -> ToolSet {
+        let Some(name) = agent.map(str::trim).filter(|n| !n.is_empty()) else {
+            return ToolSet::all();
+        };
+        match self.agents.by_name(name).await {
+            Ok(Some(cfg)) => ToolSet::from_names(&cfg.allowed_tools).unwrap_or_default(),
+            _ => ToolSet::all(),
         }
     }
 
@@ -91,9 +109,27 @@ impl ChatUseCase {
             .map_err(|_| "shell task panicked".to_string())?
     }
 
+    fn outcome(&self, last_good: (String, String, GenStats), searched: bool) -> ChatOutcome {
+        let (text, model, stats) = last_good;
+        let text = if ToolCall::parse(&text).is_some() {
+            TOOL_FALLBACK_NOTE.to_string()
+        } else {
+            text
+        };
+        ChatOutcome {
+            model: Some(model),
+            text,
+            searched,
+            stats,
+        }
+    }
+
     fn board_op(call: &ToolCall) -> Option<BoardOp> {
         match call {
-            ToolCall::PipelineCreate(name) => Some(BoardOp::CreatePipeline { name: name.clone() }),
+            ToolCall::PipelineCreate { name, spec } => Some(BoardOp::CreatePipeline {
+                name: name.clone(),
+                spec: spec.clone(),
+            }),
             ToolCall::CardCreate { project_id, title } => Some(BoardOp::CreateCard {
                 project_id: *project_id,
                 title: title.clone(),
@@ -152,6 +188,7 @@ impl ChatHandling for ChatUseCase {
     /// Zed-style agentic loop: the model may call tools before answering.
     async fn execute(&self, cmd: ChatCmd) -> Result<ChatOutcome, String> {
         let allow_tools = cmd.mode == SearchMode::Auto;
+        let tools = self.agent_tools(cmd.agent.as_deref()).await;
 
         let mut context = String::new();
         let memories = self.recall_blocking(&cmd.message).await;
@@ -174,73 +211,100 @@ impl ChatHandling for ChatUseCase {
             &context,
             allow_tools,
             cmd.board_token.is_some(),
+            &tools,
         );
         let mut reply = self
             .infer(prompt, cmd.max_tokens, cmd.tokenizer, cmd.think)
             .await?;
+        let mut last_good = (reply.text.clone(), reply.model.clone(), reply.stats);
 
         let mut rounds = 0usize;
         while let Some(call) = self.next_call(&reply, allow_tools, rounds) {
             rounds += 1;
             match call {
-                ToolCall::Search(query) => {
+                ToolCall::Search(query) if tools.allows(ToolKind::Search) => {
                     searched = true;
-                    let results = self.search_blocking(&query).await?;
+                    let note = match self.search_blocking(&query).await {
+                        Ok(results) => Prompt::format_results(&cmd.message, &results),
+                        Err(e) => format!("{TOOL_ERROR}{e}"),
+                    };
                     context.push_str(TOOL_RESULT_HEADER);
-                    context.push_str(&Prompt::format_results(&cmd.message, &results));
+                    context.push_str(&note);
                 }
-                ToolCall::Fetch(url) => {
-                    let page = self.fetch_blocking(&url).await?;
+                ToolCall::Fetch(url) if tools.allows(ToolKind::Fetch) => {
+                    let page = match self.fetch_blocking(&url).await {
+                        Ok(page) => page,
+                        Err(e) => format!("{TOOL_ERROR}{e}"),
+                    };
                     context.push_str(TOOL_RESULT_HEADER);
                     context.push_str(&page);
                 }
-                ToolCall::Shell(cmd) => {
-                    let out = self.shell_blocking(&cmd).await?;
+                ToolCall::Shell(cmd) if tools.allows(ToolKind::Shell) => {
+                    let out = match self.shell_blocking(&cmd).await {
+                        Ok(out) => out,
+                        Err(e) => format!("{TOOL_ERROR}{e}"),
+                    };
                     context.push_str(TOOL_RESULT_HEADER);
                     context.push_str(&out);
                 }
-                call if Self::board_op(&call).is_some() => {
+                call if Self::board_op(&call).is_some() && tools.allows(ToolKind::Board) => {
                     let token = cmd.board_token.clone();
                     let op = Self::board_op(&call).expect("matched guard");
                     let out = self.board_blocking(token, op).await;
                     context.push_str(TOOL_RESULT_HEADER);
                     context.push_str(&out);
                 }
-                _ => unreachable!("next_call only yields parsed variants"),
+                _ => {
+                    context.push_str(TOOL_RESULT_HEADER);
+                    context.push_str(TOOL_DENIED);
+                }
             }
             prompt = Prompt::build(
                 &cmd.message,
                 &context,
                 allow_tools,
                 cmd.board_token.is_some(),
+                &tools,
             );
-            reply = self
+            reply = match self
                 .infer(prompt, cmd.max_tokens, cmd.tokenizer, cmd.think)
-                .await?;
+                .await
+            {
+                Ok(r) => {
+                    last_good = (r.text.clone(), r.model.clone(), r.stats);
+                    r
+                }
+                Err(e) => {
+                    tracing::warn!("chat tool round {rounds} inference failed: {e}");
+                    return Ok(self.outcome(last_good, searched));
+                }
+            };
         }
 
         // Tool budget exhausted while the model still wants a tool: force a
         // final answer on the gathered context, without the tool offer.
         if allow_tools && rounds > 0 && ToolCall::parse(&reply.text).is_some() {
-            reply = self
+            reply = match self
                 .infer(
-                    Prompt::build(&cmd.message, &context, false, false),
+                    Prompt::build(&cmd.message, &context, false, false, &tools),
                     cmd.max_tokens,
                     cmd.tokenizer,
                     cmd.think,
                 )
-                .await?;
+                .await
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::warn!("chat final answer inference failed: {e}");
+                    return Ok(self.outcome(last_good, searched));
+                }
+            };
         }
 
         self.remember_blocking("user", &cmd.message).await;
         self.remember_blocking("assistant", &reply.text).await;
 
-        Ok(ChatOutcome {
-            model: Some(reply.model),
-            text: reply.text,
-            searched,
-            stats: reply.stats,
-        })
+        Ok(self.outcome((reply.text, reply.model, reply.stats), searched))
     }
 }
 

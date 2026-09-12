@@ -539,7 +539,8 @@ export async function chat_zai(
   message: string,
   model: string,
   system?: PromptSection[],
-  agent?: string
+  agent?: string,
+  thread_id?: number
 ): Promise<ChatReply> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   const token = get_token();
@@ -547,10 +548,52 @@ export async function chat_zai(
   const res = await fetch(`${API_BASE}/api/chat/zai`, {
     method: "POST",
     headers,
-    body: JSON.stringify({ message, model: model || undefined, system, agent }),
+    body: JSON.stringify({ message, model: model || undefined, system, agent, thread_id }),
   });
   if (!res.ok) throw new ApiError(res.status, await res.text());
   return res.json();
+}
+
+export interface ChatThreadRow {
+  id: number;
+  agent: string;
+  title: string;
+  created_at: string;
+}
+
+export interface ChatMessageRow {
+  id: number;
+  thread_id: number;
+  role: string;
+  text: string;
+  created_at: string;
+}
+
+export async function fetch_chat_threads(): Promise<ChatThreadRow[]> {
+  const res = await fetch(`${API_BASE}/api/chat/threads`);
+  if (!res.ok) throw new ApiError(res.status, await res.text());
+  return res.json();
+}
+
+export async function create_chat_thread(agent: string, title: string): Promise<ChatThreadRow> {
+  const res = await fetch(`${API_BASE}/api/chat/threads`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ agent, title }),
+  });
+  if (!res.ok) throw new ApiError(res.status, await res.text());
+  return res.json();
+}
+
+export async function fetch_chat_messages(thread_id: number): Promise<ChatMessageRow[]> {
+  const res = await fetch(`${API_BASE}/api/chat/threads/${thread_id}`);
+  if (!res.ok) throw new ApiError(res.status, await res.text());
+  return res.json();
+}
+
+export async function delete_chat_thread(thread_id: number): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/chat/threads/${thread_id}`, { method: "DELETE" });
+  if (!res.ok) throw new ApiError(res.status, await res.text());
 }
 
 export async function render_prompt(sections: PromptSection[]): Promise<RenderedPrompt> {

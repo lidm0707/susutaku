@@ -101,6 +101,7 @@ fn use_case(memory: Option<Arc<dyn ChatMemory>>) -> ChatUseCase {
         Arc::new(NoModels),
         memory,
         Arc::new(DenyBoard),
+        Arc::new(backend::port::outbound::MockAgentConfigRepo::new()),
     )
 }
 
@@ -126,6 +127,7 @@ async fn recalls_before_and_remembers_after() {
             tokenizer: TokKind::Normal,
             think: false,
             board_token: None,
+            agent: None,
         })
         .await
         .expect("chat ok");
@@ -151,6 +153,7 @@ async fn works_without_memory() {
             tokenizer: TokKind::Normal,
             think: false,
             board_token: None,
+            agent: None,
         })
         .await
         .expect("chat ok");

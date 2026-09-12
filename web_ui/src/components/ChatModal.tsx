@@ -5,8 +5,12 @@ import {
   API_BASE,
   chat_codex,
   chat_zai,
+  create_chat_thread,
+  delete_chat_thread,
   fetch_agent_machine,
   fetch_agents,
+  fetch_chat_messages,
+  fetch_chat_threads,
   fetch_codex_models,
   fetch_models,
   fetch_system_prompt,
@@ -108,12 +112,14 @@ interface Thread {
   messages: Msg[];
   focus: Focus | null;
   detached: boolean;
+  server_id: number | null;
+  loaded: boolean;
 }
 
 export default function ChatModal({ open, on_close }: { open: boolean; on_close: () => void }) {
   const { pathname } = useLocation();
   const [threads, setThreads] = useState<Thread[]>([
-    { id: 0, title: "thread 1", messages: [], focus: null, detached: false },
+    { id: 0, title: "thread 1", messages: [], focus: null, detached: false, server_id: null, loaded: true },
   ]);
   const [activeId, setActiveId] = useState(0);
   const [input, setInput] = useState("");
@@ -133,6 +139,7 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
   const [machineByAgent, setMachineByAgent] = useState<Record<string, string>>({});
   const nextId = useRef(1);
   const nextThreadId = useRef(1);
+  const loadingThreads = useRef(new Set<number>());
   const pickerRef = useRef<HTMLDivElement | null>(null);
   const active = threads.find((t) => t.id === activeId) ?? threads[0];
   const messages = active.messages;
@@ -167,7 +174,53 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
       })
       .catch(() => {});
     fetch_system_prompt().then(setSysPrompt).catch(() => {});
+    fetch_chat_threads()
+      .then((rows) =>
+        setThreads((ts) => {
+          const locals = ts.filter((t) => t.server_id === null);
+          const nextLocalId = Math.max(0, ...locals.map((t) => t.id)) + 1;
+          nextThreadId.current = Math.max(nextThreadId.current, nextLocalId);
+          const server: Thread[] = rows.map((r) => ({
+            id: nextThreadId.current++,
+            title: r.title || `thread ${r.id}`,
+            messages: [],
+            focus: null,
+            detached: false,
+            server_id: r.id,
+            loaded: false,
+          }));
+          return [...server, ...locals];
+        })
+      )
+      .catch(() => {});
   }, [open]);
+
+  // Fetch a server thread's messages the first time it is opened.
+  useEffect(() => {
+    const t = threads.find((x) => x.id === activeId);
+    if (!t || t.server_id === null || t.loaded || loadingThreads.current.has(t.id)) return;
+    loadingThreads.current.add(t.id);
+    fetch_chat_messages(t.server_id)
+      .then((rows) =>
+        setThreads((ts) =>
+          ts.map((x) =>
+            x.id === t.id
+              ? {
+                  ...x,
+                  loaded: true,
+                  messages: rows.map((m) =>
+                    m.role === "user"
+                      ? { id: m.id, role: "user" as const, text: m.text }
+                      : { id: m.id, role: "assistant" as const, text: m.text }
+                  ),
+                }
+              : x
+          )
+        )
+      )
+      .catch(() => {})
+      .finally(() => loadingThreads.current.delete(t.id));
+  }, [activeId, threads]);
 
   useEffect(() => {
     if (!open) return;
@@ -250,13 +303,17 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
     const id = nextThreadId.current++;
     setThreads((ts) => [
       ...ts,
-      { id, title: `thread ${id + 1}`, messages: [], focus: null, detached: false },
+      { id, title: `thread ${id + 1}`, messages: [], focus: null, detached: false, server_id: null, loaded: true },
     ]);
     setActiveId(id);
     setError("");
   }
 
   function close_thread(id: number) {
+    const gone = threads.find((t) => t.id === id);
+    if (gone?.server_id !== null && gone?.server_id !== undefined) {
+      delete_chat_thread(gone.server_id).catch(() => {});
+    }
     setThreads((ts) => {
       const rest = ts.filter((t) => t.id !== id);
       if (!rest.length) {
@@ -266,6 +323,8 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
           messages: [] as Msg[],
           focus: null,
           detached: false,
+          server_id: null,
+          loaded: true,
         };
         setActiveId(fresh.id);
         return [fresh];
@@ -289,7 +348,7 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
     ].filter((s) => s.body.trim());
   }
 
-  async function send_agent(a: Agent, text: string): Promise<ChatReply> {
+  async function send_agent(a: Agent, text: string, thread_id: number | null): Promise<ChatReply> {
     let codex = codexModels;
     if (!codex.length) {
       codex = await fetch_codex_models().catch(() => []);
@@ -306,7 +365,7 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
       });
       return res.json();
     }
-    return chat_zai(text, a.model, agent_sections(a), a.name);
+    return chat_zai(text, a.model, agent_sections(a), a.name, thread_id ?? undefined);
   }
 
   async function send(e: React.FormEvent) {
@@ -347,7 +406,20 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
     setThreads((ts) =>
       ts.map((t) => (t.id === tid && !t.messages.length ? { ...t, focus } : t))
     );
-    const outcomes = await Promise.allSettled(selected.map((a) => send_agent(a, contexted)));
+    let serverThreadId = thread?.server_id ?? null;
+    if (serverThreadId === null) {
+      try {
+        const agentName = selected.map((a) => a.name).join(", ") || "chat";
+        const row = await create_chat_thread(agentName, text.slice(0, THREAD_TITLE_LEN));
+        serverThreadId = row.id;
+        setThreads((ts) => ts.map((t) => (t.id === tid ? { ...t, server_id: row.id } : t)));
+      } catch {
+        // transcript stays client-only if the thread row can't be created
+      }
+    }
+    const outcomes = await Promise.allSettled(
+      selected.map((a) => send_agent(a, contexted, serverThreadId))
+    );
     let failures = 0;
     outcomes.forEach((out, i) => {
       const patch = (over: Partial<Msg>) =>

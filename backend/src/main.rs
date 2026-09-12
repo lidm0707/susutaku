@@ -89,6 +89,8 @@ async fn main() {
     spawn_client_node(sandbox.clone()).await;
     let codex_workspace = sandbox.root();
     let board = Arc::new(BoardService::new(kanban_store.clone()));
+    let agents: Arc<dyn backend::port::outbound::AgentConfigRepo> =
+        Arc::new(backend::infra::kanban::PgKanban::new(kanban_store.clone()));
     let use_case = Arc::new(ChatUseCase::new(
         Arc::new(DuckDuckGo),
         Arc::new(PageFetcher),
@@ -97,6 +99,7 @@ async fn main() {
         model.clone(),
         chat_memory(),
         board,
+        agents,
     ));
 
     let usage_store = Arc::new(codex_usage::connect().await);

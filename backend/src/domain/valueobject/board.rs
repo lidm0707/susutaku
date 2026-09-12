@@ -3,8 +3,10 @@
 /// One board operation requested by the model.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BoardOp {
-    /// Create a pipeline shell; returns the new pipeline id.
-    CreatePipeline { name: String },
+    /// Create a pipeline; the spec is the optional graph JSON
+    /// `{nodes: [{id, stage, params}], links: [{from, to}]}` — without it an
+    /// empty (valid) pipeline is created. Returns the new pipeline id.
+    CreatePipeline { name: String, spec: Option<String> },
     /// Create a card in the default todo column; returns the new card id.
     CreateCard { project_id: i64, title: String },
     /// Attach a pipeline to a card.
