@@ -18,6 +18,11 @@ test.skip(
   "needs the mock-model backend stack (docker/compose/playwright-backend.yml)",
 );
 
+// Nested podman inside the backend container needs either kernel overlay
+// mounts or /dev/fuse; some Docker VMs (e.g. macOS) provide neither, so the
+// sandbox image cannot be built there. Those stacks set E2E_SKIP_SANDBOX=1.
+const SANDBOX_AVAILABLE = process.env.E2E_SKIP_SANDBOX !== "1";
+
 function mockChat(request: APIRequestContext, body: object) {
   return request.post(`${API}/api/chat`, { data: body });
 }
@@ -36,16 +41,20 @@ async function seedChatAgent(request: APIRequestContext): Promise<string> {
 }
 
 async function selectAgent(page: import("@playwright/test").Page, name: string) {
-  const select = page.locator('[role="dialog"] select[title="agent"]');
-  const value = await select
-    .locator("option", { hasText: name })
-    .getAttribute("value");
-  await select.selectOption(value);
+  const dialog = page.locator('[role="dialog"]');
+  await dialog.locator('button[title="choose agent(s)"]').click();
+  // Menu items read "<name> · <model>"; the seeded name is unique. On a
+  // fresh DB the modal auto-selects the only agent — don't toggle it off.
+  const item = dialog.locator('[role="menuitemcheckbox"]', { hasText: name });
+  if ((await item.getAttribute("aria-checked")) !== "true") {
+    await item.click();
+  }
+  await dialog.locator('button[title="choose agent(s)"]').click();
 }
 
 async function openChatModal(page: import("@playwright/test").Page) {
   await page.goto("/kanban");
-  await page.click("button.chat-fab");
+  await page.click("button[aria-label='open chat']");
   const dialog = page.locator('[role="dialog"]');
   await expect(dialog).toBeVisible();
   return dialog;
@@ -85,6 +94,7 @@ test.describe("chat against the mock model (backend in container)", () => {
     login,
     request,
   }) => {
+    test.skip(!SANDBOX_AVAILABLE, "nested podman sandbox unusable on this docker VM");
     const agentName = await seedChatAgent(request);
     const dialog = await openChatModal(page);
     await selectAgent(page, agentName);
@@ -122,6 +132,7 @@ test.describe("chat against the mock model (backend in container)", () => {
   test("an agent can be spawned and run inside that backend", async ({
     request,
   }) => {
+    test.skip(!SANDBOX_AVAILABLE, "nested podman sandbox unusable on this docker VM");
     const res = await request.post(`${API}/api/manager/agents`, {
       data: { agent: AGENT_NAME },
     });

@@ -55,7 +55,7 @@ fn spawn_client(
 fn spawn_client_agents(
     addr: String,
     on_command: impl FnMut(&str, &str) -> String + Send + 'static,
-    on_agents: impl FnMut() -> Vec<String> + Send + 'static,
+    on_agents: impl FnMut() -> Vec<proto_rs::AgentBrief> + Send + 'static,
 ) -> ClientHandle {
     tokio::spawn(async move { client::connect(&addr, test_meta(), on_command, on_agents).await })
 }
@@ -169,7 +169,20 @@ async fn client_answers_agent_names() {
     spawn_client_agents(
         addr,
         |_agent, c| format!("out:{c}"),
-        || vec!["fix-login".into(), "scan".into()],
+        || {
+            vec![
+                proto_rs::AgentBrief {
+                    name: "fix-login".into(),
+                    runs: 2,
+                    last_cmd: Some("echo hi".into()),
+                },
+                proto_rs::AgentBrief {
+                    name: "scan".into(),
+                    runs: 0,
+                    last_cmd: None,
+                },
+            ]
+        },
     );
     let (mut stream, _) = listener.accept().await.expect("accept");
     read_register(&mut stream).await;
@@ -186,7 +199,13 @@ async fn client_answers_agent_names() {
     let reply = read_frame(&mut stream).await.expect("reply");
     assert_eq!(reply.id, 8);
     match reply.kind {
-        Kind::AgentNamesResult { names } => assert_eq!(names, vec!["fix-login", "scan"]),
+        Kind::AgentNamesResult { agents } => {
+            assert_eq!(agents.len(), 2);
+            assert_eq!(agents[0].name, "fix-login");
+            assert_eq!(agents[0].runs, 2);
+            assert_eq!(agents[0].last_cmd.as_deref(), Some("echo hi"));
+            assert_eq!(agents[1].last_cmd, None);
+        }
         other => panic!("expected AgentNamesResult, got {other:?}"),
     }
 }

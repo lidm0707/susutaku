@@ -30,6 +30,7 @@ use crate::infra::zai_settings::{SettingsState, ZaiSettings};
 use crate::port::inbound::ChatHandling;
 use crate::port::outbound::{ModelEndpoint, ModelSwitch};
 use prompt_sys::{MAX_PROMPT_CHARS, PromptBuilder, Role as PromptRole};
+use proto_rs::AgentBrief;
 use std::path::PathBuf;
 use susutaku_mlx::tok::TokKind;
 
@@ -2226,9 +2227,27 @@ struct MachineView {
     local: bool,
     /// Hub client id when the machine is a registered remote worker.
     client_id: Option<u64>,
-    /// Agent names currently running on this machine.
-    agents: Vec<String>,
+    /// Agents running on this machine: name/runs/last-command.
+    agents: Vec<AgentBriefDto>,
     sandboxes: Vec<SandboxDirInfo>,
+}
+
+/// OpenAPI mirror of `proto_rs::AgentBrief` (proto-rs has no utoipa dep).
+#[derive(Serialize, utoipa::ToSchema)]
+struct AgentBriefDto {
+    name: String,
+    runs: u64,
+    last_cmd: Option<String>,
+}
+
+impl AgentBriefDto {
+    fn of(a: proto_rs::AgentBrief) -> Self {
+        Self {
+            name: a.name,
+            runs: a.runs,
+            last_cmd: a.last_cmd,
+        }
+    }
 }
 
 fn model_server_url() -> String {
@@ -2277,7 +2296,11 @@ fn remote_machines(local_hostname: &str) -> Vec<MachineView> {
                 ok,
                 local: false,
                 client_id: id,
-                agents: agents.unwrap_or_default(),
+                agents: agents
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(AgentBriefDto::of)
+                    .collect(),
                 sandboxes: sandboxes.unwrap_or_default(),
             }
         })
@@ -2287,13 +2310,13 @@ fn remote_machines(local_hostname: &str) -> Vec<MachineView> {
 
 /// Agent names a remote client machine currently holds; `None` when the
 /// round trip through the hub failed (machine unreachable).
-fn hub_client_agents(agent: &ureq::Agent, url: &str, id: Option<u64>) -> Option<Vec<String>> {
+fn hub_client_agents(agent: &ureq::Agent, url: &str, id: Option<u64>) -> Option<Vec<AgentBrief>> {
     let id = id?;
     let resp = agent
         .get(&format!("{url}/api/clients/{id}/agents"))
         .call()
         .ok()?;
-    let names = resp.into_json::<Vec<String>>().ok()?;
+    let names = resp.into_json::<Vec<AgentBrief>>().ok()?;
     Some(names)
 }
 
@@ -2334,7 +2357,15 @@ fn machine_views(manager: &manager_rs::ManagerProcess) -> Vec<MachineView> {
         ok: true,
         local: true,
         client_id: None,
-        agents: manager.snapshot().into_iter().map(|a| a.agent).collect(),
+        agents: manager
+            .snapshot()
+            .into_iter()
+            .map(|a| AgentBriefDto {
+                name: a.agent,
+                runs: a.runs,
+                last_cmd: a.last_cmd,
+            })
+            .collect(),
         sandboxes: AgentSandbox::dirs().iter().map(sandbox_info).collect(),
     }];
     views.extend(remote_machines(&host.hostname));
@@ -2670,7 +2701,7 @@ async fn agent_whereis(
         }
         remote_machines(&host_spec::host_spec().hostname)
             .into_iter()
-            .find(|m| m.agents.contains(&agent_name))
+            .find(|m| m.agents.iter().any(|a| a.name == agent_name))
             .map(|m| (m.hostname, false))
     })
     .await

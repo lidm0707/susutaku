@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use proto_rs::server::{ClientConn, Registry};
-use proto_rs::{Envelope, Kind};
+use proto_rs::{AgentBrief, Envelope, Kind};
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::timeout;
@@ -55,7 +55,11 @@ impl Hub {
         while let Some(env) = conn.rx.recv().await {
             let output = match env.kind {
                 Kind::Result { output } => Some(output),
-                Kind::AgentNamesResult { names } => Some(names.join("\n")),
+                Kind::AgentNamesResult { agents } => {
+                    // request() correlates via a string channel; keep the
+                    // per-agent detail by serializing it here.
+                    serde_json::to_string(&agents).ok()
+                }
                 _ => None,
             };
             if let Some(output) = output {
@@ -103,15 +107,10 @@ impl Hub {
         self.request(client_id, Kind::Command { cmd, agent }).await
     }
 
-    /// Agent names held by the client's manager (its work/agents snapshot).
-    pub async fn agent_names(&self, client_id: u64) -> Result<Vec<String>, String> {
+    /// Agents a client machine holds (name/runs/last-command snapshot).
+    pub async fn agent_names(&self, client_id: u64) -> Result<Vec<AgentBrief>, String> {
         let raw = self.request(client_id, Kind::AgentNames).await?;
-        Ok(raw
-            .lines()
-            .map(str::trim)
-            .filter(|l| !l.is_empty())
-            .map(str::to_owned)
-            .collect())
+        serde_json::from_str(&raw).map_err(|e| format!("agent list decode: {e}"))
     }
 }
 

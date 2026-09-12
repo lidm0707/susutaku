@@ -27,7 +27,7 @@ test.describe("walkthrough", () => {
     await expect(page.locator('[role="dialog"]')).toBeHidden();
 
     // 3. chat modal via fab
-    const fab = page.locator("button.chat-fab");
+    const fab = page.locator("button[aria-label='open chat']");
     await fab.click();
     const chat = page.locator('[role="dialog"]');
     await expect(chat).toBeVisible();

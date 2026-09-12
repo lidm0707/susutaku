@@ -167,7 +167,7 @@ async fn client_command(
 async fn client_agents(
     State(state): State<Arc<AppState>>,
     Path(client_id): Path<u64>,
-) -> Result<Json<Vec<String>>, (StatusCode, String)> {
+) -> Result<Json<Vec<proto_rs::AgentBrief>>, (StatusCode, String)> {
     state
         .hub
         .agent_names(client_id)

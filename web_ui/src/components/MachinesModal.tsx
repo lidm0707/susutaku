@@ -308,7 +308,7 @@ function machine_role(m: MachineView): string {
 
 function agents_label(m: MachineView): string {
   if (m.agents.length === 0) return "no agents";
-  return `agents: ${m.agents.join(", ")}`;
+  return `agents: ${m.agents.map((a) => `${a.name} (${a.runs} runs${a.last_cmd ? `, last: ${a.last_cmd}` : ""})`).join(", ")}`;
 }
 
 export function MachinesModal({ open, on_close }: Props) {
@@ -465,9 +465,11 @@ export function MachinesModal({ open, on_close }: Props) {
                         onClick={() => set_selected({ kind: "agent", name: m.agent })}
                         title={`logs — ${m.agent}`}
                       >
-                        <span className="dot alive" aria-hidden="true" />
+                        <span className={`dot alive`} aria-hidden="true" />
                         <span className="dock-machine-name">{m.agent}</span>
-                        <small>{m.runs} runs</small>
+                        <small>
+                          {m.runs} runs{m.last_cmd ? ` · last: ${m.last_cmd}` : " · idle"}
+                        </small>
                       </button>
                       <code className="dock-agent-path" title={m.work_tree}>{m.work_tree}</code>
                     </div>

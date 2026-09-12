@@ -23,9 +23,7 @@ fn spawn_stub() -> String {
 }
 
 fn handle(mut stream: TcpStream) {
-    let mut buf = [0u8; 4096];
-    let n = stream.read(&mut buf).unwrap_or(0);
-    let request = String::from_utf8_lossy(&buf[..n]).to_string();
+    let request = read_request(&mut stream);
     let line = request.lines().next().unwrap_or_default().to_string();
     let (status, body) = if line.starts_with("GET /v1/models") {
         (OK_STATUS, MODELS_BODY)
@@ -35,6 +33,40 @@ fn handle(mut stream: TcpStream) {
         (NOT_FOUND_STATUS, "{}")
     };
     respond(&mut stream, status, body);
+}
+
+/// Read until the full request arrived (headers + content-length body).
+/// A single read can return a partial request under load, which would make
+/// the stub answer (and close) while the client is still sending.
+fn read_request(stream: &mut TcpStream) -> String {
+    let mut data: Vec<u8> = Vec::new();
+    let mut chunk = [0u8; 4096];
+    loop {
+        let n = stream.read(&mut chunk).unwrap_or(0);
+        if n == 0 {
+            break;
+        }
+        data.extend_from_slice(&chunk[..n]);
+        let text = String::from_utf8_lossy(&data);
+        let Some(head_end) = text.find("\r\n\r\n") else {
+            continue;
+        };
+        let body_len = text
+            .lines()
+            .find_map(|l| {
+                let (k, v) = l.split_once(':')?;
+                if k.eq_ignore_ascii_case("content-length") {
+                    v.trim().parse::<usize>().ok()
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(0);
+        if data.len() >= head_end + 4 + body_len {
+            break;
+        }
+    }
+    String::from_utf8_lossy(&data).to_string()
 }
 
 fn respond(stream: &mut TcpStream, status: &str, body: &str) {

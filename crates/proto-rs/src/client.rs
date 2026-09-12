@@ -12,7 +12,7 @@ pub async fn connect(
     addr: &str,
     meta: ClientMeta,
     mut on_command: impl FnMut(&str, &str) -> String,
-    mut on_agents: impl FnMut() -> Vec<String>,
+    mut on_agents: impl FnMut() -> Vec<crate::envelope::AgentBrief>,
 ) -> Result<(), String> {
     if !meta.is_valid() {
         return Err(
@@ -49,7 +49,9 @@ pub async fn connect(
             Kind::AgentNames => {
                 let reply = Envelope {
                     id: env.id,
-                    kind: Kind::AgentNamesResult { names: on_agents() },
+                    kind: Kind::AgentNamesResult {
+                        agents: on_agents(),
+                    },
                 };
                 write_frame(&mut wr, &reply).await?;
             }

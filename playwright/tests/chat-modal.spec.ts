@@ -48,7 +48,7 @@ async function rawChatEcho(request: APIRequestContext, text: string): Promise<st
 
 async function openChatModal(page: import("@playwright/test").Page) {
   await page.goto("/kanban");
-  const fab = page.locator("button.chat-fab");
+  const fab = page.locator("button[aria-label='open chat']");
   await expect(fab).toBeVisible();
   await fab.click();
   const dialog = page.locator('[role="dialog"]');
@@ -65,7 +65,7 @@ test.describe("chat modal", () => {
       dialog.getByPlaceholder(/type a message|generating…/)
     ).toBeVisible();
     // The fab hides while the modal is open.
-    await expect(page.locator("button.chat-fab")).toBeHidden();
+    await expect(page.locator("button[aria-label='open chat']")).toBeHidden();
   });
 
   test("sending from kanban carries page context in the echoed reply", async ({
@@ -97,6 +97,6 @@ test.describe("chat modal", () => {
     // Close button dismisses the modal and the fab comes back.
     await dialog.locator('button[aria-label="close"]').click();
     await expect(page.locator('[role="dialog"]')).toBeHidden();
-    await expect(page.locator("button.chat-fab")).toBeVisible();
+    await expect(page.locator("button[aria-label='open chat']")).toBeVisible();
   });
 });

@@ -5,6 +5,7 @@ import {
   API_BASE,
   chat_codex,
   chat_zai,
+  fetch_agent_machine,
   fetch_agents,
   fetch_codex_models,
   fetch_models,
@@ -92,6 +93,8 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
   const [pickerOpen, setPickerOpen] = useState(false);
   const [error, setError] = useState("");
   const [toast, setToast] = useState("");
+  // agent name -> machine it currently runs on ("" = not running anywhere).
+  const [machineByAgent, setMachineByAgent] = useState<Record<string, string>>({});
   const nextId = useRef(1);
   const nextThreadId = useRef(1);
   const pickerRef = useRef<HTMLDivElement | null>(null);
@@ -129,6 +132,16 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
       .catch(() => {});
     fetch_system_prompt().then(setSysPrompt).catch(() => {});
   }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    agents.forEach((a) => {
+      if (a.name in machineByAgent) return;
+      fetch_agent_machine(a.name)
+        .then((w) => setMachineByAgent((m) => ({ ...m, [a.name]: w.machine })))
+        .catch(() => setMachineByAgent((m) => ({ ...m, [a.name]: "" })));
+    });
+  }, [open, agents]);
 
   function patch_thread(id: number, fn: (msgs: Msg[]) => Msg[]) {
     setThreads((ts) => ts.map((t) => (t.id === id ? { ...t, messages: fn(t.messages) } : t)));
@@ -322,6 +335,7 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
                   <small className="agent-tag">
                     {m.agent_name}
                     {m.model ? ` · ${pretty_name(m.model)}` : ""}
+                    {machineByAgent[m.agent_name] && ` · ${machineByAgent[m.agent_name]}`}
                   </small>
                 )}
                 {m.thinking && (
@@ -391,6 +405,7 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
                         {selectedIds.includes(a.id as number) ? "✓" : ""}
                       </span>
                       {a.name}{a.model ? ` · ${pretty_name(a.model)}` : ""}
+                      {machineByAgent[a.name] && ` · ${machineByAgent[a.name]}`}
                     </button>
                   ))}
                 </div>

@@ -30,6 +30,8 @@ pub struct AgentInfo {
     pub agent: String,
     pub work_tree: PathBuf,
     pub runs: u64,
+    /// Last command the agent ran (from its transcript), if any.
+    pub last_cmd: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -179,6 +181,17 @@ impl ManagerProcess {
                 agent: name.clone(),
                 work_tree: slot.work_tree.clone(),
                 runs: slot.runs.load(Ordering::Relaxed),
+                last_cmd: slot.sandbox.transcript().iter().rev().find_map(|e| {
+                    if !matches!(e.role, Role::Agent) {
+                        return None;
+                    }
+                    // run() records commands as "$ <cmd>\n<output>".
+                    e.content
+                        .lines()
+                        .next()
+                        .and_then(|l| l.strip_prefix("$ "))
+                        .map(str::to_owned)
+                }),
             })
             .collect();
         infos.sort_by(|a, b| a.agent.cmp(&b.agent));

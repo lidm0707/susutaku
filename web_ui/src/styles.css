@@ -3538,6 +3538,57 @@ button {
   color: #fff;
 }
 
+/* menu at the cursor after dropping a link on empty canvas: pick next node */
+.pipe-drop-menu {
+  position: absolute;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  min-width: 12rem;
+  padding: 0.3rem;
+  border-radius: 10px;
+  border: 1px solid #3a3a44;
+  background: #1c1c22;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+
+.pipe-drop-title {
+  padding: 0.2rem 0.4rem;
+  font-size: 0.6rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #888;
+}
+
+.pipe-drop-menu button {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0.4rem;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: #e6e6ea;
+  font-size: 0.75rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pipe-drop-menu button:hover {
+  background: #2a2a33;
+}
+
+.pipe-drop-menu button span {
+  color: #888;
+  font-size: 0.62rem;
+}
+
+/* invalid link target while dragging: red handle */
+.pipe-node .react-flow__handle.handle-invalid {
+  background: #c95b5b;
+  cursor: not-allowed;
+}
+
 /* edges: pickable + visible selection, so click + ⌫ unlinks */
 .pipeline-canvas .react-flow__edge {
   cursor: pointer;

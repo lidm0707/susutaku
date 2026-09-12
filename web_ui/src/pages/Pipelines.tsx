@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useNavigate } from "react-router-dom";
 import {
   ReactFlow,
@@ -75,6 +83,14 @@ const BASIC_NODES: { stage: Stage; label: string; desc: string; Icon: typeof Glo
 ];
 const BASIC_STAGES = new Set(BASIC_NODES.map((n) => n.stage));
 
+const STAGE_ICONS: Record<string, typeof Globe> = Object.fromEntries(
+  BASIC_NODES.map(({ stage, Icon }) => [stage, Icon])
+);
+
+/// While a connection drag is live: ids of nodes that accept the source's
+/// output. Nodes outside the set paint their input handle red.
+const ConnectCtx = createContext<Set<string> | null>(null);
+
 const DEBOUNCE_MS = 800;
 const SAVING_MARK = "saving…";
 const SAVED_MARK = "saved";
@@ -119,7 +135,10 @@ const run_by_node = (run: PipelineRunRecord | null): Map<string, RunStatusKind> 
   return map;
 };
 
-function StageNode({ data, selected }: NodeProps<FlowNode>) {
+function StageNode({ id, data, selected }: NodeProps<FlowNode>) {
+  const Icon = STAGE_ICONS[data.stage] ?? Workflow;
+  const valid = useContext(ConnectCtx);
+  const bad_target = valid != null && !valid.has(id);
   const unwired = SCHEMA[data.stage] && SCHEMA[data.stage].wired === false;
   const cls = [
     selected ? "pipe-node selected" : "pipe-node",
@@ -133,9 +152,10 @@ function StageNode({ data, selected }: NodeProps<FlowNode>) {
       <Handle
         type="target"
         position={Position.Top}
-        className={data.input ? PORT_CLASS[data.input] : ""}
+        className={`${data.input ? PORT_CLASS[data.input] : ""}${bad_target ? " handle-invalid" : ""}`}
       />
       <span className="pipe-node-stage">
+        <Icon size={12} />
         {data.stage}
         {unwired && <em className="pipe-node-flag">not wired</em>}
       </span>
@@ -289,10 +309,14 @@ export default function Pipelines() {
   const [run, setRun] = useState<PipelineRunRecord | null>(null);
   const [, setSchemaTick] = useState(0);
   const dragRef = useRef(false);
-  // source node of a handle drag released on empty canvas (n8n-style "pick
-  // next node" flow); consumed by the dock
-  const pendingSourceRef = useRef<string | null>(null);
-  const [dockArmed, setDockArmed] = useState(false);
+  // source node of a connection drag released on empty canvas (n8n-style);
+  // a drop menu at the cursor spawns that stage already linked to the source
+  const [pending, setPending] = useState<{ source: string; x: number; y: number } | null>(null);
+  // source node id while a connection drag is live (for red invalid handles)
+  const [connectFrom, setConnectFrom] = useState<string | null>(null);
+  const canvasRef = useRef<HTMLDivElement | null>(null);
+  const selectedRef = useRef<number | "new" | null>(selected);
+  selectedRef.current = selected;
   const saveTimer = useRef<number | null>(null);
   const dirtyRef = useRef(false);
   const lastSpecRef = useRef("");
@@ -318,7 +342,9 @@ export default function Pipelines() {
 
   async function load_pipelines() {
     try {
-      setPipelines(await fetch_pipelines());
+      const rows = await fetch_pipelines();
+      setPipelines(rows);
+      if (selectedRef.current == null && rows.length > 0) pick(rows[0]);
     } catch (err) {
       handle(err);
     }
@@ -397,17 +423,10 @@ export default function Pipelines() {
     setEditParams("{}");
   }
 
-  /// Stages whose input accepts the edited node's output — the "connects to" row.
-  function connect_suggestions(stage: Stage): { stage: Stage; label: string; desc: string; Icon: typeof Globe }[] {
-    const src = SCHEMA[stage];
-    if (!src) return [];
-    return BASIC_NODES.filter((n) => ports_compatible(SCHEMA, stage, n.stage));
-  }
-
   const on_connect = useCallback(
     (c: Connection) => {
-      pendingSourceRef.current = null;
-      setDockArmed(false);
+      setPending(null);
+      setConnectFrom(null);
       setEdges((es) =>
         addEdge({ ...c, animated: true, id: `e-${c.source}-${c.target}-${es.length}` }, es)
       );
@@ -415,13 +434,23 @@ export default function Pipelines() {
     [setEdges]
   );
 
-  // n8n pattern: drag from an out port and drop on empty canvas arms the
-  // dock — the next dock click spawns that stage already linked to the source.
+  const on_connect_start = useCallback(
+    (_: MouseEvent | TouchEvent, { nodeId, handleType }: { nodeId: string | null; handleType: string | null }) => {
+      if (nodeId && handleType === "source") setConnectFrom(nodeId);
+    },
+    []
+  );
+
+  // n8n pattern: drop a source-handle drag on empty canvas and a menu at the
+  // cursor offers the next node, spawned already linked to the source.
   const on_connect_end = useCallback(
-    (_: MouseEvent | TouchEvent, state: FinalConnectionState) => {
+    (event: MouseEvent | TouchEvent, state: FinalConnectionState) => {
+      setConnectFrom(null);
       if (!state.fromNode || state.isValid) return;
-      pendingSourceRef.current = state.fromNode.id;
-      setDockArmed(true);
+      const pt = event instanceof MouseEvent ? { x: event.clientX, y: event.clientY } : { x: event.touches[0]?.clientX ?? 0, y: event.touches[0]?.clientY ?? 0 };
+      const rect = canvasRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      setPending({ source: state.fromNode.id, x: pt.x - rect.left, y: pt.y - rect.top });
     },
     []
   );
@@ -616,6 +645,16 @@ export default function Pipelines() {
 
   const editor = useMemo(() => selected != null, [selected]);
 
+  // node ids that accept the live connection drag's output (red when not in set)
+  const validTargets = useMemo(() => {
+    if (!connectFrom) return null;
+    const src = nodes.find((n) => n.id === connectFrom);
+    if (!src) return null;
+    return new Set(
+      nodes.filter((n) => n.id !== connectFrom && ports_compatible(SCHEMA, src.data.stage, n.data.stage)).map((n) => n.id)
+    );
+  }, [connectFrom, nodes]);
+
   return (
     <main className="chat kanban-page pipeline-page">
       <header>
@@ -667,15 +706,17 @@ export default function Pipelines() {
               </button>
               {status && <span className="saved-mark">{status}</span>}
             </div>
-            <div className="pipeline-canvas">
-              <ReactFlow
-                nodes={nodes}
-                edges={edges}
-                onNodesChange={onNodesChange}
-                onEdgesChange={onEdgesChange}
-                onConnect={on_connect}
-                onConnectEnd={on_connect_end}
-                connectionRadius={DOCK_DROP_RADIUS}
+            <div className="pipeline-canvas" ref={canvasRef}>
+              <ConnectCtx.Provider value={validTargets}>
+                <ReactFlow
+                  nodes={nodes}
+                  edges={edges}
+                  onNodesChange={onNodesChange}
+                  onEdgesChange={onEdgesChange}
+                  onConnect={on_connect}
+                  onConnectStart={on_connect_start}
+                  onConnectEnd={on_connect_end}
+                  connectionRadius={DOCK_DROP_RADIUS}
                 isValidConnection={(c) => {
                   const src = nodes.find((n) => n.id === c.source);
                   const dst = nodes.find((n) => n.id === c.target);
@@ -684,7 +725,10 @@ export default function Pipelines() {
                 }}
                 nodeTypes={NODE_TYPES}
                 onNodeClick={(_, n) => select_node(n as FlowNode)}
-                onPaneClick={() => select_node(null)}
+                onPaneClick={() => {
+                  setPending(null);
+                  select_node(null);
+                }}
                 onNodeDragStart={() => {
                   dragRef.current = true;
                 }}
@@ -697,6 +741,29 @@ export default function Pipelines() {
                 proOptions={{ hideAttribution: true }}
                 deleteKeyCode={["Backspace", "Delete"]}
               />
+            </ConnectCtx.Provider>
+              {pending && (
+                <div className="pipe-drop-menu" style={{ left: pending.x, top: pending.y }} role="menu">
+                  <span className="pipe-drop-title">add node</span>
+                  {BASIC_NODES.map(({ stage, label, desc, Icon }) => (
+                    <button
+                      key={stage}
+                      type="button"
+                      role="menuitem"
+                      title={SCHEMA[stage]?.doc ?? desc}
+                      onClick={() => {
+                        const src = pending.source;
+                        setPending(null);
+                        spawn_node(stage, src);
+                      }}
+                    >
+                      <Icon size={13} />
+                      {label}
+                      <span>{desc}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
             {editId && (
               <div className="pipeline-inspector">
@@ -731,20 +798,6 @@ export default function Pipelines() {
                   </>
                 ) : (
                   <>
-                    <div className="stage-picker">
-                      {BASIC_NODES.map(({ stage, label, desc, Icon }) => (
-                        <button
-                          key={stage}
-                          type="button"
-                          className={stage === editStage ? "stage-card active" : "stage-card"}
-                          onClick={() => { setEditStage(stage); apply_edit(stage); }}
-                        >
-                          <Icon size={15} />
-                          <span className="stage-card-label">{label}</span>
-                          <span className="stage-card-desc">{desc}</span>
-                        </button>
-                      ))}
-                    </div>
                     <span className="stage-hint">{SCHEMA[editStage]?.doc ?? ""}</span>
                     <div className="stage-io">
                       <span>in: {SCHEMA[editStage]?.input ?? "any"}</span>
@@ -784,27 +837,6 @@ export default function Pipelines() {
                         />
                       )
                     )}
-                    <div className="stage-connect">
-                      <label>connects to</label>
-                      <div className="stage-connect-row">
-                        {connect_suggestions(editStage).map(({ stage, label, desc, Icon }) => (
-                          <button
-                            key={stage}
-                            type="button"
-                            className="stage-connect-chip"
-                            title={`add a ${label} node and link it`}
-                            onClick={() => {
-                              apply_edit();
-                              spawn_node(stage, editId ?? undefined);
-                            }}
-                          >
-                            <Icon size={13} />
-                            {label}
-                            <span>{desc}</span>
-                          </button>
-                        ))}
-                      </div>
-                    </div>
                   </>
                 )}
                 {run && editId && (() => {
@@ -822,11 +854,11 @@ export default function Pipelines() {
             )}
             {!editId && !run && (
               <div className="pipeline-hint">
-                click a node to edit · drag bottom dot to top dot to link · drop on canvas then
-                pick a dock icon to link the next node · click edge + ⌫ to unlink
+                click a node to edit · drag bottom dot to top dot to link · drop on empty canvas
+                to pick the next node · invalid targets show a red dot · click edge + ⌫ to unlink
               </div>
             )}
-            <div className={dockArmed ? "pipeline-dock armed" : "pipeline-dock"}>
+            <div className="pipeline-dock">
               {BASIC_NODES.map(({ stage, label, desc, Icon }) => (
                 <button
                   key={stage}
@@ -834,12 +866,7 @@ export default function Pipelines() {
                   className="pipeline-dock-btn"
                   title={`${label} — ${SCHEMA[stage]?.doc ?? desc}`}
                   aria-label={`add ${label} node`}
-                  onClick={() => {
-                    const src = pendingSourceRef.current;
-                    pendingSourceRef.current = null;
-                    setDockArmed(false);
-                    spawn_node(stage, src ?? undefined);
-                  }}
+                  onClick={() => spawn_node(stage)}
                 >
                   <Icon size={15} />
                 </button>

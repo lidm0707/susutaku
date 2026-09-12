@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use manager_rs::ManagerProcess;
 use proto_rs::client;
-use proto_rs::{ClientMeta, ROLE_MODEL, ROLE_WORKER};
+use proto_rs::{AgentBrief, ClientMeta, ROLE_MODEL, ROLE_WORKER};
 use tokio::time::sleep;
 
 use crate::infra::sandbox_jail::AgentSandbox;
@@ -55,7 +55,18 @@ impl ClientNode {
                 &self.hub_addr,
                 meta.clone(),
                 move |agent, cmd| node.handle(agent, cmd),
-                move || agents.snapshot_names(),
+                move || {
+                    agents
+                        .manager
+                        .snapshot()
+                        .into_iter()
+                        .map(|a| AgentBrief {
+                            name: a.agent,
+                            runs: a.runs,
+                            last_cmd: a.last_cmd,
+                        })
+                        .collect()
+                },
             )
             .await;
             match result {
@@ -77,15 +88,6 @@ struct NodeHandlers {
 }
 
 impl NodeHandlers {
-    /// Agent names currently held by this client's manager.
-    fn snapshot_names(&self) -> Vec<String> {
-        self.manager
-            .snapshot()
-            .into_iter()
-            .map(|a| a.agent)
-            .collect()
-    }
-
     /// Empty `agent` → process-global sandbox; otherwise the agent's own
     /// work tree (spawn is idempotent).
     fn handle(&self, agent: &str, cmd: &str) -> String {

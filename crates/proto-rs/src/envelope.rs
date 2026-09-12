@@ -19,6 +19,15 @@ pub struct ClientMeta {
     pub ram_gib: u64,
 }
 
+/// One agent a client machine holds: name plus what it is doing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentBrief {
+    pub name: String,
+    pub runs: u64,
+    /// Last command the agent ran, if any.
+    pub last_cmd: Option<String>,
+}
+
 /// Role of a machine that hosts the local model server.
 pub const ROLE_MODEL: &str = "model";
 /// Role of a machine that only runs provider/sandbox jobs.
@@ -57,9 +66,10 @@ pub enum Kind {
     },
     /// Hub asks a client which agents it currently holds.
     AgentNames,
-    /// Client reply: names from its manager snapshot.
+    /// Client reply: per-agent name/runs/last-command from its manager
+    /// snapshot.
     AgentNamesResult {
-        names: Vec<String>,
+        agents: Vec<AgentBrief>,
     },
     Heartbeat,
 }

@@ -760,6 +760,12 @@ export interface HostSpec {
   memory_bytes: number;
 }
 
+export interface AgentBrief {
+  name: string;
+  runs: number;
+  last_cmd: string | null;
+}
+
 export interface MachineView {
   hostname: string;
   os: string;
@@ -769,7 +775,7 @@ export interface MachineView {
   ok: boolean;
   local: boolean;
   client_id: number | null;
-  agents: string[];
+  agents: AgentBrief[];
   sandboxes: SandboxDir[];
 }
 
@@ -791,6 +797,7 @@ export interface MachineAgent {
   agent: string;
   work_tree: string;
   runs: number;
+  last_cmd: string | null;
 }
 
 export interface AgentLogs {

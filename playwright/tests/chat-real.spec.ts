@@ -10,7 +10,7 @@ const CHAT_TIMEOUT_MS = 120_000;
 // provide at least one agent (with a real model) for these tests to run.
 async function openChatModal(page: import("@playwright/test").Page) {
   await page.goto("/kanban");
-  await page.click("button.chat-fab");
+  await page.click("button[aria-label='open chat']");
   const dialog = page.locator('[role="dialog"]');
   await expect(dialog).toBeVisible();
   const agentSelect = dialog.locator('select[title="agent"]');

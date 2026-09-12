@@ -42,6 +42,8 @@ services:
     build:
       context: ../..
       dockerfile: docker/backend/Dockerfile.backend
+      # default stage is hub-runtime (hub_stub); we need the API server
+      target: backend-runtime
     environment:
       DATABASE_URL: postgres://susutaku:susutaku@postgres:5432/susutaku_e2e
       SUSUTAKU_LOCAL_MODEL_URL: http://mock-model:8992
@@ -82,11 +84,14 @@ services:
       E2E_SKIP_DB_LIFECYCLE: "1"
       # Gates the chat-mock spec (real-model stacks skip it).
       E2E_MOCK_MODEL: "1"
+      # Nested podman cannot build its sandbox image without /dev/fuse or
+      # kernel overlay mounts — unavailable in macOS Docker VMs.
+      E2E_SKIP_SANDBOX: "1"
     command: ["chat-mock"]
     volumes:
-      - ../playwright/tests:/work/tests
-      - ../playwright/playwright.config.ts:/work/playwright.config.ts:ro
-      - ../playwright/screenshots:/work/screenshots
-      - ../playwright/test-results:/work/test-results
+      - ../../playwright/tests:/work/tests
+      - ../../playwright/playwright.config.ts:/work/playwright.config.ts:ro
+      - ../../playwright/screenshots:/work/screenshots
+      - ../../playwright/test-results:/work/test-results
     depends_on:
       - web
