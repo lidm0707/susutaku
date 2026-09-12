@@ -75,13 +75,16 @@ pub enum GraphError {
         from_out: port::PortKind,
         to_in: port::PortKind,
     },
+    #[error("node {node} missing required param \"{key}\"")]
+    MissingParam { node: String, key: &'static str },
 }
 
 impl PipelineSpec {
     pub fn validate(&self) -> Result<(), GraphError> {
         self.validate_nodes()?;
         self.validate_links()?;
-        self.validate_acyclic()
+        self.validate_acyclic()?;
+        self.validate_params()
     }
 
     /// Like validate, but permits an empty node set: the UI persists a draft
@@ -134,6 +137,30 @@ impl PipelineSpec {
                     from_out: src_out,
                     to_in: dst_in,
                 });
+            }
+        }
+        Ok(())
+    }
+
+    /// Required params must be present as non-empty strings, matching what
+    /// the runtime engines read from `node.params`.
+    fn validate_params(&self) -> Result<(), GraphError> {
+        for node in &self.nodes {
+            for param in port::stage_schema(&node.stage).params {
+                if !param.required {
+                    continue;
+                }
+                let ok = node
+                    .params
+                    .get(param.key)
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|s| !s.is_empty());
+                if !ok {
+                    return Err(GraphError::MissingParam {
+                        node: node.id.clone(),
+                        key: param.key,
+                    });
+                }
             }
         }
         Ok(())

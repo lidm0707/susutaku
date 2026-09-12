@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { RefreshCw, TerminalSquare, Unplug } from "lucide-react";
+import { Monitor, RefreshCw, TerminalSquare, Unplug } from "lucide-react";
 import {
   fetch_agent_logs,
   fetch_machines,
@@ -17,6 +17,7 @@ import {
 } from "../lib.js";
 import { Modal } from "../ui/Overlay.js";
 import { toast } from "../ui/Toast.js";
+import type { SandboxMonitorTarget } from "./SandboxMonitor.tsx";
 
 const POLL_TICK_MS = 5000;
 
@@ -285,6 +286,7 @@ function MachineAgentConsole({ hostname }: { hostname: string }) {
 type Props = {
   open: boolean;
   on_close: () => void;
+  on_monitor?: (target: SandboxMonitorTarget) => void;
 };
 
 type Selected =
@@ -311,7 +313,7 @@ function agents_label(m: MachineView): string {
   return `agents: ${m.agents.map((a) => `${a.name} (${a.runs} runs${a.last_cmd ? `, last: ${a.last_cmd}` : ""})`).join(", ")}`;
 }
 
-export function MachinesModal({ open, on_close }: Props) {
+export function MachinesModal({ open, on_close, on_monitor }: Props) {
   const [tab, set_tab] = useState<Tab>("users_machines");
   const [agents, set_agents] = useState<MachineAgent[] | null>(null);
   const [machines, set_machines] = useState<MachineView[] | null>(null);
@@ -342,7 +344,7 @@ export function MachinesModal({ open, on_close }: Props) {
   }, [open]);
 
   return (
-    <Modal open={open} title="machines" on_close={on_close} wide className="machines-modal">
+    <Modal open={open} title="machines" on_close={on_close} wide docked_left className="machines-modal">
       <div className="machines-tabs" role="tablist" aria-label="machine views">
         {TABS.map((t) => (
           <button
@@ -494,6 +496,14 @@ export function MachinesModal({ open, on_close }: Props) {
                   ? "live — a running agent works in this sandbox; its commands stream below"
                   : "stale — the agent process that owned this sandbox is gone"}
               </p>
+              <button
+                className="agent-inspect-run"
+                title="pin monitor overlay — keeps streaming while you work elsewhere"
+                aria-label="pin monitor overlay"
+                onClick={() => on_monitor?.({ machine: selected.machine, path: selected.path, pid: selected.pid, alive: selected.alive })}
+              >
+                <Monitor size={14} />
+              </button>
               {selected.local === false ? (
                 <p className="empty">no logs — remote sandbox, logs stay on the client machine</p>
               ) : (

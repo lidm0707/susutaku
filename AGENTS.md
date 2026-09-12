@@ -31,14 +31,17 @@ susutaku/
 │   ├── cloud_model_api/       ← zai_api · ai_interface_layer (cloud model HTTP APIs)
 ├── web_ui/                    ← React TS UI (vite): pages/, components/, ui/, api/
 ├── playwright/                ← e2e suite (tests/, fixtures, mock-model server)
+│                                pipeline-run.spec.ts captures every editor step
 ├── docker/                    ← grouped by purpose:
 │   ├── compose/               ← base · demo · deploy · sandbox · playwright*
+│   │                            playwright-pipe.yml = isolated pipeline e2e stack
 │   ├── backend/               ← Dockerfile.backend · entrypoint · Dockerfile.client
 │   ├── web/                   ← Dockerfile.web · nginx.conf
 │   ├── mock/                  ← Dockerfile.mock-model
 │   └── test/                  ← Dockerfile.playwright
 ├── models/                    ← local model dirs (see names_models.md)
 ├── .plans/                    ← numbered plan files (00–99) — write one per task
+├── check_pipe/                ← artifacts of the playwright-pipe e2e stack
 ├── bench/                     ← benchmark/design summaries (coverage, design renders)
 ├── docs/                      ← workflow docs (attachments, playwright, docker)
 ├── attachments/               ← uploaded file storage
@@ -90,6 +93,36 @@ susutaku/
 - Nested rootless podman inside the backend container (deploy stack):
   required compose flags, storage/cgroup fixes, image lifecycle, and a
   verification checklist — see `docs/podman-sandbox.md`.
+
+## Pipeline e2e (playwright)
+
+- `playwright/tests/pipeline-run.spec.ts` walks the pipeline editor end to end
+  (create → add transform/output nodes → set params → wire → save → test run),
+  capturing a screenshot at every step into `screenshots/pipeline-run/`.
+  `output_resource` requires param `name`, `transform` requires `op` — a
+  missing required param only surfaces as repeating 400 toasts and the save
+  mark sticking on "saving…".
+- Node icon-vs-run-status flake guard: `expect_node_ok` polls for the run
+  class on `.pipe-node` (NOT the `.react-flow__node` wrapper) AND a visible
+  `.pipe-node-stage svg`, snapping `debug-icon-missing-*.png` when the icon
+  vanishes mid-poll instead of failing the step.
+- Isolated stack for this spec: `docker/compose/playwright-pipe.yml`
+  (project `susutaku-e2e-pipe`; postgres + mock-model + backend + web +
+  playwright, no published ports, artifacts bind-mounted to `check_pipe/`):
+
+      docker compose -f docker/compose/playwright-pipe.yml up --build --exit-code-from playwright
+
+- `Dockerfile.backend` is multi-stage and its LAST stage is `hub-runtime` —
+  compose `build:` MUST set `target: backend-runtime` or the container
+  silently runs the hub stub instead of the backend.
+- The backend auto-seeds `owner`/`owner` (must_change_password) on a fresh DB,
+  so e2e admin creds are owner/owner + rotation (`E2E_ADMIN_NEW_PASSWORD`),
+  not a separate e2e-admin user.
+- Compose relative paths resolve against the compose file's dir
+  (`docker/compose/`), not the CWD — repo-root mounts need `../../playwright/...`.
+- Waiting on backend readiness: gate dependent services with a healthcheck
+  (`depends_on: condition: service_healthy`); a plain `depends_on` starts the
+  playwright runner while nginx still 502s.
 
 ## Kanban Postgres
 

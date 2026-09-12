@@ -1,0 +1,94 @@
+# ISOLATED e2e stack for the pipeline-run spec: postgres + mock-model +
+# backend + web + playwright, all in containers on a private network with a
+# dedicated compose project name. Shares nothing with the dev stack or the
+# other e2e stacks (own db, own network, own artifact dir check_pipe/).
+# The mock model server makes runs deterministic — no host MLX needed.
+#
+#   docker compose -f docker/compose/playwright-pipe.yml up --build --exit-code-from playwright
+#
+# Screenshots land in check_pipe/screenshots/ on the host via bind mounts.
+name: susutaku-e2e-pipe
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: susutaku
+      POSTGRES_PASSWORD: susutaku
+      POSTGRES_DB: susutaku_pipe
+    restart: unless-stopped
+
+  mock-model:
+    build:
+      context: ../..
+      dockerfile: docker/mock/Dockerfile.mock-model
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ../..
+      dockerfile: docker/backend/Dockerfile.backend
+      # multi-stage file: last stage is the hub stub, not the backend
+      target: backend-runtime
+    environment:
+      DATABASE_URL: postgres://susutaku:susutaku@postgres:5432/susutaku_pipe
+      SUSUTAKU_LOCAL_MODEL_URL: http://mock-model:8992
+    security_opt:
+      - seccomp=unconfined
+      - apparmor=unconfined
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/8991'"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    depends_on:
+      postgres:
+        condition: service_started
+      mock-model:
+        condition: service_started
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ../..
+      dockerfile: docker/web/Dockerfile.web
+    environment:
+      BACKEND_URL: http://backend:8991
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1/"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+  playwright:
+    build:
+      context: ../..
+      dockerfile: docker/test/Dockerfile.playwright
+    environment:
+      PLAYWRIGHT_BASE_URL: http://web
+      # The backend auto-seeds owner/owner (must_change_password) on a fresh
+      # DB; helpers.ts logs in with these, rotates, then creates the e2e user.
+      E2E_ADMIN_USER: owner
+      E2E_ADMIN_PASSWORD: owner
+      E2E_ADMIN_NEW_PASSWORD: owner-owner-1
+      E2E_USER: e2e-tester
+      E2E_PASSWORD: e2e-e2e-e2e
+      E2E_PG_HOST: postgres
+      E2E_PG_PORT: "5432"
+    # Only the pipeline-run spec in this stack (playwright filter arg).
+    command: ["pipeline-run"]
+    volumes:
+      - ../../playwright/tests:/work/tests
+      - ../../playwright/playwright.config.ts:/work/playwright.config.ts:ro
+      - ../../check_pipe/screenshots:/work/screenshots
+      - ../../check_pipe/test-results:/work/test-results
+    depends_on:
+      web:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    restart: "no"

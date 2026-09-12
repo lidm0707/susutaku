@@ -9,7 +9,8 @@ const TOOL_DONE_MARKER = "TOOLCALL-OK";
 const TOOL_OUTPUT = "toolcall-ok";
 const SUMMARY_MARKER = "MOCK-SUMMARY:";
 const CHAT_TIMEOUT_MS = 20_000;
-const AGENT_NAME = "e2e-agent";
+const AGENT_NAME_PREFIX = "e2e-agent";
+const SANDBOX_AGENT_NAME = "e2e-sandbox-agent";
 const AGENT_OUTPUT_MARKER = "agent-run-ok";
 const KANBAN_CONTEXT = "[context: user is currently on the kanban page]";
 
@@ -31,9 +32,19 @@ function mockChat(request: APIRequestContext, body: object) {
 // matches the mock model makes the modal post to /api/chat directly.
 async function seedChatAgent(request: APIRequestContext): Promise<string> {
   const token = await loginToken();
-  const name = `${AGENT_NAME}-${Date.now()}`;
+  const headers = { Authorization: `Bearer ${token}` };
+  // The DB persists across runs (E2E_SKIP_DB_LIFECYCLE=1); stale seeded agents
+  // would pile up and the modal would send one message per selected agent.
+  const existing = (await (await request.get(`${API}/api/agents`, { headers })).json()) as {
+    id: number;
+    name: string;
+  }[];
+  for (const a of existing.filter((a) => a.name.startsWith(AGENT_NAME_PREFIX))) {
+    await request.delete(`${API}/api/agents/${a.id}`, { headers });
+  }
+  const name = `${AGENT_NAME_PREFIX}-${Date.now()}`;
   const res = await request.post(`${API}/api/agents`, {
-    headers: { Authorization: `Bearer ${token}` },
+    headers,
     data: { name, model: MOCK_MODEL, persona: "", prompt: "", output: "" },
   });
   expect(res.ok()).toBeTruthy();
@@ -43,11 +54,16 @@ async function seedChatAgent(request: APIRequestContext): Promise<string> {
 async function selectAgent(page: import("@playwright/test").Page, name: string) {
   const dialog = page.locator('[role="dialog"]');
   await dialog.locator('button[title="choose agent(s)"]').click();
-  // Menu items read "<name> · <model>"; the seeded name is unique. On a
-  // fresh DB the modal auto-selects the only agent — don't toggle it off.
-  const item = dialog.locator('[role="menuitemcheckbox"]', { hasText: name });
-  if ((await item.getAttribute("aria-checked")) !== "true") {
-    await item.click();
+  // Menu items read "<name> · <model>". Enforce exactly one selection: the
+  // modal sends one message per selected agent, so any extra checked agent
+  // (auto-selected on open) would produce duplicate reply bubbles.
+  const items = dialog.locator('[role="menuitemcheckbox"]');
+  const count = await items.count();
+  for (let i = 0; i < count; i++) {
+    const item = items.nth(i);
+    const checked = (await item.getAttribute("aria-checked")) === "true";
+    const isTarget = (await item.textContent())?.includes(name) ?? false;
+    if (checked !== isTarget) await item.click();
   }
   await dialog.locator('button[title="choose agent(s)"]').click();
 }
@@ -134,15 +150,15 @@ test.describe("chat against the mock model (backend in container)", () => {
   }) => {
     test.skip(!SANDBOX_AVAILABLE, "nested podman sandbox unusable on this docker VM");
     const res = await request.post(`${API}/api/manager/agents`, {
-      data: { agent: AGENT_NAME },
+      data: { agent: SANDBOX_AGENT_NAME },
     });
     expect(res.ok()).toBeTruthy();
     const spawned = (await res.json()) as { agent: string; work_tree: string };
-    expect(spawned.agent).toBe(AGENT_NAME);
+    expect(spawned.agent).toBe(SANDBOX_AGENT_NAME);
     expect(spawned.work_tree).toBeTruthy();
 
     const run = await request.post(
-      `${API}/api/manager/agents/${AGENT_NAME}/run`,
+      `${API}/api/manager/agents/${SANDBOX_AGENT_NAME}/run`,
       { data: { cmd: `echo ${AGENT_OUTPUT_MARKER}` } }
     );
     expect(run.ok()).toBeTruthy();

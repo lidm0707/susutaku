@@ -14,7 +14,7 @@ pub use service::prompt::{
 };
 pub use service::{
     AgentConfigService, CardService, CommentService, PipelineService, ProjectService,
-    ResourceService, WorkspaceService,
+    ResourceService, SkillService, WorkspaceService,
 };
 pub use valueobject::{
     BoardOp, BoardRequest, BoardResult, ChatCmd, ChatOutcome, GenReply, MemoryHit, ReplyRx,

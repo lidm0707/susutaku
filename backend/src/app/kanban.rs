@@ -9,10 +9,11 @@ use kanban_rs::{CardRow, StoreError};
 
 use crate::domain::{
     AgentConfigService, CardService, CommentService, PipelineService, ProjectService,
-    ResourceService, WorkspaceService,
+    ResourceService, SkillService, WorkspaceService,
 };
 use crate::port::outbound::{
-    AgentConfigRepo, CardRepo, CommentRepo, PipelineRepo, ProjectRepo, ResourceRepo, WorkspaceRepo,
+    AgentConfigRepo, CardRepo, CommentRepo, PipelineRepo, ProjectRepo, ResourceRepo, SkillRepo,
+    WorkspaceRepo,
 };
 
 /// A card enriched with its pipeline name — composed in the app layer.
@@ -27,6 +28,7 @@ pub struct KanbanApp {
     pub pipelines: PipelineService,
     pub resources: ResourceService,
     pub agents: AgentConfigService,
+    pub skills: SkillService,
     pub workspaces: WorkspaceService,
     pub projects: ProjectService,
 }
@@ -39,6 +41,7 @@ impl KanbanApp {
         pipelines: Arc<dyn PipelineRepo>,
         resources: Arc<dyn ResourceRepo>,
         agents: Arc<dyn AgentConfigRepo>,
+        skills: Arc<dyn SkillRepo>,
         workspaces: Arc<dyn WorkspaceRepo>,
         projects: Arc<dyn ProjectRepo>,
     ) -> Self {
@@ -48,6 +51,7 @@ impl KanbanApp {
             pipelines: PipelineService::new(pipelines),
             resources: ResourceService::new(resources),
             agents: AgentConfigService::new(agents),
+            skills: SkillService::new(skills),
             workspaces: WorkspaceService::new(workspaces),
             projects: ProjectService::new(projects),
         }
@@ -105,6 +109,7 @@ pub fn build(store: Arc<kanban_rs::Store>) -> KanbanApp {
         Arc::clone(&pg) as Arc<dyn PipelineRepo>,
         Arc::clone(&pg) as Arc<dyn ResourceRepo>,
         Arc::clone(&pg) as Arc<dyn AgentConfigRepo>,
+        Arc::clone(&pg) as Arc<dyn SkillRepo>,
         Arc::clone(&pg) as Arc<dyn WorkspaceRepo>,
         pg as Arc<dyn ProjectRepo>,
     )

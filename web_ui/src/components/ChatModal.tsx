@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
-import { Bot, Brain, Crosshair, MessageSquarePlus, Send, X } from "lucide-react";
+import { Bot, Brain, Crosshair, MessageSquarePlus, PanelRight, Send, X } from "lucide-react";
 import {
   API_BASE,
   chat_codex,
@@ -29,6 +29,40 @@ const THINK_CLOSE = "</think>";
 const TOAST_MS = 4000;
 
 const THREAD_TITLE_LEN = 24;
+
+const DOCK_KEY = "chat_dock";
+const DOCK_RIGHT = "right";
+const DOCK_W_KEY = "chat_dock_w_v2";
+const DOCK_W_MIN = 320;
+const DOCK_W_MAX_FRAC = 0.9;
+const DOCK_W_DEFAULT = "min(40vw, 94vw)";
+
+const dock_listeners = new Set<() => void>();
+
+function read_dock(): boolean {
+  const v = localStorage.getItem(DOCK_KEY);
+  return v === null ? true : v === DOCK_RIGHT;
+}
+
+function read_dock_w(): string {
+  const v = Number(localStorage.getItem(DOCK_W_KEY));
+  return v >= DOCK_W_MIN ? `${v}px` : DOCK_W_DEFAULT;
+}
+
+// shared so the app layout can reserve space while the chat is docked right
+export function use_chat_docked(): boolean {
+  const [docked, set_docked] = useState(read_dock);
+  useEffect(() => {
+    const fn = () => set_docked(read_dock());
+    dock_listeners.add(fn);
+    window.addEventListener("storage", fn);
+    return () => {
+      dock_listeners.delete(fn);
+      window.removeEventListener("storage", fn);
+    };
+  }, []);
+  return docked;
+}
 
 const PAGE_LABELS: Record<string, string> = {
   "/kanban": "kanban",
@@ -91,6 +125,8 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
   const [sysPrompt, setSysPrompt] = useState("");
   const [searchMode, setSearchMode] = useState<"off" | "auto" | "on">("off");
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [docked, setDocked] = useState(read_dock);
+  const dock_w = useRef(read_dock_w());
   const [error, setError] = useState("");
   const [toast, setToast] = useState("");
   // agent name -> machine it currently runs on ("" = not running anywhere).
@@ -142,6 +178,46 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
         .catch(() => setMachineByAgent((m) => ({ ...m, [a.name]: "" })));
     });
   }, [open, agents]);
+
+  function toggle_dock() {
+    setDocked((d) => {
+      if (d) localStorage.removeItem(DOCK_KEY);
+      else localStorage.setItem(DOCK_KEY, DOCK_RIGHT);
+      dock_listeners.forEach((fn) => fn());
+      return !d;
+    });
+  }
+
+  function apply_dock_w(w: string) {
+    dock_w.current = w;
+    document.documentElement.style.setProperty("--chat-dock-w", w);
+  }
+
+  useEffect(() => {
+    if (!docked) return;
+    apply_dock_w(dock_w.current);
+    return () => {
+      document.documentElement.style.removeProperty("--chat-dock-w");
+    };
+  }, [docked]);
+
+  function start_resize(e: React.MouseEvent) {
+    e.preventDefault();
+    document.documentElement.classList.add("chat-dock-resizing");
+    const on_move = (ev: MouseEvent) => {
+      const max = Math.floor(window.innerWidth * DOCK_W_MAX_FRAC);
+      const w = Math.min(Math.max(window.innerWidth - ev.clientX, DOCK_W_MIN), max);
+      apply_dock_w(`${w}px`);
+    };
+    const on_up = () => {
+      localStorage.setItem(DOCK_W_KEY, dock_w.current);
+      document.documentElement.classList.remove("chat-dock-resizing");
+      window.removeEventListener("mousemove", on_move);
+      window.removeEventListener("mouseup", on_up);
+    };
+    window.addEventListener("mousemove", on_move);
+    window.addEventListener("mouseup", on_up);
+  }
 
   function patch_thread(id: number, fn: (msgs: Msg[]) => Msg[]) {
     setThreads((ts) => ts.map((t) => (t.id === id ? { ...t, messages: fn(t.messages) } : t)));
@@ -226,11 +302,11 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
       const res = await fetch(`${API_BASE}/api/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text, max_tokens: MAX_TOKENS, search: searchMode }),
+        body: JSON.stringify({ message: text, max_tokens: MAX_TOKENS, search: searchMode, agent: a.name }),
       });
       return res.json();
     }
-    return chat_zai(text, a.model, agent_sections(a));
+    return chat_zai(text, a.model, agent_sections(a), a.name);
   }
 
   async function send(e: React.FormEvent) {
@@ -316,16 +392,35 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
     <Modal
       open={open}
       wide
+      docked={docked}
       on_close={on_close}
       title={
         <>
           <img className="title-icon" src="/susutaku_jibi.png" alt="" />
           susutaku
           <span className="sub">{sub}</span>
+          <button
+            type="button"
+            onClick={toggle_dock}
+            title={docked ? "dock centered" : "dock right"}
+            aria-label={docked ? "dock centered" : "dock right"}
+            aria-pressed={docked}
+          >
+            <PanelRight size={14} />
+          </button>
         </>
       }
     >
       <div className="chat-modal-body">
+        {docked && (
+          <div
+            className="chat-dock-resize"
+            onMouseDown={start_resize}
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="resize chat panel"
+          />
+        )}
         <div className="chat-main">
           <section className="log chat-modal-log" aria-live="polite">
             {messages.length === 0 && <p className="empty">Say something to the agent.</p>}

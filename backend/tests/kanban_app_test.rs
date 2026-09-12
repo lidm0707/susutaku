@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use kanban_rs::{CardRow, PipelineRow, StoreError};
+use kanban_rs::{COLUMN_DONE, COLUMN_FAILED, CardRow, PipelineRow, StoreError};
 use mockall::predicate::eq;
 
 use backend::app::kanban::KanbanApp;
@@ -11,7 +11,8 @@ use backend::app::pipeline_run;
 use backend::domain::{CardService, CommentService, NewCard, NewPipeline, PipelineService};
 use backend::port::outbound::{
     MockAgentConfigRepo, MockCardRepo, MockCardTx, MockCommentRepo, MockCommentTx,
-    MockPipelineRepo, MockPipelineTx, MockProjectRepo, MockResourceRepo, MockWorkspaceRepo,
+    MockPipelineRepo, MockPipelineTx, MockProjectRepo, MockResourceRepo, MockSkillRepo,
+    MockWorkspaceRepo,
 };
 
 const CARD_ID: i64 = 5;
@@ -69,6 +70,7 @@ async fn card_views_join_pipeline_names_in_app_layer() {
         Arc::new(pipelines),
         Arc::new(MockResourceRepo::new()),
         Arc::new(MockAgentConfigRepo::new()),
+        Arc::new(MockSkillRepo::new()),
         Arc::new(MockWorkspaceRepo::new()),
         Arc::new(MockProjectRepo::new()),
     );
@@ -183,6 +185,19 @@ async fn pipeline_service_create_reads_back_inside_tx() {
     assert_eq!(row.id, PIPE_ID);
 }
 
+/// A run from `todo` moves the card: todo → doing at start, → `target` at end.
+fn expect_run_moves_todo_to(cards: &mut MockCardRepo, target: &str) {
+    cards
+        .expect_move_card()
+        .withf(|mv: &backend::domain::CardMove| mv.column_id == kanban_rs::COLUMN_DOING)
+        .returning(|_| Ok(()));
+    let target = target.to_string();
+    cards
+        .expect_move_card()
+        .withf(move |mv: &backend::domain::CardMove| mv.column_id == target)
+        .returning(|_| Ok(()));
+}
+
 fn runner_app(cards: MockCardRepo, pipelines: MockPipelineRepo) -> KanbanApp {
     KanbanApp::new(
         Arc::new(cards),
@@ -190,6 +205,7 @@ fn runner_app(cards: MockCardRepo, pipelines: MockPipelineRepo) -> KanbanApp {
         Arc::new(pipelines),
         Arc::new(MockResourceRepo::new()),
         Arc::new(MockAgentConfigRepo::new()),
+        Arc::new(MockSkillRepo::new()),
         Arc::new(MockWorkspaceRepo::new()),
         Arc::new(MockProjectRepo::new()),
     )
@@ -203,6 +219,7 @@ async fn run_card_pipeline_records_ok_and_persists_state() {
         .expect_get()
         .with(eq(CARD_ID))
         .returning(|id| Ok(Some(card_row(id, Some(PIPE_ID)))));
+    expect_run_moves_todo_to(&mut cards, COLUMN_DONE);
     cards
         .expect_set_agent()
         .withf(|_, a: &kanban_rs::AgentState| {
@@ -234,6 +251,7 @@ async fn run_card_pipeline_agent_node_sets_agent_name() {
         .expect_get()
         .with(eq(CARD_ID))
         .returning(|id| Ok(Some(card_row(id, Some(PIPE_ID)))));
+    expect_run_moves_todo_to(&mut cards, COLUMN_DONE);
     cards
         .expect_set_agent()
         .withf(|_, a: &kanban_rs::AgentState| a.name == "qwen")
@@ -258,6 +276,7 @@ async fn run_card_pipeline_unwired_stage_fails_run_with_note() {
         .expect_get()
         .with(eq(CARD_ID))
         .returning(|id| Ok(Some(card_row(id, Some(PIPE_ID)))));
+    expect_run_moves_todo_to(&mut cards, COLUMN_FAILED);
     cards
         .expect_set_agent()
         .withf(|_, a: &kanban_rs::AgentState| a.state["run"]["status"] == "failed")
@@ -301,6 +320,7 @@ async fn run_card_pipeline_ref_image_loads_file_into_payload() {
         .expect_get()
         .with(eq(CARD_ID))
         .returning(|id| Ok(Some(card_row(id, Some(PIPE_ID)))));
+    expect_run_moves_todo_to(&mut cards, COLUMN_DONE);
     cards
         .expect_set_agent()
         .withf(|_, a: &kanban_rs::AgentState| {

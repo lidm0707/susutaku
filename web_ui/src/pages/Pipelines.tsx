@@ -768,7 +768,18 @@ export default function Pipelines() {
             {editId && (
               <div className="pipeline-inspector">
                 <div className="inspector-head">
-                  <span>node settings</span>
+                  <span>
+                    {(() => {
+                      const basic = BASIC_NODES.find((b) => b.stage === editStage);
+                      const Icon = basic?.Icon ?? Workflow;
+                      return (
+                        <>
+                          <Icon size={13} />
+                          {basic?.label ?? `node settings (${editStage})`}
+                        </>
+                      );
+                    })()}
+                  </span>
                   <button type="button" className="icon-btn" onClick={() => setEditId(null)} title="close">
                     <X size={14} />
                   </button>

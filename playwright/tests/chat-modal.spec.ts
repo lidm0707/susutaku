@@ -6,7 +6,7 @@ import { expect, test } from "./fixtures";
 import { API, loginToken } from "./helpers";
 
 const MOCK_MODEL = "e2e-mock";
-const AGENT_NAME = "e2e-modal-agent";
+const AGENT_NAME_PREFIX = "e2e-modal-agent";
 const CONTEXT_PREFIX = "[context: user is currently on the kanban page]";
 const ECHO_TEXT = "hello modal";
 const CHAT_TIMEOUT_MS = 20_000;
@@ -16,18 +16,44 @@ test.skip(
   "needs the mock-model backend stack (docker/compose/playwright-backend.yml)",
 );
 
-// The modal refuses to send without an agent ("no agent — create one under
-// agents"); an agent whose model matches the mock model makes the modal post
-// to /api/chat directly, and the mock echoes the full contexted message.
+// The modal refuses to send without an agent; an agent whose model matches
+// the mock model makes the modal post to /api/chat directly, and the mock
+// echoes the full contexted message.
 async function seedChatAgent(request: APIRequestContext): Promise<string> {
   const token = await loginToken();
-  const name = `${AGENT_NAME}-${Date.now()}`;
+  const headers = { Authorization: `Bearer ${token}` };
+  // The DB persists across runs (E2E_SKIP_DB_LIFECYCLE=1); stale seeded agents
+  // would pile up and the modal sends one message per selected agent.
+  const existing = (await (await request.get(`${API}/api/agents`, { headers })).json()) as {
+    id: number;
+    name: string;
+  }[];
+  for (const a of existing.filter((a) => a.name.startsWith(AGENT_NAME_PREFIX))) {
+    await request.delete(`${API}/api/agents/${a.id}`, { headers });
+  }
+  const name = `${AGENT_NAME_PREFIX}-${Date.now()}`;
   const res = await request.post(`${API}/api/agents`, {
-    headers: { Authorization: `Bearer ${token}` },
+    headers,
     data: { name, model: MOCK_MODEL, persona: "", prompt: "", output: "" },
   });
   expect(res.ok()).toBeTruthy();
   return name;
+}
+
+// Pick exactly one agent in the picker menu — the modal auto-selects agents
+// on open, and any extra checked agent would duplicate reply bubbles.
+async function selectOnlyAgent(page: import("@playwright/test").Page, name: string) {
+  const dialog = page.locator('[role="dialog"]');
+  await dialog.locator('button[title="choose agent(s)"]').click();
+  const items = dialog.locator('[role="menuitemcheckbox"]');
+  const count = await items.count();
+  for (let i = 0; i < count; i++) {
+    const item = items.nth(i);
+    const checked = (await item.getAttribute("aria-checked")) === "true";
+    const isTarget = (await item.textContent())?.includes(name) ?? false;
+    if (checked !== isTarget) await item.click();
+  }
+  await dialog.locator('button[title="choose agent(s)"]').click();
 }
 
 // Mirror of the modal send: same context prefix, same /api/chat body.
@@ -57,15 +83,13 @@ async function openChatModal(page: import("@playwright/test").Page) {
 }
 
 test.describe("chat modal", () => {
-  test("fab opens the chat modal with agent select", async ({ page, login }) => {
+  test("fab opens the chat modal with agent picker", async ({ page, login }) => {
     const dialog = await openChatModal(page);
     await expect(dialog.locator("h2", { hasText: "susutaku" })).toBeVisible();
-    await expect(dialog.locator('select[title="agent"]')).toBeVisible();
+    await expect(dialog.locator('button[title="choose agent(s)"]')).toBeVisible();
     await expect(
       dialog.getByPlaceholder(/type a message|generating…/)
     ).toBeVisible();
-    // The fab hides while the modal is open.
-    await expect(page.locator("button[aria-label='open chat']")).toBeHidden();
   });
 
   test("sending from kanban carries page context in the echoed reply", async ({
@@ -75,11 +99,7 @@ test.describe("chat modal", () => {
   }) => {
     const agentName = await seedChatAgent(request);
     const dialog = await openChatModal(page);
-    const select = dialog.locator('select[title="agent"]');
-    const value = await select
-      .locator("option", { hasText: agentName })
-      .getAttribute("value");
-    await select.selectOption(value);
+    await selectOnlyAgent(page, agentName);
 
     await dialog.getByPlaceholder(/type a message/).fill(ECHO_TEXT);
     await dialog.locator('form button[type="submit"]').click();

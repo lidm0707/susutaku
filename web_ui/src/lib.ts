@@ -229,7 +229,7 @@ export function clear_token(): void {
   localStorage.removeItem(TOKEN_KEY);
 }
 
-async function api(path: string, opts: RequestInit = {}): Promise<Response> {
+async function api(path: string, opts: RequestInit = {}, silent = false): Promise<Response> {
   const token = get_token();
   const headers: Record<string, string> = { ...(opts.headers as Record<string, string> | undefined) };
   if (token) headers.Authorization = `Bearer ${token}`;
@@ -240,7 +240,7 @@ async function api(path: string, opts: RequestInit = {}): Promise<Response> {
       window.dispatchEvent(new Event("susutaku:unauthorized"));
     }
     const err = new ApiError(res.status, await res.text());
-    if (err.status !== 401) toast(err.message, "error");
+    if (err.status !== 401 && !silent) toast(err.message, "error");
     throw err;
   }
   return res;
@@ -538,12 +538,13 @@ export async function zai_say_hi(): Promise<{ ok: boolean; reply: string }> {
 export async function chat_zai(
   message: string,
   model: string,
-  system?: PromptSection[]
+  system?: PromptSection[],
+  agent?: string
 ): Promise<ChatReply> {
   const res = await fetch(`${API_BASE}/api/chat/zai`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message, model: model || undefined, system }),
+    body: JSON.stringify({ message, model: model || undefined, system, agent }),
   });
   if (!res.ok) throw new ApiError(res.status, await res.text());
   return res.json();
@@ -840,8 +841,10 @@ export interface AgentWhere {
 }
 
 /** Which machine an agent runs on — works for local and remote agents. */
+// Whereis is a status probe: a 404 just means "not running right now" and
+// callers render that inline, so it must not raise the global error toast.
 export async function fetch_agent_machine(agent: string): Promise<AgentWhere> {
-  const res = await api(`/api/agents/whereis/${encodeURIComponent(agent)}`);
+  const res = await api(`/api/agents/whereis/${encodeURIComponent(agent)}`, {}, true);
   if (!res.ok) throw new ApiError(res.status, await res.text());
   return res.json();
 }
@@ -1030,5 +1033,64 @@ export async function set_agent(
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name, state }),
+  });
+}
+
+export interface Skill {
+  id: number;
+  name: string;
+  body: string;
+}
+
+export async function fetch_skills(): Promise<Skill[]> {
+  return (await api("/api/skills")).json();
+}
+
+export async function create_skill(name: string, body: string): Promise<Skill> {
+  const res = await api("/api/skills", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, body }),
+  });
+  return res.json();
+}
+
+export async function update_skill(
+  id: number,
+  name: string,
+  body: string
+): Promise<Response> {
+  return api(`/api/skills/${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, body }),
+  });
+}
+
+export async function remove_skill(id: number): Promise<Response> {
+  return api(`/api/skills/${id}`, { method: "DELETE" });
+}
+
+export async function fetch_agent_skills(agent_id: number): Promise<Skill[]> {
+  return (await api(`/api/agents/${agent_id}/skills`)).json();
+}
+
+export async function attach_agent_skill(
+  agent_id: number,
+  skill_id: number
+): Promise<Response> {
+  return api(`/api/agents/${agent_id}/skills`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ skill_id }),
+  });
+}
+
+export async function detach_agent_skill(
+  agent_id: number,
+  skill_id: number
+): Promise<Response> {
+  return api(`/api/agents/${agent_id}/skills/${skill_id}`, {
+    method: "DELETE",
   });
 }

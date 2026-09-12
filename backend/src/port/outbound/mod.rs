@@ -15,8 +15,8 @@ pub use inference::Inference;
 pub use kanban::{
     AgentConfigRepo, CardRepo, CardTx, CommentRepo, CommentTx, MockAgentConfigRepo, MockCardRepo,
     MockCardTx, MockCommentRepo, MockCommentTx, MockPipelineRepo, MockPipelineTx, MockProjectRepo,
-    MockResourceRepo, MockWorkspaceRepo, PipelineRepo, PipelineTx, ProjectRepo, ResourceRepo,
-    WorkspaceRepo,
+    MockResourceRepo, MockSkillRepo, MockWorkspaceRepo, PipelineRepo, PipelineTx, ProjectRepo,
+    ResourceRepo, SkillRepo, WorkspaceRepo,
 };
 pub use model::{ModelEndpoint, ModelSwitch};
 pub use runner::Runner;

@@ -32,6 +32,7 @@ import {
 import { ActivityModal } from "./ActivityModal.tsx";
 import { Modal, PromptModal } from "../ui/Overlay.js";
 import { AgentInspect, MachinesModal } from "./MachinesModal.tsx";
+import { SandboxMonitorOverlay, type SandboxMonitorTarget } from "./SandboxMonitor.tsx";
 import { AgentOutputsModal } from "./AgentOutputsModal.tsx";
 import { toast } from "../ui/Toast.js";
 import { use_projects } from "./ProjectContext.tsx";
@@ -95,11 +96,12 @@ function AgentLogsModal({ agent, on_close }: { agent: string | null; on_close: (
 }
 
 
-export default function SideNav({ on_chat }: { on_chat: () => void }) {
+export default function SideNav({ on_chat, shifted }: { on_chat: () => void; shifted: boolean }) {
   const nav = useNavigate();
   const [profile_open, set_profile_open] = useState(false);
   const [pw_open, set_pw_open] = useState(false);
   const [machines_open, set_machines_open] = useState(false);
+  const [monitor, set_monitor] = useState<SandboxMonitorTarget | null>(null);
   const [outputs_open, set_outputs_open] = useState(false);
   const [logs_agent, set_logs_agent] = useState<string | null>(null);
   const [activity_open, set_activity_open] = useState(false);
@@ -141,7 +143,7 @@ export default function SideNav({ on_chat }: { on_chat: () => void }) {
   }
 
   return (
-    <nav className="dock-nav" aria-label="main navigation">
+    <nav className={`dock-nav ${shifted ? "shifted" : ""}`} aria-label="main navigation">
       {ITEMS.map(({ to, title, Icon }) => (
         <NavLink
           key={to}
@@ -229,7 +231,8 @@ export default function SideNav({ on_chat }: { on_chat: () => void }) {
       <ProfileModal open={profile_open} on_close={() => set_profile_open(false)} on_logout={do_logout} on_change_password={() => { set_profile_open(false); set_pw_open(true); }} />
       <ChangePasswordModal open={pw_open} on_close={() => set_pw_open(false)} on_done={() => nav("/", { replace: true })} />
       <AgentLogsModal agent={logs_agent} on_close={() => set_logs_agent(null)} />
-      <MachinesModal open={machines_open} on_close={() => set_machines_open(false)} />
+      <MachinesModal open={machines_open} on_close={() => set_machines_open(false)} on_monitor={set_monitor} />
+      <SandboxMonitorOverlay target={monitor} on_close={() => set_monitor(null)} />
       <AgentOutputsModal open={outputs_open} on_close={() => set_outputs_open(false)} />
       <ActivityModal open={activity_open} on_close={() => set_activity_open(false)} />
     </nav>

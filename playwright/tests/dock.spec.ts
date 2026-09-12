@@ -1,59 +1,63 @@
-// Bottom dock popovers (SideNav): machines (Monitor icon) and activity.
+// Dock modals (SideNav): machines (Monitor icon) and activity. The old
+// popovers became Modals — machines opens MachinesModal, workspace creation
+// lives in ProfileModal → PromptModal.
 // No mock-model gating — these only need the logged-in stack.
 import { test, expect } from "./fixtures";
+import type { Page } from "@playwright/test";
 
-const POPOVER_VISIBLE_MS = 10_000;
+const MODAL_SETTLE_MS = 10_000;
 
-test.describe("dock popovers", () => {
-  test("machines popover shows the local server host section", async ({
-    page,
-    login,
-  }) => {
+function dialogWithTitle(page: Page, title: string) {
+  return page.locator('[role="dialog"]').filter({
+    has: page.locator("h2", { hasText: title }),
+  });
+}
+
+test.describe("dock modals", () => {
+  test("machines modal shows the machine register", async ({ page, login }) => {
     await page.goto("/kanban");
     await page.click('button[title="machines"]');
-    const menu = page.locator('[role="menu"][aria-label="machines menu"]');
-    await expect(menu).toBeVisible();
+    const modal = dialogWithTitle(page, "machines");
+    await expect(modal).toBeVisible();
 
-    // Host section: hostname + os/arch + cpu line render once loaded.
-    const host = menu.locator(".dock-host");
-    await expect(host).toBeVisible();
-    await expect(host.locator(".dock-machine-name")).not.toHaveText(
-      "host specs unavailable"
-    );
-    await expect(host).toContainText(/cores/);
-
-    // Agents/sandboxes list settles (this stack may hold manager agents
-    // from the chat specs, so accept rows or the empty state).
+    // Register settles to rows or the empty state; the local backend host
+    // always appears as a machine-group head.
+    const list = modal.locator(".dock-machines-list");
     await expect(
-      menu.locator(".dock-machines-list").locator(".dock-machine-row, .dock-ws-empty").first()
-    ).toBeVisible({ timeout: POPOVER_VISIBLE_MS });
+      list.locator(".dock-machine-row, .dock-ws-empty").first()
+    ).toBeVisible({ timeout: MODAL_SETTLE_MS });
 
-    // Refresh re-fetches without closing the popover.
-    await menu.locator('button[aria-label="refresh machines"]').click();
-    await expect(menu).toBeVisible();
+    // Refresh re-fetches without closing the modal.
+    await modal.locator('button[aria-label="refresh machines"]').click();
+    await expect(modal).toBeVisible();
   });
 
-  test("creating a workspace from the dock shows up in the activity feed", async ({
+  test("creating a workspace from the profile modal shows up in the activity feed", async ({
     page,
     login,
   }) => {
     await page.goto("/kanban");
     const name = `e2e-dock-ws-${Date.now()}`;
 
-    // Dock "+ new workspace" opens the PromptModal.
-    await page.click('button[aria-label="new workspace"]');
-    const dialog = page.locator('[role="dialog"]', { hasText: "new workspace" });
-    await expect(dialog).toBeVisible();
-    await dialog.locator('input[placeholder="name…"]').fill(name);
-    await dialog.locator("form").getByRole("button", { name: "create" }).click();
-    await expect(dialog).toBeHidden();
+    // Profile modal → "+ new workspace" opens the PromptModal.
+    await page.click('button[title="profile"]');
+    const profile = dialogWithTitle(page, "profile");
+    await expect(profile).toBeVisible();
+    await profile.locator('button[aria-label="new workspace"]').click();
+    const prompt = dialogWithTitle(page, "new workspace");
+    await expect(prompt).toBeVisible();
+    await prompt.locator('input[placeholder="name…"]').fill(name);
+    await prompt.locator("form").getByRole("button", { name: "create" }).click();
+    await expect(prompt).toBeHidden();
+    await profile.locator('button[aria-label="close"]').click();
+    await expect(page.locator('[role="dialog"]')).toBeHidden();
 
-    // Activity popover fetches on open; newest-first feed carries the event.
+    // Activity modal fetches on open; newest-first feed carries the event.
     await page.click('button[title="activity"]');
-    const menu = page.locator('[role="menu"][aria-label="activity menu"]');
-    await expect(menu).toBeVisible();
+    const activity = dialogWithTitle(page, "activity");
+    await expect(activity).toBeVisible();
     await expect(
-      menu.locator(".dock-activity-msg", { hasText: `created workspace ${name}` })
-    ).toBeVisible({ timeout: POPOVER_VISIBLE_MS });
+      activity.locator(".dock-activity-msg", { hasText: `created workspace ${name}` })
+    ).toBeVisible({ timeout: MODAL_SETTLE_MS });
   });
 });

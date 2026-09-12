@@ -4,7 +4,9 @@ use std::sync::Arc;
 
 use axum::{
     Json, Router,
-    extract::{DefaultBodyLimit, FromRequestParts, Multipart, Path, Query, Request, State},
+    extract::{
+        DefaultBodyLimit, Extension, FromRequestParts, Multipart, Path, Query, Request, State,
+    },
     http::{self, StatusCode, request::Parts},
     response::{IntoResponse, Response},
     routing::{delete, get, post, put},
@@ -159,6 +161,7 @@ pub fn router<T: ChatHandling + ModelSwitch + 'static>(
             ))),
         )))
         .layer(tower_http::trace::TraceLayer::new_for_http())
+        .layer(Extension(manager))
 }
 
 fn kanban_router(state: KanbanStore) -> Router {
@@ -213,6 +216,16 @@ fn kanban_router(state: KanbanStore) -> Router {
         .route(
             "/api/agents/{id}",
             put(update_agent_cfg).delete(remove_agent_cfg),
+        )
+        .route("/api/skills", get(list_skills).post(create_skill))
+        .route("/api/skills/{id}", put(update_skill).delete(remove_skill))
+        .route(
+            "/api/agents/{id}/skills",
+            get(list_agent_skills).post(attach_agent_skill),
+        )
+        .route(
+            "/api/agents/{id}/skills/{skill_id}",
+            delete(detach_agent_skill),
         )
         .route("/api/agent-outputs", get(list_agent_outputs_handler))
         .route("/api/agent-outputs/{id}", get(get_agent_output_handler))
@@ -577,6 +590,7 @@ async fn select_model<T: ModelSwitch>(
     responses((status = 200, body = ChatReply), (status = 500, body = str))
 )]
 async fn chat<T: ChatHandling>(
+    Extension(manager): Extension<Arc<manager_rs::ManagerProcess>>,
     State(use_case): State<Arc<T>>,
     headers: axum::http::HeaderMap,
     Json(req): Json<ChatRequest>,
@@ -587,6 +601,7 @@ async fn chat<T: ChatHandling>(
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix(BEARER_PREFIX))
         .map(str::to_string);
+    note_chat_agent(manager.clone(), req.agent.clone(), &req.message).await;
     let outcome = use_case
         .execute(ChatCmd {
             message: req.message,
@@ -598,6 +613,7 @@ async fn chat<T: ChatHandling>(
         })
         .await
         .map_err(ApiError::internal)?;
+    note_chat_reply(manager, req.agent, &outcome.text).await;
     Ok(Json(ChatReply {
         model: outcome.model,
         reply: outcome.text,
@@ -1143,6 +1159,53 @@ async fn remove_git_repo(
     }))
 }
 
+/// Registers a chat agent with the manager (spawn on demand) and records the
+/// user message in its transcript, so the agent shows in machines/inspect.
+fn note_chat_agent(
+    manager: Arc<manager_rs::ManagerProcess>,
+    agent: Option<String>,
+    message: &str,
+) -> impl std::future::Future<Output = ()> + Send {
+    let message = message.to_string();
+    async move {
+        tokio::task::spawn_blocking(move || {
+            let Some(agent) = agent.as_deref().map(str::trim).filter(|a| !a.is_empty()) else {
+                return;
+            };
+            if let Err(e) = manager.spawn(agent) {
+                tracing::warn!("chat agent {agent} spawn: {e}");
+                return;
+            }
+            if let Err(e) = manager.push_context(agent, &message) {
+                tracing::warn!("chat agent {agent} context: {e}");
+            }
+        })
+        .await
+        .ok();
+    }
+}
+
+/// Appends the assistant reply to the chat agent's transcript.
+fn note_chat_reply(
+    manager: Arc<manager_rs::ManagerProcess>,
+    agent: Option<String>,
+    reply: &str,
+) -> impl std::future::Future<Output = ()> + Send {
+    let reply = format!("assistant: {reply}");
+    async move {
+        tokio::task::spawn_blocking(move || {
+            let Some(agent) = agent.as_deref().map(str::trim).filter(|a| !a.is_empty()) else {
+                return;
+            };
+            if let Err(e) = manager.push_context(agent, &reply) {
+                tracing::warn!("chat agent {agent} context: {e}");
+            }
+        })
+        .await
+        .ok();
+    }
+}
+
 #[utoipa::path(
     post,
     path = "/api/chat/zai",
@@ -1150,6 +1213,7 @@ async fn remove_git_repo(
     responses((status = 200, body = ChatReply), (status = 500, body = str))
 )]
 async fn chat_zai(
+    Extension(manager): Extension<Arc<manager_rs::ManagerProcess>>,
     State(state): State<Arc<SettingsState>>,
     Json(req): Json<ZaiChatRequest>,
 ) -> Result<Json<ChatReply>, ApiError> {
@@ -1158,7 +1222,8 @@ async fn chat_zai(
     let client = state.zai_client().map_err(ApiError::bad_request)?;
     let system = build_system_message(&req.system)?;
     let chat_model = req.model.clone().unwrap_or_default();
-    let user = req.message;
+    let user = req.message.clone();
+    note_chat_agent(manager.clone(), req.agent.clone(), &req.message).await;
     let reply = tokio::task::spawn_blocking(move || {
         ai_interface_layer::provider::ChatProvider::complete(
             &client,
@@ -1176,6 +1241,7 @@ async fn chat_zai(
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?
     .map_err(|e| ApiError::internal(e.to_string()))?;
+    note_chat_reply(manager, req.agent, &reply.content).await;
     Ok(Json(ChatReply {
         model: Some(zai_api::client::DEFAULT_MODEL.to_string()),
         reply: reply.content,
@@ -1996,6 +2062,125 @@ async fn remove_agent_cfg(
     Ok("ok")
 }
 
+#[utoipa::path(get, path = "/api/skills", responses((status = 200, body = [SkillDto])))]
+async fn list_skills(
+    State(state): State<KanbanStore>,
+    _user: AuthUser,
+) -> Result<Json<Vec<SkillDto>>, ApiError> {
+    let rows = state.app.skills.list().await.map_err(cfg_err)?;
+    Ok(Json(rows.into_iter().map(SkillDto::from).collect()))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/skills",
+    request_body = SkillRequest,
+    responses((status = 200, body = SkillDto), (status = 400, body = str))
+)]
+async fn create_skill(
+    State(state): State<KanbanStore>,
+    user: AuthUser,
+    Json(req): Json<SkillRequest>,
+) -> Result<Json<SkillDto>, ApiError> {
+    require_edit(&user)?;
+    let row = state
+        .app
+        .skills
+        .create(req.name.trim(), req.body.trim())
+        .await
+        .map_err(cfg_err)?;
+    Ok(Json(SkillDto::from(row)))
+}
+
+#[utoipa::path(
+    put,
+    path = "/api/skills/{id}",
+    request_body = SkillRequest,
+    responses((status = 200, body = str), (status = 404, body = str))
+)]
+async fn update_skill(
+    State(state): State<KanbanStore>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+    user: AuthUser,
+    Json(req): Json<SkillRequest>,
+) -> Result<&'static str, ApiError> {
+    require_edit(&user)?;
+    state
+        .app
+        .skills
+        .update(id, req.body.trim())
+        .await
+        .map_err(cfg_err)?;
+    Ok("ok")
+}
+
+#[utoipa::path(delete, path = "/api/skills/{id}", responses((status = 200, body = str), (status = 404, body = str)))]
+async fn remove_skill(
+    State(state): State<KanbanStore>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+    user: AuthUser,
+) -> Result<&'static str, ApiError> {
+    require_edit(&user)?;
+    state.app.skills.remove(id).await.map_err(cfg_err)?;
+    Ok("ok")
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/agents/{id}/skills",
+    responses((status = 200, body = [SkillDto]), (status = 404, body = str))
+)]
+async fn list_agent_skills(
+    State(state): State<KanbanStore>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+    _user: AuthUser,
+) -> Result<Json<Vec<SkillDto>>, ApiError> {
+    let rows = state.app.skills.list_for_agent(id).await.map_err(cfg_err)?;
+    Ok(Json(rows.into_iter().map(SkillDto::from).collect()))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/agents/{id}/skills",
+    request_body = AgentSkillRequest,
+    responses((status = 200, body = str), (status = 404, body = str))
+)]
+async fn attach_agent_skill(
+    State(state): State<KanbanStore>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+    user: AuthUser,
+    Json(req): Json<AgentSkillRequest>,
+) -> Result<&'static str, ApiError> {
+    require_edit(&user)?;
+    state
+        .app
+        .skills
+        .attach(id, req.skill_id)
+        .await
+        .map_err(cfg_err)?;
+    Ok("ok")
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/agents/{id}/skills/{skill_id}",
+    responses((status = 200, body = str), (status = 404, body = str))
+)]
+async fn detach_agent_skill(
+    State(state): State<KanbanStore>,
+    axum::extract::Path(ids): axum::extract::Path<(i64, i64)>,
+    user: AuthUser,
+) -> Result<&'static str, ApiError> {
+    require_edit(&user)?;
+    state
+        .app
+        .skills
+        .detach(ids.0, ids.1)
+        .await
+        .map_err(cfg_err)?;
+    Ok("ok")
+}
+
 #[utoipa::path(get, path = "/api/activity", responses((status = 200, body = [ActivityDto])))]
 async fn list_activity(
     State(state): State<KanbanStore>,
@@ -2147,13 +2332,15 @@ fn cfg_err(e: kanban_rs::StoreError) -> ApiError {
     match e {
         kanban_rs::StoreError::NoSuchCard
         | kanban_rs::StoreError::NoSuchPipeline
-        | kanban_rs::StoreError::NoSuchAgent => {
+        | kanban_rs::StoreError::NoSuchAgent
+        | kanban_rs::StoreError::NoSuchSkill => {
             ApiError(ApiError::NOT_FOUND_MSG.to_string(), StatusCode::NOT_FOUND)
         }
         kanban_rs::StoreError::PipelineTaken => {
             ApiError::bad_request("pipeline name already taken")
         }
         kanban_rs::StoreError::AgentTaken => ApiError::bad_request("agent name already taken"),
+        kanban_rs::StoreError::SkillTaken => ApiError::bad_request("skill name already taken"),
         kanban_rs::StoreError::BadSpec(msg) => ApiError::bad_request(msg),
         other => ApiError::internal(other.to_string()),
     }
@@ -2962,6 +3149,9 @@ struct ChatRequest {
     tokenizer: Option<String>,
     /// Emit a reasoning block (default: off — closed thinking).
     think: Option<bool>,
+    /// Agent name from the chat modal; registers the exchange with the
+    /// manager so the agent shows in machines with its transcript.
+    agent: Option<String>,
 }
 
 #[derive(Serialize, utoipa::ToSchema)]
@@ -3113,6 +3303,9 @@ struct ZaiChatRequest {
     message: String,
     model: Option<String>,
     system: Option<Vec<PromptSectionDto>>,
+    /// Agent name from the chat modal; registers the exchange with the
+    /// manager so the agent shows in machines with its transcript.
+    agent: Option<String>,
 }
 
 #[derive(Deserialize, utoipa::ToSchema)]
@@ -3386,6 +3579,34 @@ impl From<kanban_rs::AgentConfigRow> for AgentConfigDto {
             output: r.output,
         }
     }
+}
+
+#[derive(Serialize, utoipa::ToSchema)]
+struct SkillDto {
+    id: i64,
+    name: String,
+    body: String,
+}
+
+impl From<kanban_rs::SkillRow> for SkillDto {
+    fn from(s: kanban_rs::SkillRow) -> Self {
+        Self {
+            id: s.id,
+            name: s.name,
+            body: s.body,
+        }
+    }
+}
+
+#[derive(Deserialize, utoipa::ToSchema)]
+struct SkillRequest {
+    name: String,
+    body: String,
+}
+
+#[derive(Deserialize, utoipa::ToSchema)]
+struct AgentSkillRequest {
+    skill_id: i64,
 }
 
 #[derive(Serialize, utoipa::ToSchema)]

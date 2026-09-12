@@ -6,8 +6,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use kanban_rs::{
     AddCard, AgentConfigRow, AgentConfigUpdate, AgentState, CardRow, CommentRow, DbTx, MoveCard,
-    PipelineRow, ProjectRow, ResourceRow, Store, StoreError, UpdateCard, UpsertResource,
-    WorkspaceRow,
+    NewSkill, PipelineRow, ProjectRow, ResourceRow, SkillRow, Store, StoreError, UpdateCard,
+    UpsertResource, WorkspaceRow,
 };
 
 use crate::domain::{
@@ -15,7 +15,7 @@ use crate::domain::{
 };
 use crate::port::outbound::{
     AgentConfigRepo, CardRepo, CardTx, CommentRepo, CommentTx, PipelineRepo, PipelineTx,
-    ProjectRepo, ResourceRepo, WorkspaceRepo,
+    ProjectRepo, ResourceRepo, SkillRepo, WorkspaceRepo,
 };
 
 pub const DATABASE_URL_ENV: &str = "DATABASE_URL";
@@ -347,6 +347,37 @@ impl AgentConfigRepo for PgKanban {
 
     async fn remove(&self, id: i64) -> Result<(), StoreError> {
         self.store().remove_agent(id).await
+    }
+}
+
+#[async_trait]
+impl SkillRepo for PgKanban {
+    async fn list(&self) -> Result<Vec<SkillRow>, StoreError> {
+        self.store().list_skills().await
+    }
+
+    async fn create(&self, name: &str, body: &str) -> Result<SkillRow, StoreError> {
+        self.store().create_skill(NewSkill { name, body }).await
+    }
+
+    async fn update(&self, id: i64, body: &str) -> Result<(), StoreError> {
+        self.store().update_skill(id, body).await
+    }
+
+    async fn remove(&self, id: i64) -> Result<(), StoreError> {
+        self.store().remove_skill(id).await
+    }
+
+    async fn list_for_agent(&self, agent_id: i64) -> Result<Vec<SkillRow>, StoreError> {
+        self.store().list_agent_skills(agent_id).await
+    }
+
+    async fn attach(&self, agent_id: i64, skill_id: i64) -> Result<(), StoreError> {
+        self.store().attach_agent_skill(agent_id, skill_id).await
+    }
+
+    async fn detach(&self, agent_id: i64, skill_id: i64) -> Result<(), StoreError> {
+        self.store().detach_agent_skill(agent_id, skill_id).await
     }
 }
 

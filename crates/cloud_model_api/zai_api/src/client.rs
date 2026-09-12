@@ -20,6 +20,7 @@ pub const CHOICES_FIELD: &str = "choices";
 pub const MESSAGE_FIELD: &str = "message";
 pub const CONTENT_FIELD: &str = "content";
 pub const EMPTY_BODY_NOTE: &str = "<unreadable body>";
+pub const REQUEST_TIMEOUT_SECS: u64 = 120;
 
 /// Which z.ai endpoint a key works against: coding-plan keys only accept
 /// `/api/coding/paas/v4`, regular api keys only `/api/paas/v4`.
@@ -93,6 +94,7 @@ impl ZaiClient {
 
     fn send(&self, body: &str) -> Result<String, AiError> {
         let response = ureq::post(self.endpoint.url())
+            .timeout(std::time::Duration::from_secs(REQUEST_TIMEOUT_SECS))
             .set(CONTENT_TYPE, JSON_CONTENT_TYPE)
             .set(AUTH_HEADER, &format!("{BEARER_PREFIX}{}", self.api_key))
             .send_string(body)

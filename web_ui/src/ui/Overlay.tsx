@@ -51,17 +51,29 @@ type ModalProps = {
   children: ReactNode;
   wide?: boolean;
   className?: string;
+  docked?: boolean;
+  docked_left?: boolean;
 };
 
-export function Modal({ open, title, on_close, children, wide, className }: ModalProps) {
+export function Modal({ open, title, on_close, children, wide, className, docked, docked_left }: ModalProps) {
   const box = use_overlay(open, on_close);
   if (!open) return null;
   return (
     <Portal>
-    <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && on_close()}>
+    <div
+      className={docked || docked_left ? "overlay docked docked-left" : "overlay"}
+      onMouseDown={(e) => e.target === e.currentTarget && on_close()}
+    >
       <div
         ref={box}
-        className={["overlay-box", "modal", wide ? "wide" : "", className ?? ""].filter(Boolean).join(" ")}
+        className={[
+          "overlay-box",
+          "modal",
+          wide ? "wide" : "",
+          docked ? "docked-right" : "",
+          docked_left ? "docked-left" : "",
+          className ?? "",
+        ].filter(Boolean).join(" ")}
         role="dialog"
         aria-modal="true"
         tabIndex={-1}

@@ -45,12 +45,15 @@ test.describe("walkthrough", () => {
     await chat.locator('button[aria-label="close"]').click();
     await expect(page.locator('[role="dialog"]')).toBeHidden();
 
-    // 5. machines popover
+    // 5. machines modal (dock button opens a Modal, not a popover)
     await page.click('button[title="machines"]');
-    await expect(page.locator('[role="menu"][aria-label="machines menu"]')).toBeVisible();
+    const machines = page.locator('[role="dialog"]').filter({
+      has: page.locator("h2", { hasText: "machines" }),
+    });
+    await expect(machines).toBeVisible();
     await shot(page, "06-machines");
     // 6. agent inspect (first agent row if any)
-    const agentRow = page.locator(".dock-machine-row button, .dock-agent-row button").first();
+    const agentRow = machines.locator(".dock-machine-row button, .dock-agent-row button").first();
     if (await agentRow.count()) {
       await agentRow.click();
       await page.waitForTimeout(800);
@@ -61,10 +64,12 @@ test.describe("walkthrough", () => {
     await page.keyboard.press("Escape");
     await page.mouse.click(30, 80);
 
-    // 7. activity popover
+    // 7. activity modal
     await page.click('button[title="activity"]');
-    const act = page.locator('[role="menu"][aria-label*="activity"]');
-    await expect(act.first()).toBeVisible();
+    const act = page.locator('[role="dialog"]').filter({
+      has: page.locator("h2", { hasText: "activity" }),
+    });
+    await expect(act).toBeVisible();
     await page.waitForTimeout(800);
     await shot(page, "08-activity");
 

@@ -10,10 +10,14 @@ const ID_A: &str = "a";
 const ID_B: &str = "b";
 
 fn node(id: &str, stage: &str) -> NodeDef {
+    node_with_params(id, stage, serde_json::Value::Null)
+}
+
+fn node_with_params(id: &str, stage: &str, params: serde_json::Value) -> NodeDef {
     NodeDef {
         id: id.into(),
         stage: stage.into(),
-        params: serde_json::Value::Null,
+        params,
         x: None,
         y: None,
     }
@@ -45,7 +49,14 @@ fn compat_matrix() {
 #[test]
 fn text_to_text_link_ok() {
     let s = spec(
-        vec![node(ID_A, STAGE_FETCH), node(ID_B, STAGE_TRANSFORM)],
+        vec![
+            node_with_params(
+                ID_A,
+                STAGE_FETCH,
+                serde_json::json!({ "url": "https://example.com" }),
+            ),
+            node_with_params(ID_B, STAGE_TRANSFORM, serde_json::json!({ "op": "trim" })),
+        ],
         vec![Link {
             from: ID_A.into(),
             to: ID_B.into(),
@@ -59,8 +70,12 @@ fn any_feeds_all_and_all_feed_any() {
     let s = spec(
         vec![
             node(ID_A, STAGE_INGEST),
-            node(ID_B, STAGE_REF_IMAGE),
-            node("c", STAGE_AGENT),
+            node_with_params(
+                ID_B,
+                STAGE_REF_IMAGE,
+                serde_json::json!({ "path": "img.png" }),
+            ),
+            node_with_params("c", STAGE_AGENT, serde_json::json!({ "agent": "qwen" })),
         ],
         vec![
             Link {
@@ -79,7 +94,10 @@ fn any_feeds_all_and_all_feed_any() {
 #[test]
 fn json_into_text_fails() {
     let s = spec(
-        vec![node(ID_A, STAGE_PARSE), node(ID_B, STAGE_TRANSFORM)],
+        vec![
+            node(ID_A, STAGE_PARSE),
+            node_with_params(ID_B, STAGE_TRANSFORM, serde_json::json!({ "op": "trim" })),
+        ],
         vec![Link {
             from: ID_A.into(),
             to: ID_B.into(),

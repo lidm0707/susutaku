@@ -2,7 +2,7 @@ import React, { useEffect } from "react";
 import { useState } from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter, Navigate, Route, Routes, useNavigate } from "react-router-dom";
-import ChatModal from "./components/ChatModal.jsx";
+import ChatModal, { use_chat_docked } from "./components/ChatModal.jsx";
 import AgentSettings from "./features/agents/AgentSettings.jsx";
 import Kanban from "./pages/Kanban.jsx";
 import Login from "./pages/Login.jsx";
@@ -25,6 +25,7 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
 function App() {
   const nav = useNavigate();
   const [chat_open, set_chat_open] = useState(false);
+  const docked = use_chat_docked();
   useEffect(() => {
     const onUnauthorized = () => {
       if (window.location.pathname !== "/") nav("/", { replace: true });
@@ -36,6 +37,7 @@ function App() {
     <WorkspaceProvider>
       <ProjectProvider>
         <div className="bg-art" aria-hidden="true" />
+        <div className={chat_open && docked ? "chat-dock-main" : ""}>
         <Routes>
         <Route path="/" element={<Login />} />
         <Route path="/login" element={<Navigate to="/" replace />} />
@@ -49,7 +51,8 @@ function App() {
         <Route path="/sandbox" element={<RequireAuth><Sandbox /></RequireAuth>} />
         <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
-        <SideNav on_chat={() => set_chat_open(true)} />
+        </div>
+        <SideNav on_chat={() => set_chat_open(true)} shifted={chat_open && docked} />
         <ChatModal open={chat_open} on_close={() => set_chat_open(false)} />
         </ProjectProvider>
       <Toaster />

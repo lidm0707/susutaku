@@ -5,6 +5,7 @@ pub mod board;
 pub mod card;
 pub mod pipeline;
 pub mod resource;
+pub mod skill;
 pub mod store;
 pub mod user;
 pub mod workspace;
@@ -16,6 +17,7 @@ pub use card::{
 };
 pub use pipeline::PipelineRow;
 pub use resource::{ResourceRow, UpsertResource};
+pub use skill::{NewSkill, SkillRow};
 pub use store::{
     ACTIVITY_LIST_DEFAULT, ACTIVITY_LIST_MAX, ACTIVITY_MESSAGE_MAX_CHARS, ActivityRow, AddCard,
     AgentOutputRow, AgentState, CardRow, CommentRow, DbTx, MoveCard, OUTPUT_STATUS_APPROVED,
@@ -26,9 +28,14 @@ pub use user::{
 };
 pub use workspace::{DEFAULT_PROJECT_NAME, DEFAULT_WORKSPACE_NAME, ProjectRow, WorkspaceRow};
 
+pub const COLUMN_TODO: &str = "todo";
+pub const COLUMN_DOING: &str = "doing";
+pub const COLUMN_DONE: &str = "done";
+pub const COLUMN_FAILED: &str = "failed";
+
 pub const DEFAULT_COLUMNS: [(&str, &str); 4] = [
-    ("todo", "To Do"),
-    ("doing", "Doing"),
-    ("done", "Done"),
-    ("failed", "Failed"),
+    (COLUMN_TODO, "To Do"),
+    (COLUMN_DOING, "Doing"),
+    (COLUMN_DONE, "Done"),
+    (COLUMN_FAILED, "Failed"),
 ];

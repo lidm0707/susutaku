@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT s.id AS \"id: i64\", s.name, s.body\n               FROM skills s\n               JOIN agent_skills a ON a.skill_id = s.id\n               WHERE a.agent_id = $1\n               ORDER BY s.id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id: i64",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "body",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "bfcce190f8c62864dec8e9e85459fb37b9a53ae69d3e5dda2f7547b7b9cd6089"
+}

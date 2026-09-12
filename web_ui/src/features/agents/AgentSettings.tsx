@@ -14,25 +14,33 @@ import {
 } from "lucide-react";
 import {
   API_BASE,
+  attach_agent_skill,
   chat_codex,
   chat_zai,
   clear_token,
   create_agent,
+  create_skill,
+  detach_agent_skill,
+  fetch_agent_skills,
   fetch_agents,
   fetch_codex_models,
   fetch_models,
+  fetch_skills,
   fetch_system_prompt,
   fetch_zai_settings,
   pretty_name,
   remove_agent,
+  remove_skill,
   select_model,
   render_prompt,
   save_system_prompt,
   update_agent,
+  update_skill,
   type Agent,
   type ChatReply,
   type ModelInfo,
   type RenderedPrompt,
+  type Skill,
   type ZaiModel,
 } from "../../lib.js";
 import { Button, Field, Select, TextArea, TextInput } from "../../ui/controls.js";
@@ -74,6 +82,26 @@ export default function AgentSettings() {
   const [sysStatus, setSysStatus] = useState("");
   const [sysOpen, setSysOpen] = useState(false);
   const [newOpen, setNewOpen] = useState(false);
+  const [skills, setSkills] = useState<Skill[]>([]);
+  const [agentSkills, setAgentSkills] = useState<Skill[]>([]);
+  const [skillEdit, setSkillEdit] = useState<Skill | null>(null);
+  const [skillNewOpen, setSkillNewOpen] = useState(false);
+
+  function load_skills() {
+    fetch_skills()
+      .then(setSkills)
+      .catch(() => setSkills([]));
+  }
+
+  function load_agent_skills(id: number) {
+    fetch_agent_skills(id)
+      .then(setAgentSkills)
+      .catch(() => setAgentSkills([]));
+  }
+
+  useEffect(() => {
+    load_skills();
+  }, []);
 
   useEffect(() => {
     Promise.all([fetch_agents(), fetch_models().catch(() => [])])
@@ -128,7 +156,11 @@ export default function AgentSettings() {
   }
 
   function prompt_sections() {
-    const instructions = [fields.persona, fields.prompt]
+    const skill_body = agentSkills
+      .map((s) => s.body.trim())
+      .filter(Boolean)
+      .join("\n\n");
+    const instructions = [fields.persona, fields.prompt, skill_body]
       .filter((s) => s.trim())
       .join("\n\n");
     return [
@@ -194,6 +226,7 @@ export default function AgentSettings() {
     setError("");
     setStatus("");
     setSysOpen(false);
+    setSkillEdit(null);
     setSelected(a.id);
     setFields({
       name: a.name || "",
@@ -202,14 +235,70 @@ export default function AgentSettings() {
       prompt: a.prompt || "",
       output: a.output || "",
     });
+    if (typeof a.id === "number") load_agent_skills(a.id);
+    else setAgentSkills([]);
   }
 
   function start_new(name: string) {
     setError("");
     setStatus("");
     setSysOpen(false);
+    setSkillEdit(null);
     setSelected("new");
+    setAgentSkills([]);
     setFields({ ...EMPTY, name });
+  }
+
+  async function attach_skill(skill_id: number) {
+    if (typeof selected !== "number") return;
+    try {
+      await attach_agent_skill(selected, skill_id);
+      load_agent_skills(selected);
+    } catch (err) {
+      handle(err);
+    }
+  }
+
+  async function detach_skill(skill_id: number) {
+    if (typeof selected !== "number") return;
+    try {
+      await detach_agent_skill(selected, skill_id);
+      load_agent_skills(selected);
+    } catch (err) {
+      handle(err);
+    }
+  }
+
+  async function new_skill(name: string) {
+    try {
+      await create_skill(name.trim(), "");
+      load_skills();
+    } catch (err) {
+      handle(err);
+    }
+  }
+
+  async function del_skill(id: number) {
+    try {
+      await remove_skill(id);
+      setAgentSkills((cur) => cur.filter((s) => s.id !== id));
+      setSkillEdit(null);
+      load_skills();
+    } catch (err) {
+      handle(err);
+    }
+  }
+
+  async function save_skill(e: React.FormEvent) {
+    e.preventDefault();
+    if (!skillEdit) return;
+    try {
+      await update_skill(skillEdit.id, skillEdit.name, skillEdit.body);
+      load_skills();
+      if (typeof selected === "number") load_agent_skills(selected);
+    } catch (err) {
+      handle(err);
+    }
   }
 
   async function save(e: React.FormEvent) {
@@ -279,6 +368,7 @@ export default function AgentSettings() {
               onClick={() => {
                 setSysOpen(!sysOpen);
                 setSelected(null);
+                setSkillEdit(null);
               }}
             >
               <Sparkles size={14} />
@@ -298,8 +388,53 @@ export default function AgentSettings() {
               </button>
             ))}
           </div>
+          <div className="agents-list">
+            <div className="agent-item" role="presentation">
+              <Sparkles size={14} />
+              <span className="agent-item-name">skills</span>
+              <Button
+                variant="ghost"
+                type="button"
+                onClick={() => setSkillNewOpen(true)}
+                title="new skill"
+              >
+                <Plus size={12} />
+              </Button>
+            </div>
+            {skills.map((s) => (
+              <button
+                key={s.id}
+                className={skillEdit?.id === s.id ? "agent-item active" : "agent-item"}
+                onClick={() => setSkillEdit(s)}
+              >
+                <Terminal size={14} />
+                <span className="agent-item-name">{s.name}</span>
+              </button>
+            ))}
+          </div>
         </aside>
-        {sysOpen ? (
+        {skillEdit ? (
+          <form className="agent-editor" onSubmit={save_skill}>
+            <Field label={`skill: ${skillEdit.name}`} icon={<Terminal size={12} />}>
+              <TextArea
+                className="agent-prompt"
+                value={skillEdit.body}
+                onChange={(e) => setSkillEdit({ ...skillEdit, body: e.target.value })}
+                rows={16}
+                spellCheck={false}
+                placeholder="skill instructions injected into the agent prompt…"
+              />
+            </Field>
+            <footer className="agent-editor-foot">
+              <Button variant="primary" type="submit">
+                <Save size={14} /> save
+              </Button>
+              <Button variant="danger" type="button" onClick={() => del_skill(skillEdit.id)}>
+                <Trash2 size={14} /> delete
+              </Button>
+            </footer>
+          </form>
+        ) : sysOpen ? (
           <form className="agent-editor" onSubmit={save_sys}>
             <Field label="global system prompt" icon={<Sparkles size={12} />}>
               <TextArea
@@ -413,6 +548,48 @@ export default function AgentSettings() {
                 placeholder="what the output should look like…"
               />
             </Field>
+            <Field label="skills" icon={<Sparkles size={12} />}>
+              {typeof selected === "number" && (
+                <>
+                  <div className="agent-skill-list">
+                    {agentSkills.length === 0 && <span className="agents-empty">no skills attached</span>}
+                    {agentSkills.map((s) => (
+                      <span key={s.id} className="agent-skill-chip">
+                        {s.name}
+                        <button
+                          type="button"
+                          onClick={() => detach_skill(s.id)}
+                          title="detach skill"
+                        >
+                          <Trash2 size={11} />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                  <div className="select-wrap">
+                    <Select
+                      value=""
+                      onChange={(e) => {
+                        const id = Number(e.target.value);
+                        if (id) attach_skill(id);
+                      }}
+                      aria-label="attach skill"
+                    >
+                      <option value="">attach skill…</option>
+                      {skills
+                        .filter((s) => !agentSkills.some((a) => a.id === s.id))
+                        .map((s) => (
+                          <option key={s.id} value={s.id}>{s.name}</option>
+                        ))}
+                    </Select>
+                    <ChevronDown size={13} className="select-arrow" />
+                  </div>
+                </>
+              )}
+              {typeof selected !== "number" && (
+                <span className="agents-empty">save the agent first, then attach skills</span>
+              )}
+            </Field>
             <div className="prompt-section">
               <TextArea
                 value={message}
@@ -465,6 +642,16 @@ export default function AgentSettings() {
         on_submit={(v) => {
           setNewOpen(false);
           start_new(v);
+        }}
+      />
+      <PromptModal
+        open={skillNewOpen}
+        title="new skill"
+        placeholder="skill name…"
+        on_close={() => setSkillNewOpen(false)}
+        on_submit={(v) => {
+          setSkillNewOpen(false);
+          new_skill(v);
         }}
       />
     </main>

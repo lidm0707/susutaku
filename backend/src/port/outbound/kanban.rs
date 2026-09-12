@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use kanban_rs::resource::UpsertResource;
 use kanban_rs::{
     AgentConfigRow, AgentState, CardRow, CommentRow, PipelineRow, ProjectRow, ResourceRow,
-    StoreError, WorkspaceRow,
+    SkillRow, StoreError, WorkspaceRow,
 };
 use mockall::automock;
 
@@ -108,4 +108,16 @@ pub trait AgentConfigRepo: Send + Sync {
     async fn create(&self, cfg: AgentConfigDraft) -> Result<AgentConfigRow, StoreError>;
     async fn update(&self, id: i64, cfg: AgentConfigDraft) -> Result<(), StoreError>;
     async fn remove(&self, id: i64) -> Result<(), StoreError>;
+}
+
+#[automock]
+#[async_trait]
+pub trait SkillRepo: Send + Sync {
+    async fn list(&self) -> Result<Vec<SkillRow>, StoreError>;
+    async fn create(&self, name: &str, body: &str) -> Result<SkillRow, StoreError>;
+    async fn update(&self, id: i64, body: &str) -> Result<(), StoreError>;
+    async fn remove(&self, id: i64) -> Result<(), StoreError>;
+    async fn list_for_agent(&self, agent_id: i64) -> Result<Vec<SkillRow>, StoreError>;
+    async fn attach(&self, agent_id: i64, skill_id: i64) -> Result<(), StoreError>;
+    async fn detach(&self, agent_id: i64, skill_id: i64) -> Result<(), StoreError>;
 }

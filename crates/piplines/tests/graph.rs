@@ -24,7 +24,7 @@ fn chain() -> PipelineSpec {
     PipelineSpec {
         nodes: vec![
             node(ID_A, STAGE_INGEST),
-            node(ID_B, STAGE_TRANSFORM),
+            node_with_params(ID_B, STAGE_TRANSFORM, serde_json::json!({ "op": "trim" })),
             node(ID_C, STAGE_RENDER),
         ],
         links: vec![
@@ -40,6 +40,16 @@ fn chain() -> PipelineSpec {
     }
 }
 
+fn node_with_params(id: &str, stage: &str, params: serde_json::Value) -> NodeDef {
+    NodeDef {
+        id: id.into(),
+        stage: stage.into(),
+        params,
+        x: None,
+        y: None,
+    }
+}
+
 #[test]
 fn valid_spec_passes() {
     chain().validate().expect("valid chain");
@@ -49,9 +59,17 @@ fn valid_spec_passes() {
 fn default_stages_pass() {
     let spec = PipelineSpec {
         nodes: vec![
-            node(ID_A, STAGE_FETCH),
-            node(ID_B, STAGE_SEARCH),
-            node(ID_C, STAGE_REF_IMAGE),
+            node_with_params(
+                ID_A,
+                STAGE_FETCH,
+                serde_json::json!({ "url": "https://example.com" }),
+            ),
+            node_with_params(ID_B, STAGE_SEARCH, serde_json::json!({})),
+            node_with_params(
+                ID_C,
+                STAGE_REF_IMAGE,
+                serde_json::json!({ "path": "img.png" }),
+            ),
         ],
         links: vec![
             Link {
@@ -66,11 +84,46 @@ fn default_stages_pass() {
     };
     spec.validate().expect("default stages valid");
     PipelineSpec {
-        nodes: vec![node(ID_A, STAGE_OUTPUT_RESOURCE)],
+        nodes: vec![node_with_params(
+            ID_A,
+            STAGE_OUTPUT_RESOURCE,
+            serde_json::json!({ "name": "out" }),
+        )],
         links: vec![],
     }
     .validate()
     .expect("output_resource valid");
+}
+
+#[test]
+fn missing_required_param_fails() {
+    let spec = PipelineSpec {
+        nodes: vec![node(ID_A, STAGE_FETCH), node(ID_B, STAGE_SEARCH)],
+        links: vec![],
+    };
+    assert_eq!(
+        spec.validate(),
+        Err(GraphError::MissingParam {
+            node: ID_A.into(),
+            key: "url",
+        })
+    );
+}
+
+#[test]
+fn empty_required_param_fails() {
+    let spec = PipelineSpec {
+        nodes: vec![node_with_params(
+            ID_A,
+            STAGE_FETCH,
+            serde_json::json!({ "url": "" }),
+        )],
+        links: vec![],
+    };
+    assert!(matches!(
+        spec.validate(),
+        Err(GraphError::MissingParam { .. })
+    ));
 }
 
 #[test]

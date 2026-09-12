@@ -5,6 +5,7 @@ use std::collections::VecDeque;
 
 use kanban_rs::resource::UpsertResource;
 use kanban_rs::store::{AgentState, CardRow, StoreError};
+use kanban_rs::{COLUMN_DOING, COLUMN_DONE, COLUMN_FAILED};
 use piplines::agent::{AgentNode, META_AGENT};
 use piplines::graph::{NodeDef, PipelineSpec};
 use piplines::payload::{Payload, PayloadKind};
@@ -14,9 +15,11 @@ use std::collections::HashMap;
 use utoipa::ToSchema;
 
 use super::kanban::KanbanApp;
+use crate::domain::CardMove;
 
 pub const RUN_KEY: &str = "run";
 pub const RUNNER_NAME: &str = "pipeline-runner";
+pub const MOVE_POSITION_TOP: i32 = 0;
 pub const FETCH_TIMEOUT_SECS: u64 = 10;
 pub const FETCH_MAX_BYTES: usize = 1 << 20;
 pub const HTTP_GET: &str = "GET";
@@ -79,9 +82,29 @@ pub async fn run_card_pipeline(app: &KanbanApp, card_id: i64) -> Result<RunRecor
         serde_json::from_str(&pipeline.spec).map_err(|e| StoreError::BadSpec(e.to_string()))?;
     spec.validate()
         .map_err(|e| StoreError::BadSpec(e.to_string()))?;
+    move_to_column(app, card_id, &card.column_id, COLUMN_DOING).await?;
 
     let outcome = execute(&spec, seed_payload(&card), pipeline_id, &pipeline.name).await;
     persist(app, card_id, &card, outcome).await
+}
+
+/// Move a card unless it already sits in the target column.
+async fn move_to_column(
+    app: &KanbanApp,
+    card_id: i64,
+    current: &str,
+    target: &str,
+) -> Result<(), StoreError> {
+    if current == target {
+        return Ok(());
+    }
+    app.cards
+        .move_card(CardMove {
+            id: card_id,
+            column_id: target.to_owned(),
+            position: MOVE_POSITION_TOP,
+        })
+        .await
 }
 
 /// Dry-run a saved pipeline with caller-supplied seed text: no card, no
@@ -501,6 +524,11 @@ async fn persist(
     app.cards
         .set_agent(card_id, &AgentState { name, state })
         .await?;
+    let target = match outcome.record.status {
+        StageStatus::Ok => COLUMN_DONE,
+        StageStatus::Failed => COLUMN_FAILED,
+    };
+    move_to_column(app, card_id, &card.column_id, target).await?;
     Ok(outcome.record)
 }
 

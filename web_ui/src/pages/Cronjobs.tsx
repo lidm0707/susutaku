@@ -25,19 +25,18 @@ const CRON_PRESETS = [
 ] as const;
 
 const CUSTOM = "__custom__";
+const DEFAULT_PRESET = CRON_PRESETS[5].expr;
 
-enum CustomKind {
-  EveryMinutes = "every-minutes",
-  EveryHours = "every-hours",
-  Daily = "daily",
-  Weekly = "weekly",
+enum RoutineUnit {
+  Minutes = "minutes",
+  Hours = "hours",
+  Days = "days",
 }
 
-const CUSTOM_KINDS = [
-  { kind: CustomKind.EveryMinutes, label: "every N minutes" },
-  { kind: CustomKind.EveryHours, label: "every N hours" },
-  { kind: CustomKind.Daily, label: "daily at time" },
-  { kind: CustomKind.Weekly, label: "weekly on day at time" },
+const ROUTINE_UNITS = [
+  { unit: RoutineUnit.Minutes, label: "minutes" },
+  { unit: RoutineUnit.Hours, label: "hours" },
+  { unit: RoutineUnit.Days, label: "days" },
 ] as const;
 
 const WEEKDAYS = [
@@ -55,10 +54,9 @@ const CRON_SAMPLES = ["*/15 * * * *", "0 9 * * 1-5", "30 4 1,15 * *", "0 3 * * 0
 const CRON_FIELD_COUNT = 5;
 const MINUTE_MAX = 59;
 const HOUR_MAX = 23;
-const EVERY_MIN_DEFAULT = 15;
-const EVERY_HOUR_DEFAULT = 6;
+const ROUTINE_DEFAULT = 15;
+const DAY_STEP_MAX = 31;
 const DEFAULT_TIME = "09:00";
-const DEFAULT_WEEKDAY = 1;
 
 const CRON_FIELDS = [
   { min: 0, max: MINUTE_MAX },
@@ -105,30 +103,39 @@ function time_parts(time: string): [number, number] {
   return [hour, min];
 }
 
-function build_cron(kind: CustomKind, every_n: number, time: string, day: number): string {
+function build_cron(unit: RoutineUnit, n: number, time: string): string {
   const [h, m] = time_parts(time);
-  const n = Math.max(1, every_n);
-  switch (kind) {
-    case CustomKind.EveryMinutes:
-      return `*/${Math.min(n, MINUTE_MAX)} * * * *`;
-    case CustomKind.EveryHours:
-      return `0 */${Math.min(n, HOUR_MAX)} * * *`;
-    case CustomKind.Daily:
-      return `${m} ${h} * * *`;
-    case CustomKind.Weekly:
-      return `${m} ${h} * * ${day}`;
+  const step = Math.max(1, n);
+  switch (unit) {
+    case RoutineUnit.Minutes:
+      return m === 0 ? `*/${Math.min(step, MINUTE_MAX)} * * * *` : `${m}-59/${Math.min(step, MINUTE_MAX)} * * * *`;
+    case RoutineUnit.Hours:
+      return `${m} ${h === 0 ? `*/${Math.min(step, HOUR_MAX)}` : `${h}-23/${Math.min(step, HOUR_MAX)}`} * * *`;
+    case RoutineUnit.Days:
+      return `${m} ${h} */${Math.min(step, DAY_STEP_MAX)} * *`;
   }
+}
+
+function step_of(part: string): [string, string | null] {
+  const [range, step] = part.split("/");
+  return [range, step ?? null];
 }
 
 function describe_cron(expr: string): string {
   if (!cron_valid(expr)) return "invalid cron expression";
   const [min, hour, dom, mon, dow] = expr.trim().split(/\s+/);
-  const at = `at ${pad2(Number(hour))}:${pad2(Number(min))}`;
-  const weekday = WEEKDAYS[Number(dow) % 7]?.label ?? `day ${dow}`;
+  const at = `at ${pad2(Number(hour.split("-")[0]))}:${pad2(Number(min.split("-")[0].split("/")[0]))}`;
+  const weekday = WEEKDAYS[Number(dow.split("-")[0].split("/")[0]) % 7]?.label ?? `day ${dow}`;
+  const [minRange, minStep] = step_of(min);
+  const [hourRange, hourStep] = step_of(hour);
+  const [, domStep] = step_of(dom);
   if (hour === "*" && dom === "*" && mon === "*") {
     if (dow === "*") {
       if (min === "*") return "every minute";
-      if (min.startsWith("*/")) return `every ${min.slice(2)} minutes`;
+      if (minStep !== null) {
+        const from = minRange === "*" ? "" : ` starting at :${pad2(Number(minRange.split("-")[0]))}`;
+        return `every ${minStep} minutes${from}`;
+      }
       return `hourly at minute ${min}`;
     }
     return `every hour, on ${weekday}`;
@@ -136,11 +143,15 @@ function describe_cron(expr: string): string {
   if (min === "*" || hour === "*") return "per cron schedule";
   if (dom === "*" && mon === "*") {
     if (dow === "*") {
-      if (hour.startsWith("*/")) return `every ${hour.slice(2)} hours, at minute ${min}`;
+      if (hourStep !== null) {
+        const from = hourRange === "*" ? "" : ` from ${pad2(Number(hourRange.split("-")[0]))}:00`;
+        return `every ${hourStep} hours${from}, at minute ${min}`;
+      }
       return `daily ${at}`;
     }
     return `weekly on ${weekday} ${at}`;
   }
+  if (mon === "*" && domStep !== null) return `every ${domStep} days ${at}`;
   if (mon === "*") return `monthly on day ${dom} ${at}`;
   return `yearly on ${mon}/${dom} ${at}`;
 }
@@ -160,12 +171,10 @@ export default function Cronjobs() {
   const [selected, setSelected] = useState<number | null>(null);
   const [adding, setAdding] = useState(false);
   const [cardPick, setCardPick] = useState("");
-  const [cronPick, setCronPick] = useState<string>(CRON_PRESETS[1].expr);
-  const [customKind, setCustomKind] = useState<CustomKind>(CustomKind.Daily);
-  const [everyN, setEveryN] = useState(EVERY_MIN_DEFAULT);
-  const [dailyTime, setDailyTime] = useState(DEFAULT_TIME);
-  const [weeklyDay, setWeeklyDay] = useState(DEFAULT_WEEKDAY);
-  const [weeklyTime, setWeeklyTime] = useState(DEFAULT_TIME);
+  const [cronPick, setCronPick] = useState<string>(DEFAULT_PRESET);
+  const [routineUnit, setRoutineUnit] = useState<RoutineUnit>(RoutineUnit.Minutes);
+  const [routineN, setRoutineN] = useState(ROUTINE_DEFAULT);
+  const [startTime, setStartTime] = useState(DEFAULT_TIME);
   const [showRaw, setShowRaw] = useState(false);
   const [rawCron, setRawCron] = useState("");
 
@@ -222,7 +231,7 @@ export default function Cronjobs() {
   const unscheduled = cards.filter((c) => !c.cron);
   const active = jobs.find((j) => j.card_id === selected) ?? null;
 
-  const builtCron = build_cron(customKind, everyN, customKind === CustomKind.Weekly ? weeklyTime : dailyTime, weeklyDay);
+  const builtCron = build_cron(routineUnit, routineN, startTime);
   const customCron = showRaw ? rawCron.trim() : builtCron;
   const customCronValid = cron_valid(customCron);
   const customPreview = describe_cron(customCron);
@@ -327,66 +336,47 @@ export default function Cronjobs() {
           </label>
           <label className="modal-label">
             schedule
-            <select value={cronPick} onChange={(e) => setCronPick(e.target.value)}>
+            <select
+              value={cronPick}
+              onChange={(e) => {
+                setCronPick(e.target.value);
+                if (e.target.value === CUSTOM) setShowRaw(true);
+              }}
+            >
               {CRON_PRESETS.map((p) => (
                 <option key={p.expr} value={p.expr}>
                   {p.label} ({p.expr})
                 </option>
               ))}
-              <option value={CUSTOM}>custom…</option>
+              <option value={CUSTOM}>advanced · manual cron expression…</option>
             </select>
           </label>
           {cronPick === CUSTOM && (
             <div className="cron-builder">
               <label className="modal-label">
-                repeat
-                <select
-                  value={customKind}
-                  onChange={(e) => {
-                    setCustomKind(e.target.value as CustomKind);
-                    if (e.target.value === CustomKind.EveryMinutes) setEveryN(EVERY_MIN_DEFAULT);
-                    if (e.target.value === CustomKind.EveryHours) setEveryN(EVERY_HOUR_DEFAULT);
-                  }}
-                >
-                  {CUSTOM_KINDS.map((k) => (
-                    <option key={k.kind} value={k.kind}>{k.label}</option>
-                  ))}
-                </select>
+                start time
+                <input type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} />
               </label>
-              {(customKind === CustomKind.EveryMinutes || customKind === CustomKind.EveryHours) && (
-                <label className="modal-label">
-                  every
+              <label className="modal-label">
+                routine (every)
+                <span className="cron-routine">
                   <input
                     type="number"
                     min={1}
-                    max={customKind === CustomKind.EveryMinutes ? MINUTE_MAX : HOUR_MAX}
-                    value={everyN}
-                    onChange={(e) => setEveryN(Number(e.target.value))}
+                    max={routineUnit === RoutineUnit.Minutes ? MINUTE_MAX : routineUnit === RoutineUnit.Hours ? HOUR_MAX : DAY_STEP_MAX}
+                    value={routineN}
+                    onChange={(e) => setRoutineN(Number(e.target.value))}
                   />
-                </label>
-              )}
-              {customKind === CustomKind.Daily && (
-                <label className="modal-label">
-                  at
-                  <input type="time" value={dailyTime} onChange={(e) => setDailyTime(e.target.value)} />
-                </label>
-              )}
-              {customKind === CustomKind.Weekly && (
-                <>
-                  <label className="modal-label">
-                    on
-                    <select value={weeklyDay} onChange={(e) => setWeeklyDay(Number(e.target.value))}>
-                      {WEEKDAYS.map((d) => (
-                        <option key={d.value} value={d.value}>{d.label}</option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="modal-label">
-                    at
-                    <input type="time" value={weeklyTime} onChange={(e) => setWeeklyTime(e.target.value)} />
-                  </label>
-                </>
-              )}
+                  <select
+                    value={routineUnit}
+                    onChange={(e) => setRoutineUnit(e.target.value as RoutineUnit)}
+                  >
+                    {ROUTINE_UNITS.map((u) => (
+                      <option key={u.unit} value={u.unit}>{u.label}</option>
+                    ))}
+                  </select>
+                </span>
+              </label>
               <button type="button" className="cron-raw-toggle" onClick={() => setShowRaw((v) => !v)}>
                 {showRaw ? "hide raw cron" : "raw cron…"}
               </button>

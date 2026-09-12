@@ -2,7 +2,7 @@ use serde_json::{Value, json};
 
 use crate::client::{
     AUTH_HEADER, BEARER_PREFIX, CHOICES_FIELD, CODING_BASE_URL, CONTENT_FIELD, CONTENT_TYPE,
-    JSON_CONTENT_TYPE, MESSAGE_FIELD, strip_bearer_scheme,
+    JSON_CONTENT_TYPE, MESSAGE_FIELD, REQUEST_TIMEOUT_SECS, strip_bearer_scheme,
 };
 
 pub const QUOTA_URL: &str = "https://api.z.ai/api/monitor/usage/quota/limit";
@@ -66,6 +66,7 @@ fn parse_limit(entry: &Value) -> Result<Limit, String> {
 
 pub fn fetch_quota(token: &str) -> Result<Quota, String> {
     let raw = ureq::get(QUOTA_URL)
+        .timeout(std::time::Duration::from_secs(REQUEST_TIMEOUT_SECS))
         .set(
             AUTH_HEADER,
             &format!("{BEARER_PREFIX}{}", strip_bearer_scheme(token)),
@@ -91,6 +92,7 @@ pub fn say_hi(token: &str) -> Result<String, String> {
     })
     .to_string();
     let raw = ureq::post(CODING_BASE_URL)
+        .timeout(std::time::Duration::from_secs(REQUEST_TIMEOUT_SECS))
         .set(CONTENT_TYPE, JSON_CONTENT_TYPE)
         .set(
             AUTH_HEADER,

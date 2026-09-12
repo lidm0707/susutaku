@@ -40,6 +40,10 @@ pub enum StoreError {
     AgentTaken,
     #[error("no such agent")]
     NoSuchAgent,
+    #[error("no such skill")]
+    NoSuchSkill,
+    #[error("skill name already taken")]
+    SkillTaken,
     #[error("no such agent output")]
     NoSuchAgentOutput,
     #[error("bad pipeline spec: {0}")]
@@ -226,6 +230,20 @@ CREATE TABLE IF NOT EXISTS agent_settings (
     persona TEXT NOT NULL DEFAULT '',
     prompt  TEXT NOT NULL DEFAULT '',
     output  TEXT NOT NULL DEFAULT ''
+);
+"#,
+    r#"
+CREATE TABLE IF NOT EXISTS skills (
+    id   BIGSERIAL PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    body TEXT NOT NULL DEFAULT ''
+);
+"#,
+    r#"
+CREATE TABLE IF NOT EXISTS agent_skills (
+    agent_id BIGINT NOT NULL REFERENCES agent_settings(id) ON DELETE CASCADE,
+    skill_id BIGINT NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
+    PRIMARY KEY (agent_id, skill_id)
 );
 "#,
     r#"

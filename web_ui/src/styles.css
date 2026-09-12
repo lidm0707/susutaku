@@ -715,6 +715,73 @@ button:disabled {
   width: min(58rem, 94vw);
 }
 
+.overlay.docked {
+  background: transparent;
+  backdrop-filter: none;
+  pointer-events: none;
+  justify-content: flex-end;
+}
+
+.overlay.docked .overlay-box {
+  pointer-events: auto;
+}
+
+.overlay-box.modal.docked-right {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  height: 100vh;
+  max-height: none;
+  width: var(--chat-dock-w, min(30rem, 94vw));
+  border-radius: 10px 0 0 10px;
+  animation: slideover-in 0.22s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.overlay.docked-left {
+  justify-content: flex-start;
+}
+
+.overlay-box.modal.docked-left {
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  height: 100vh;
+  max-height: none;
+  width: min(56rem, 94vw);
+  border-radius: 0 10px 10px 0;
+  animation: slideover-in 0.22s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.chat-dock-resize {
+  position: absolute;
+  top: 0;
+  left: -4px;
+  width: 8px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 10;
+}
+
+.chat-dock-resize:hover {
+  background: rgba(59, 111, 212, 0.35);
+}
+
+.chat-dock-main {
+  margin-right: var(--chat-dock-w, min(30rem, 94vw));
+  transition: margin-right 0.22s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.dock-nav.shifted {
+  left: calc((100vw - var(--chat-dock-w, min(30rem, 94vw))) / 2);
+  transition: left 0.22s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+:root.chat-dock-resizing .chat-dock-main {
+  transition: none;
+}
+
 .chat-main {
   display: flex;
   flex-direction: column;
@@ -989,6 +1056,61 @@ button:disabled {
 
 .dock-agent-row .dock-agent-path:hover {
   color: #ccc;
+}
+
+.sandbox-monitor {
+  position: fixed;
+  top: 0.75rem;
+  left: 0.75rem;
+  z-index: 600;
+  width: min(26rem, 44vw);
+  max-height: 45vh;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.5rem;
+  border-radius: 10px;
+  background: #16161c;
+  border: 1px solid #2a2a33;
+  box-shadow: 0 6px 24px rgb(0 0 0 / 0.45);
+}
+
+.sandbox-monitor-head {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.72rem;
+}
+
+.sandbox-monitor-title {
+  flex: 1;
+  color: #aaa;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sandbox-monitor-close {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 1.4rem;
+  height: 1.4rem;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: #888;
+  cursor: pointer;
+}
+
+.sandbox-monitor-close:hover {
+  background: #26262f;
+  color: #e6e6ea;
+}
+
+.sandbox-monitor .agent-logs-pre {
+  font-size: 0.68rem;
+  max-height: 100%;
 }
 
 .agent-logs-meta {
@@ -2675,6 +2797,16 @@ button {
   border-radius: 6px;
 }
 
+.cron-routine {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+}
+
+.cron-routine input {
+  width: 5rem;
+}
+
 .cron-raw-toggle {
   align-self: flex-start;
   background: none;
@@ -3640,6 +3772,12 @@ button {
   color: #aaa;
 }
 
+.inspector-head > span:first-child {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
 .inspector-id {
   display: flex;
   align-items: center;
@@ -3764,7 +3902,7 @@ button {
 
 .pipeline-hint {
   position: absolute;
-  bottom: 0.5rem;
+  bottom: 3.3rem;
   left: 50%;
   transform: translateX(-50%);
   z-index: 10;
