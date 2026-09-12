@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use utoipa::OpenApi;
 
 use crate::app::kanban::{CardView, KanbanApp};
+use crate::app::{BoardService, ChatUseCase};
 use crate::domain::{
     AgentConfigDraft, CardMove, CardPatch, ChatCmd, NewCard, NewPipeline, NewProject, NewWorkspace,
     SearchMode,
@@ -28,9 +29,13 @@ use crate::infra::host_spec::{self, HostSpec};
 use crate::infra::local_settings;
 use crate::infra::provider_quota::QuotaBoard;
 use crate::infra::sandbox_jail::AgentSandbox;
+use crate::infra::search::{DuckDuckGo, PageFetcher};
+use crate::infra::zai_chat::ZaiEngine;
 use crate::infra::zai_settings::{SettingsState, ZaiSettings};
 use crate::port::inbound::ChatHandling;
-use crate::port::outbound::{ModelEndpoint, ModelSwitch};
+use crate::port::outbound::{
+    BoardOps, ChatMemory, Fetcher, ModelEndpoint, ModelSwitch, Runner, Searcher,
+};
 use prompt_sys::{MAX_PROMPT_CHARS, PromptBuilder, Role as PromptRole};
 use proto_rs::AgentBrief;
 use std::path::PathBuf;
@@ -38,10 +43,41 @@ use susutaku_mlx::tok::TokKind;
 
 const DEFAULT_MAX_TOKENS: usize = 512;
 
+/// Shared deps for the Z.ai cloud chat path: same tool loop as the local chat,
+/// engine built per request (the UI picks the model per request).
+struct ZaiChatDeps {
+    searcher: Arc<dyn Searcher>,
+    fetcher: Arc<dyn Fetcher>,
+    runner: Arc<dyn Runner>,
+    models: Arc<dyn ModelSwitch>,
+    memory: Option<Arc<dyn ChatMemory>>,
+    board: Arc<dyn BoardOps>,
+    settings: Arc<SettingsState>,
+}
+
+fn zai_chat_deps<T: ModelSwitch + 'static>(
+    models: Arc<T>,
+    runner: Arc<dyn Runner>,
+    kanban_store: std::sync::Arc<kanban_rs::Store>,
+    settings: Arc<SettingsState>,
+) -> Arc<ZaiChatDeps> {
+    Arc::new(ZaiChatDeps {
+        searcher: Arc::new(DuckDuckGo),
+        fetcher: Arc::new(PageFetcher),
+        runner,
+        models: models as Arc<dyn ModelSwitch>,
+        memory: crate::infra::chat_memory::from_env().map(|m| Arc::new(m) as Arc<dyn ChatMemory>),
+        board: Arc::new(BoardService::new(kanban_store)),
+        settings,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn router<T: ChatHandling + ModelSwitch + 'static>(
     use_case: Arc<T>,
     catalog: Arc<dyn crate::infra::model_client::ModelCatalog>,
     codex_workspace: PathBuf,
+    runner: Arc<dyn Runner>,
     kanban_store: std::sync::Arc<kanban_rs::Store>,
     usage_store: std::sync::Arc<codex_usage_rs::Store>,
     manager: Arc<manager_rs::ManagerProcess>,
@@ -99,6 +135,12 @@ pub fn router<T: ChatHandling + ModelSwitch + 'static>(
         .with_state(Arc::new(ClaudeAuth::new(codex_workspace.clone())));
     let settings_state = Arc::new(SettingsState::load());
     crate::app::say_hi::spawn(settings_state.clone());
+    let zai_deps = zai_chat_deps(
+        use_case.clone(),
+        runner,
+        kanban_store.clone(),
+        settings_state.clone(),
+    );
     let settings = Router::new()
         .route(
             "/api/settings/zai",
@@ -131,7 +173,8 @@ pub fn router<T: ChatHandling + ModelSwitch + 'static>(
         .route("/api/sandbox/purge", post(purge_sandbox))
         .route("/api/sandbox/sweep", post(sweep_sandboxes))
         .route("/install.sh", get(install_script))
-        .with_state(settings_state.clone());
+        .with_state(settings_state.clone())
+        .layer(Extension(zai_deps));
     let local_settings_router = Router::new()
         .route(
             "/api/settings/local",
@@ -1214,42 +1257,53 @@ fn note_chat_reply(
 )]
 async fn chat_zai(
     Extension(manager): Extension<Arc<manager_rs::ManagerProcess>>,
-    State(state): State<Arc<SettingsState>>,
+    Extension(deps): Extension<Arc<ZaiChatDeps>>,
+    State(_state): State<Arc<SettingsState>>,
+    headers: http::HeaderMap,
     Json(req): Json<ZaiChatRequest>,
 ) -> Result<Json<ChatReply>, ApiError> {
     const TOKENIZER: &str = "zai";
-    const ZERO_TPS: f64 = 0.0;
-    let client = state.zai_client().map_err(ApiError::bad_request)?;
-    let system = build_system_message(&req.system)?;
-    let chat_model = req.model.clone().unwrap_or_default();
-    let user = req.message.clone();
+    let board_token = headers
+        .get(http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix(BEARER_PREFIX))
+        .map(str::to_string);
     note_chat_agent(manager.clone(), req.agent.clone(), &req.message).await;
-    let reply = tokio::task::spawn_blocking(move || {
-        ai_interface_layer::provider::ChatProvider::complete(
-            &client,
-            &ai_interface_layer::request::ChatRequest::new(
-                chat_model,
-                system
-                    .into_iter()
-                    .chain(std::iter::once(ai_interface_layer::message::Message::user(
-                        user,
-                    )))
-                    .collect(),
-            ),
-        )
-    })
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?
-    .map_err(|e| ApiError::internal(e.to_string()))?;
-    note_chat_reply(manager, req.agent, &reply.content).await;
+    let engine = ZaiEngine::new(deps.settings.clone(), req.model.clone());
+    let zai = ChatUseCase::new(
+        deps.searcher.clone(),
+        deps.fetcher.clone(),
+        deps.runner.clone(),
+        Arc::new(engine),
+        deps.models.clone(),
+        deps.memory.clone(),
+        deps.board.clone(),
+    );
+    let message = match build_system_message(&req.system)? {
+        Some(sys) => format!("{}\n\n{}", sys.content, req.message),
+        None => req.message,
+    };
+    let outcome = zai
+        .execute(ChatCmd {
+            message,
+            mode: SearchMode::Auto,
+            max_tokens: DEFAULT_MAX_TOKENS,
+            tokenizer: TokKind::Normal,
+            think: false,
+            board_token,
+        })
+        .await
+        .map_err(ApiError::internal)?;
+    note_chat_reply(manager, req.agent, &outcome.text).await;
+    const ZERO_TPS: f64 = 0.0;
     Ok(Json(ChatReply {
-        model: Some(zai_api::client::DEFAULT_MODEL.to_string()),
-        reply: reply.content,
-        searched: false,
+        model: outcome.model,
+        reply: outcome.text,
+        searched: outcome.searched,
         tokenizer: TOKENIZER,
-        prompt_tokens: 0,
+        prompt_tokens: outcome.stats.prompt_tokens,
         prompt_tps: ZERO_TPS,
-        decode_tokens: 0,
+        decode_tokens: outcome.stats.decode_tokens,
         decode_tps: ZERO_TPS,
     }))
 }
@@ -2733,8 +2787,7 @@ async fn dispatch_machine_agent(
     responses((status = 200, body = MachineAgentReply), (status = 400, body = str))
 )]
 async fn run_machine_agent(
-    Path(hostname): Path<String>,
-    Path(agent): Path<String>,
+    Path((hostname, agent)): Path<(String, String)>,
     Json(req): Json<MachineAgentRunRequest>,
 ) -> Result<Json<MachineAgentReply>, ApiError> {
     dispatch_machine_agent(hostname, agent, req.cmd).await

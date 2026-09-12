@@ -92,7 +92,7 @@ async fn main() {
     let use_case = Arc::new(ChatUseCase::new(
         Arc::new(DuckDuckGo),
         Arc::new(PageFetcher),
-        sandbox,
+        sandbox.clone(),
         model.clone(),
         model.clone(),
         chat_memory(),
@@ -112,6 +112,7 @@ async fn main() {
             use_case,
             model.clone(),
             codex_workspace,
+            sandbox.clone(),
             kanban_store,
             usage_store,
             manager,

@@ -68,6 +68,11 @@ db:
 web:
 	$(COMPOSE) $(MAIN) up -d --build web
 
+## adminer: db browser at http://localhost:8081 (server: postgres, user susutaku/susutaku)
+adminer:
+	$(COMPOSE) $(MAIN) --profile adminer up -d adminer
+	@echo "adminer: http://localhost:8081 (system: PostgreSQL, server: postgres, user: susutaku)"
+
 ## logs: follow compose logs (daily stack)
 logs:
 	$(COMPOSE) $(MAIN) logs -f
@@ -106,6 +111,7 @@ down:
 	$(COMPOSE) $(MAIN) down || true
 	$(COMPOSE) $(E2E) down || true
 	$(COMPOSE) $(CLIENT) down || true
+	$(COMPOSE) $(MAIN) --profile adminer down || true
 	-docker rm -f susutaku-mock-model
 
 ## cover: test-coverage summary for the whole workspace (needs cargo-llvm-cov)

@@ -18,4 +18,5 @@ pub mod model_client;
 pub mod provider_quota;
 pub mod sandbox_jail;
 pub mod search;
+pub mod zai_chat;
 pub mod zai_settings;

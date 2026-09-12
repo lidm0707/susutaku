@@ -3670,6 +3670,10 @@ button {
   color: #fff;
 }
 
+.pipeline-dock-btn svg {
+  flex: none;
+}
+
 /* menu at the cursor after dropping a link on empty canvas: pick next node */
 .pipe-drop-menu {
   position: absolute;

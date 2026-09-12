@@ -541,9 +541,12 @@ export async function chat_zai(
   system?: PromptSection[],
   agent?: string
 ): Promise<ChatReply> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const token = get_token();
+  if (token) headers.Authorization = `Bearer ${token}`;
   const res = await fetch(`${API_BASE}/api/chat/zai`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers,
     body: JSON.stringify({ message, model: model || undefined, system, agent }),
   });
   if (!res.ok) throw new ApiError(res.status, await res.text());

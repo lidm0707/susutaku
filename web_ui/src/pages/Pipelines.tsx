@@ -863,12 +863,7 @@ export default function Pipelines() {
                 </button>
               </div>
             )}
-            {!editId && !run && (
-              <div className="pipeline-hint">
-                click a node to edit · drag bottom dot to top dot to link · drop on empty canvas
-                to pick the next node · invalid targets show a red dot · click edge + ⌫ to unlink
-              </div>
-            )}
+
             <div className="pipeline-dock">
               {BASIC_NODES.map(({ stage, label, desc, Icon }) => (
                 <button

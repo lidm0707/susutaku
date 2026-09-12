@@ -18,3 +18,4 @@ ux-snapshots.spec.ts-snapshots/
 design/
 dist/
 crates/manager-rs/work/
+check_pipe/
