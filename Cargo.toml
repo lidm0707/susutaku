@@ -37,6 +37,7 @@ members = [
     "crates/chemi",
     "crates/quatum",
     "crates/plan",
+    "crates/text_ide",
 ]
 
 [workspace.package]
@@ -73,6 +74,7 @@ bio = { path = "crates/bio" }
 chemi = { path = "crates/chemi" }
 quatum = { path = "crates/quatum" }
 plan = { path = "crates/plan" }
+text_ide = { path = "crates/text_ide" }
 ureq = "2"
 serde_json = "1"
 pdf-extract = "0.7"
