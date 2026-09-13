@@ -6,14 +6,13 @@ use backend::api;
 use backend::app::ChatUseCase;
 use backend::app::board::BoardService;
 use backend::infra::chat_memory;
-use backend::infra::client_node::ClientNode;
-use backend::infra::codex_auth::codex_home;
-use backend::infra::codex_usage;
-use backend::infra::kanban;
-use backend::infra::local_settings;
+use backend::infra::client::node::ClientNode;
+use backend::infra::codex::auth::codex_home;
 use backend::infra::model_client::RemoteModel;
+use backend::infra::postgres::{codex_usage, kanban};
 use backend::infra::sandbox_jail::AgentSandbox;
 use backend::infra::search::{DuckDuckGo, PageFetcher};
+use backend::infra::settings::local;
 use backend::port::outbound::ChatMemory;
 use manager_rs::ManagerProcess;
 use tracing_subscriber::EnvFilter;
@@ -30,7 +29,7 @@ fn env_or(key: &str, default: &str) -> String {
 }
 
 fn local_model_url() -> String {
-    let saved = local_settings::read_saved()
+    let saved = local::read_saved()
         .map(|s| s.endpoint)
         .filter(|e| !e.is_empty());
     saved.unwrap_or_else(|| env_or(SERVER_URL_ENV, SERVER_URL))
@@ -89,8 +88,9 @@ async fn main() {
     spawn_client_node(sandbox.clone()).await;
     let codex_workspace = sandbox.root();
     let board = Arc::new(BoardService::new(kanban_store.clone()));
-    let agents: Arc<dyn backend::port::outbound::AgentConfigRepo> =
-        Arc::new(backend::infra::kanban::PgKanban::new(kanban_store.clone()));
+    let agents: Arc<dyn backend::port::outbound::AgentConfigRepo> = Arc::new(
+        backend::infra::postgres::kanban::PgKanban::new(kanban_store.clone()),
+    );
     let use_case = Arc::new(ChatUseCase::new(
         Arc::new(DuckDuckGo),
         Arc::new(PageFetcher),

@@ -8,7 +8,7 @@ use std::time::Duration;
 use chrono::{DateTime, FixedOffset, Local, NaiveTime, Utc};
 use chrono_tz::Tz;
 
-use crate::infra::zai_settings::{parse_hhmm, SettingsState};
+use crate::infra::zai::settings::{parse_hhmm, SettingsState};
 
 pub const TICK_SECS: u64 = 30;
 const LAST_FIRED_LOCK: &str = "say hi last-fired lock";

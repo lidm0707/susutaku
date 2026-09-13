@@ -4,9 +4,9 @@
 use std::sync::Arc;
 
 use crate::domain::{
-    BoardOp, BoardRequest, ChatCmd, ChatOutcome, GenReply, Prompt, SearchMode, SearchResult,
-    TOOL_DENIED, TOOL_RESULT_HEADER, TOOL_ROUNDS_MAX, TOOL_SUMMARY_MAX, ToolCall, ToolKind,
-    ToolSet, ToolUse,
+    BoardOp, BoardRequest, ChatCmd, ChatOutcome, GenReply, MEMORY_THREAD_DEFAULT, Prompt,
+    SearchMode, SearchResult, TOOL_DENIED, TOOL_RESULT_HEADER, TOOL_ROUNDS_MAX, TOOL_SUMMARY_MAX,
+    ToolCall, ToolKind, ToolSet, ToolUse,
 };
 use crate::port::inbound::ChatHandling;
 use crate::port::outbound::{
@@ -171,29 +171,31 @@ impl ChatUseCase {
     }
 
     /// Recalls similar past exchanges; memory problems degrade to empty.
-    async fn recall_blocking(&self, query: &str) -> Vec<String> {
+    async fn recall_blocking(&self, thread: &str, query: &str) -> Vec<String> {
         let Some(memory) = self.memory.as_ref().map(Arc::clone) else {
             return Vec::new();
         };
         let owned = query.to_string();
-        let recalled =
-            tokio::task::spawn_blocking(move || memory.recall(&owned, MEMORY_RECALL_TOP_K))
-                .await
-                .ok()
-                .and_then(|r| r.ok())
-                .unwrap_or_default();
+        let thread = thread.to_string();
+        let recalled = tokio::task::spawn_blocking(move || {
+            memory.recall(&thread, &owned, MEMORY_RECALL_TOP_K)
+        })
+        .await
+        .ok()
+        .and_then(|r| r.ok())
+        .unwrap_or_default();
         recalled
             .iter()
             .map(|hit| format!("{}: {}", hit.role, hit.text))
             .collect()
     }
 
-    async fn remember_blocking(&self, role: &str, text: &str) {
+    async fn remember_blocking(&self, thread: &str, role: &str, text: &str) {
         let Some(memory) = self.memory.as_ref().map(Arc::clone) else {
             return;
         };
-        let (role, text) = (role.to_string(), text.to_string());
-        let _ = tokio::task::spawn_blocking(move || memory.remember(&role, &text)).await;
+        let (thread, role, text) = (thread.to_string(), role.to_string(), text.to_string());
+        let _ = tokio::task::spawn_blocking(move || memory.remember(&thread, &role, &text)).await;
     }
 }
 
@@ -204,7 +206,8 @@ impl ChatHandling for ChatUseCase {
         let tools = self.agent_tools(cmd.agent.as_deref()).await;
 
         let mut context = String::new();
-        let memories = self.recall_blocking(&cmd.message).await;
+        let thread = cmd.thread_id.as_deref().unwrap_or(MEMORY_THREAD_DEFAULT);
+        let memories = self.recall_blocking(thread, &cmd.message).await;
         if !memories.is_empty() {
             context.push_str(MEMORY_CONTEXT_HEADER);
             for line in &memories {
@@ -335,8 +338,9 @@ impl ChatHandling for ChatUseCase {
             };
         }
 
-        self.remember_blocking("user", &cmd.message).await;
-        self.remember_blocking("assistant", &reply.text).await;
+        self.remember_blocking(thread, "user", &cmd.message).await;
+        self.remember_blocking(thread, "assistant", &reply.text)
+            .await;
 
         Ok(self.outcome(
             (reply.text, reply.model, reply.stats),

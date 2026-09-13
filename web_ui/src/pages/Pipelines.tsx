@@ -50,6 +50,9 @@ import {
   type PipelineSchema,
   type PipelineRunRecord,
   type PortKind,
+  query_param,
+  set_query_param,
+  PARAM_PIPELINE,
 } from "../lib.js";
 import { PromptModal } from "../ui/Overlay.js";
 import { toast } from "../ui/Toast.js";
@@ -352,7 +355,11 @@ export default function Pipelines() {
     try {
       const rows = await fetch_pipelines();
       setPipelines(rows);
-      if (selectedRef.current == null && rows.length > 0) pick(rows[0]);
+      if (selectedRef.current == null && rows.length > 0) {
+        const want = query_param(PARAM_PIPELINE);
+        const target = rows.find((r) => String(r.id) === want) ?? rows[0];
+        pick(target);
+      }
     } catch (err) {
       handle(err);
     }
@@ -376,6 +383,7 @@ export default function Pipelines() {
     setStatus("");
     setRun(null);
     setSelected(p.id);
+    set_query_param(PARAM_PIPELINE, String(p.id));
     setName(p.name);
     setEditId(null);
     const { ns, es } = load_flow(p);
@@ -389,6 +397,7 @@ export default function Pipelines() {
     try {
       const created = await create_pipeline(pipeline_name, { nodes: [], links: [] });
       setSelected(created.id);
+      set_query_param(PARAM_PIPELINE, String(created.id));
       setName(created.name);
       setNodes([]);
       setEdges([]);
@@ -629,6 +638,7 @@ export default function Pipelines() {
     try {
       await remove_pipeline(selected);
       setSelected(null);
+      set_query_param(PARAM_PIPELINE, null);
       await load_pipelines();
     } catch (err) {
       handle(err);

@@ -30,7 +30,7 @@ pub struct HostSpec {
 }
 
 pub fn host_spec() -> HostSpec {
-    let (hostname, os, arch) = crate::infra::client_env::host_fingerprint();
+    let (hostname, os, arch) = crate::infra::client::env::host_fingerprint();
     HostSpec {
         hostname,
         os,

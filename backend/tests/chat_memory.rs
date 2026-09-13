@@ -72,19 +72,19 @@ impl ModelSwitch for NoModels {
 
 #[derive(Default)]
 struct FakeMemory {
-    stored: Mutex<Vec<(String, String)>>,
+    stored: Mutex<Vec<(String, String, String)>>,
 }
 
 impl ChatMemory for FakeMemory {
-    fn remember(&self, role: &str, text: &str) -> Result<(), String> {
+    fn remember(&self, thread: &str, role: &str, text: &str) -> Result<(), String> {
         self.stored
             .lock()
             .map_err(|_| "poisoned".to_string())?
-            .push((role.to_string(), text.to_string()));
+            .push((thread.to_string(), role.to_string(), text.to_string()));
         Ok(())
     }
 
-    fn recall(&self, _query: &str, _k: usize) -> Result<Vec<MemoryHit>, String> {
+    fn recall(&self, _thread: &str, _query: &str, _k: usize) -> Result<Vec<MemoryHit>, String> {
         Ok(vec![MemoryHit {
             role: "user".to_string(),
             text: "earlier fact".to_string(),
@@ -129,6 +129,7 @@ async fn recalls_before_and_remembers_after() {
             board_token: None,
             agent: None,
             image: None,
+            thread_id: Some("thread-1".to_string()),
         })
         .await
         .expect("chat ok");
@@ -136,10 +137,21 @@ async fn recalls_before_and_remembers_after() {
     assert_eq!(outcome.text, "memory ok");
     let stored = fake.stored.lock().unwrap();
     assert_eq!(stored.len(), 2);
-    assert_eq!(stored[0], ("user".to_string(), "hello".to_string()));
+    assert_eq!(
+        stored[0],
+        (
+            "thread-1".to_string(),
+            "user".to_string(),
+            "hello".to_string()
+        )
+    );
     assert_eq!(
         stored[1],
-        ("assistant".to_string(), "memory ok".to_string())
+        (
+            "thread-1".to_string(),
+            "assistant".to_string(),
+            "memory ok".to_string()
+        )
     );
 }
 
@@ -156,6 +168,7 @@ async fn works_without_memory() {
             board_token: None,
             agent: None,
             image: None,
+            thread_id: None,
         })
         .await
         .expect("chat ok");

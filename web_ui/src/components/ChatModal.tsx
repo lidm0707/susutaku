@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
-import { Bot, Brain, Camera, Check, Copy, Link2, MessageSquarePlus, PanelRight, Send, Wrench, X } from "lucide-react";
+import { Bot, Brain, Camera, Check, ChevronDown, Copy, Link2, MessageSquarePlus, PanelRight, Pencil, Send, Wrench, X } from "lucide-react";
 import {
   API_BASE,
   chat_codex,
@@ -83,6 +83,7 @@ const PAGE_LABELS: Record<string, string> = {
   "/kanban": "kanban",
   "/pipelines": "pipelines",
   "/routine": "routine",
+  "/attachments": "attachments",
   "/agents": "agents",
   "/settings": "settings",
   "/sandbox": "sandbox",
@@ -227,6 +228,13 @@ interface Thread {
   loaded: boolean;
 }
 
+interface QueuedMsg {
+  id: number;
+  tid: number;
+  text: string;
+  image: string | null;
+}
+
 export default function ChatModal({ open, on_close }: { open: boolean; on_close: () => void }) {
   const { pathname } = useLocation();
   const [threads, setThreads] = useState<Thread[]>([
@@ -255,7 +263,74 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
   const [capscreenOpen, setCapscreenOpen] = useState(false);
   const [pendingImage, setPendingImage] = useState<string | null>(null);
   const [capscreenInit, setCapscreenInit] = useState<HTMLCanvasElement | null>(null);
+  const [queued, setQueued] = useState<QueuedMsg[]>([]);
+  const queueRef = useRef<QueuedMsg[]>([]);
+  const [queueOpen, setQueueOpen] = useState(true);
+  const [editId, setEditId] = useState<number | null>(null);
+  const [editDraft, setEditDraft] = useState("");
   const nextId = useRef(1);
+
+  function push_queue(item: Omit<QueuedMsg, "id">) {
+    queueRef.current = [...queueRef.current, { ...item, id: nextId.current++ }];
+    setQueued(queueRef.current);
+  }
+
+  function drop_queue(id: number) {
+    queueRef.current = queueRef.current.filter((q) => q.id !== id);
+    setQueued(queueRef.current);
+  }
+
+  function clear_queue() {
+    queueRef.current = [];
+    setQueued([]);
+  }
+
+  function take_queue(): QueuedMsg | undefined {
+    const [head, ...rest] = queueRef.current;
+    queueRef.current = rest;
+    setQueued(rest);
+    return head;
+  }
+
+  function bump_queue(id: number) {
+    const item = queueRef.current.find((q) => q.id === id);
+    if (!item) return;
+    queueRef.current = [item, ...queueRef.current.filter((q) => q.id !== id)];
+    setQueued(queueRef.current);
+  }
+
+  function start_edit(q: QueuedMsg) {
+    setEditId(q.id);
+    setEditDraft(q.text);
+  }
+
+  function save_edit() {
+    const text = editDraft.trim();
+    if (editId == null || !text) {
+      setEditId(null);
+      return;
+    }
+    queueRef.current = queueRef.current.map((q) =>
+      q.id === editId ? { ...q, text } : q
+    );
+    setQueued(queueRef.current);
+    setEditId(null);
+  }
+
+  async function send_now(id: number) {
+    if (busy) {
+      bump_queue(id);
+      setToast("moved to front — sends after the current reply");
+      return;
+    }
+    const item = queueRef.current.find((q) => q.id === id);
+    if (!item) return;
+    drop_queue(id);
+    await run_send(item.text, item.image, item.tid);
+    for (let next = take_queue(); next; next = take_queue()) {
+      await run_send(next.text, next.image, next.tid);
+    }
+  }
   const nextThreadId = useRef(1);
   const loadingThreads = useRef(new Set<number>());
   const pickerRef = useRef<HTMLDivElement | null>(null);
@@ -522,21 +597,35 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
   async function send(e: React.FormEvent) {
     e.preventDefault();
     const text = input.trim();
-    if (!text || busy) return;
+    if (!text) return;
     if (!selected.length) {
       setError("no agent — pick one with the + button");
       return;
     }
-    const tid = activeId;
-    const thread = threads.find((t) => t.id === tid);
+    if (busy) {
+      push_queue({ tid: activeId, text, image: pendingImage });
+      setInput("");
+      setPendingImage(null);
+      setToast("queued — sends after the current reply finishes");
+      return;
+    }
+    const image = pendingImage;
     setInput("");
+    setPendingImage(null);
+    await run_send(text, image, activeId);
+    for (let item = take_queue(); item; item = take_queue()) {
+      await run_send(item.text, item.image, item.tid);
+    }
+  }
+
+  async function run_send(text: string, attachedImage: string | null, tid: number) {
+    const thread = threads.find((t) => t.id === tid);
     setError("");
     setBusy(true);
     set_title_from(tid, text);
     const userId = nextId.current++;
     const replyIds = selected.map(() => nextId.current++);
-    const attachedImage = pendingImage;
-    setPendingImage(null);
+    const image = attachedImage;
     patch_thread(tid, (m) => [
       ...m,
       { id: userId, role: "user", text, image: attachedImage ?? undefined },
@@ -552,7 +641,6 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
     const page = page_label(pathname);
     const data = await page_data(pathname);
     const cards = await card_context(text);
-    const image = attachedImage;
     const contexted =
       `[context: user is currently on the ${page} page${data ? `\n${data}` : ""}${cards ? `\n${cards}` : ""}]${image ? "\n[a screenshot is attached]" : ""}\n\n${text}`;
     let serverThreadId = thread?.server_id ?? null;
@@ -709,6 +797,78 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
             ))}
           </section>
           {error && <p className="error">{error}</p>}
+          {queued.length > 0 && (
+              <div className="chat-queue" role="list" aria-label="queued messages">
+                <div className="chat-queue-head">
+                  <button
+                    type="button"
+                    className="chat-queue-toggle"
+                    onClick={() => setQueueOpen((o) => !o)}
+                    aria-expanded={queueOpen}
+                  >
+                    <ChevronDown size={12} className={queueOpen ? "" : "rot-270"} />
+                    {queued.length} queued message{queued.length > 1 ? "s" : ""}
+                  </button>
+                  <button type="button" className="chat-queue-clear" onClick={clear_queue}>
+                    Clear All
+                  </button>
+                </div>
+                {queueOpen &&
+                  queued.map((q) => (
+                    <div key={q.id} className="chat-queue-item" role="listitem">
+                      {editId === q.id ? (
+                        <input
+                          className="chat-queue-edit"
+                          value={editDraft}
+                          onChange={(e) => setEditDraft(e.target.value)}
+                          onKeyDown={(e: React.KeyboardEvent<HTMLInputElement>) => {
+                            if (e.key === "Enter") save_edit();
+                            if (e.key === "Escape") setEditId(null);
+                          }}
+                          onBlur={save_edit}
+                          autoFocus
+                          aria-label="edit queued message"
+                        />
+                      ) : (
+                        <button
+                          type="button"
+                          className="chat-queue-text"
+                          onClick={() => start_edit(q)}
+                          title="edit message"
+                        >
+                          {q.text}
+                        </button>
+                      )}
+                      <span className="chat-queue-actions">
+                        <button
+                          type="button"
+                          onClick={() => start_edit(q)}
+                          title="edit"
+                          aria-label={`edit queued message: ${q.text}`}
+                        >
+                          <Pencil size={12} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => send_now(q.id)}
+                          title={busy ? "move to front of queue" : "send now"}
+                          aria-label={`send now: ${q.text}`}
+                        >
+                          <Send size={12} /> Send Now
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => drop_queue(q.id)}
+                          title="remove"
+                          aria-label={`remove queued message: ${q.text}`}
+                        >
+                          <X size={12} />
+                        </button>
+                      </span>
+                    </div>
+                  ))}
+              </div>
+            )}
           <form onSubmit={send}>
             <select
               className="search-toggle"
@@ -810,7 +970,11 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
             >
               <Camera size={16} />
             </button>
-            <button type="submit" disabled={busy || !selected.length}>
+            <button
+              type="submit"
+              disabled={!selected.length || (!input.trim() && !pendingImage)}
+              title={busy ? "queue this message" : "send"}
+            >
               <Send size={16} />
             </button>
           </form>

@@ -103,6 +103,15 @@ fn parses_xml_invoke_fallback() {
         })
     );
     assert_eq!(
+        ToolCall::parse(
+            "<invoke name=\"create_card\"><parameter name=\"project_id\">1</parameter><parameter name=\"name\">dancing with my code new content</parameter></invoke>"
+        ),
+        Some(ToolCall::CardCreate {
+            project_id: 1,
+            title: "dancing with my code new content".into()
+        })
+    );
+    assert_eq!(
         ToolCall::parse("<invoke name=\"card_routine\"></invoke>"),
         None
     );

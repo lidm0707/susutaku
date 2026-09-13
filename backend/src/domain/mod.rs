@@ -3,10 +3,11 @@
 
 pub mod entity;
 pub mod service;
+
 pub mod valueobject;
 
 pub use entity::{
-    AgentConfigDraft, CardMove, CardPatch, NewCard, NewPipeline, NewProject, NewWorkspace, ToolCall,
+    AgentConfigDraft, CardMove, CardPatch, NewCard, NewPipeline, NewProject, NewWorkspace,
 };
 pub use service::prompt::{
     BOARD_TOOL_INSTRUCTION, CONTEXT_FOOTER, CONTEXT_HEADER, CONTEXT_RESULTS_MAX, Prompt,
@@ -15,10 +16,10 @@ pub use service::prompt::{
 };
 pub use service::{
     AgentConfigService, CardService, CommentService, PipelineService, ProjectService,
-    ResourceService, SkillService, WorkspaceService,
+    ResourceService, SkillService, ToolCall, WorkspaceService,
 };
 pub use valueobject::TOOL_SUMMARY_MAX;
 pub use valueobject::{
-    BoardOp, BoardRequest, BoardResult, ChatCmd, ChatOutcome, GenReply, MemoryHit, ReplyRx,
-    SearchMode, SearchResult, TOOL_KIND_NAMES, ToolKind, ToolSet, ToolUse,
+    BoardOp, BoardRequest, BoardResult, ChatCmd, ChatOutcome, GenReply, MEMORY_THREAD_DEFAULT,
+    MemoryHit, ReplyRx, SearchMode, SearchResult, TOOL_KIND_NAMES, ToolKind, ToolSet, ToolUse,
 };

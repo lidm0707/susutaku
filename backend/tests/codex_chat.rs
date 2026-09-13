@@ -1,4 +1,4 @@
-use backend::infra::codex_chat::extract;
+use backend::infra::codex::chat::extract;
 
 #[test]
 fn extracts_agent_message_new_and_old_shapes() {

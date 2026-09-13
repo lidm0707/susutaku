@@ -1,15 +1,4 @@
-//! Kanban DB entities: write-side shapes persisted through the repos.
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct NewWorkspace {
-    pub name: String,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct NewProject {
-    pub workspace_id: i64,
-    pub name: String,
-}
+//! Card table entities: write-side shapes for `cards`.
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct NewCard {
@@ -46,23 +35,4 @@ pub struct CardPatch {
     pub checklist: Option<String>,
     /// Story points; None leaves the current value unchanged.
     pub estimate: Option<i32>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct NewPipeline {
-    pub name: String,
-    pub spec: String,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct AgentConfigDraft {
-    pub name: String,
-    pub model: String,
-    pub persona: String,
-    pub prompt: String,
-    pub output: String,
-    /// Tool allow-list (search|fetch|shell|board); empty = all tools.
-    pub allowed_tools: Vec<String>,
-    /// False = the agent must never receive images (screenshots, attachments).
-    pub receive_images: bool,
 }

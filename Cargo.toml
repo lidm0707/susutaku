@@ -30,6 +30,7 @@ members = [
     "crates/token_gate_adapter",
     "crates/wgpu-rs",
     "crates/research-rs",
+    "crates/solana_wallet",
 ]
 
 [workspace.package]
@@ -59,6 +60,7 @@ proto-rs = { path = "crates/proto-rs" }
 local-model = { path = "crates/local_model" }
 wgpu-rs = { path = "crates/wgpu-rs" }
 research-rs = { path = "crates/research-rs" }
+solana-wallet = { path = "crates/solana_wallet" }
 ureq = "2"
 serde_json = "1"
 pdf-extract = "0.7"

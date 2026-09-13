@@ -1,4 +1,4 @@
-use backend::infra::install::{
+use backend::infra::client::install::{
     HUB_ADDR_ENV, REPO_URL, Role, SERVER_URL_ENV, render_install_script,
 };
 

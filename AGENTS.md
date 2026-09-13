@@ -39,7 +39,7 @@ susutaku/
 │   ├── prompt_bench/          ← bin: prompt benchmarking
 │   ├── codex-usage-rs/        ← codex usage analytics (rollouts, scheduler, snapshots, store)
 │   ├── wgpu-rs/               ← GPU/wgpu cdylib+rlib backend
-│   ├── ruliology/             ← (empty placeholder)
+│   ├── solana_wallet/         ← browser wallet keypair + RPC helpers (wasm-ready, gloo)
 ├── web_ui/                    ← React TS UI (vite): pages/, components/, ui/, api/
 ├── playwright/                ← e2e suite (tests/, fixtures, mock-model server)
 │                                pipeline-run.spec.ts captures every editor step
@@ -88,7 +88,8 @@ susutaku/
 - `crates/prompt_bench` — prompt benchmarking binary
 - `crates/codex-usage-rs` — codex usage analytics: rollout parsing, scheduler, snapshots, store
 - `crates/wgpu-rs` — wgpu GPU backend (cdylib + rlib)
-- `crates/ruliology` — empty placeholder
+- `crates/solana_wallet` — browser wallet keypair (ed25519-dalek) + RPC helpers,
+  wasm-ready via gloo; localStorage persistence
 - `attachments/` — file attachment storage (see `docs/attachments.md`)
 - `piplines/`, `input/`, `output/`, `web_ui/` — pipeline and UI assets (`web_ui` includes a Kanban board page backed by `crates/kanban-rs` + Postgres)
 

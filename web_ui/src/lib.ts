@@ -2,6 +2,20 @@ import { toast } from "./ui/Toast.jsx";
 
 export const API_BASE = import.meta.env.VITE_API_BASE || "";
 
+export const PARAM_CARD = "card";
+export const PARAM_PIPELINE = "pipeline";
+
+export function set_query_param(key: string, value: string | null) {
+  const url = new URL(window.location.href);
+  if (value == null) url.searchParams.delete(key);
+  else url.searchParams.set(key, value);
+  window.history.replaceState(null, "", url);
+}
+
+export function query_param(key: string): string | null {
+  return new URLSearchParams(window.location.search).get(key);
+}
+
 const TOKEN_KEY = "susutaku_token";
 
 export class ApiError extends Error {
@@ -241,7 +255,7 @@ export function clear_token(): void {
 }
 
 export interface BoardEvent {
-  kind: "card" | "pipeline" | "cron";
+  kind: "card" | "pipeline" | "cron" | "attachment";
 }
 
 const WS_RECONNECT_MS = 5000;
@@ -1064,6 +1078,33 @@ export async function upload_attachment(file: File): Promise<UploadReply> {
   body.append("file", file);
   const res = await api("/api/attachments", { method: "POST", body });
   return res.json();
+}
+
+export interface AttachmentCardRef {
+  id: number;
+  title: string;
+  project_id: number | null;
+}
+
+export interface AttachmentInfo {
+  path: string;
+  name: string;
+  size: number;
+  modified: string | null;
+  cards: AttachmentCardRef[];
+}
+
+export async function fetch_attachments(): Promise<AttachmentInfo[]> {
+  return (await api("/api/attachments")).json();
+}
+
+export async function delete_attachment(path: string): Promise<Response> {
+  return api(`/api/attachments?path=${encodeURIComponent(path)}`, { method: "DELETE" });
+}
+
+export async function fetch_attachment_blob(path: string): Promise<Blob> {
+  const res = await api(`/api/attachments/file?path=${encodeURIComponent(path)}`);
+  return res.blob();
 }
 
 export async function set_card_pipeline(id: number, pipeline_id: number | null): Promise<Response> {

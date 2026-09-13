@@ -9,9 +9,9 @@ use serde::Deserialize;
 use serde_json::Value;
 use zai_api::quota;
 
-use super::claude_auth::claude_home;
-use super::codex_auth::codex_home;
-use super::zai_settings::SettingsState;
+use super::claude::auth::claude_home;
+use super::codex::auth::codex_home;
+use super::zai::settings::SettingsState;
 
 pub const PLATFORM_ZAI: &str = "zai";
 pub const PLATFORM_CODEX: &str = "codex";

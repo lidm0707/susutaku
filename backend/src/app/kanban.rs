@@ -101,7 +101,7 @@ impl KanbanApp {
 
 /// Composition root: wires the Postgres adapters into the app services.
 pub fn build(store: Arc<kanban_rs::Store>) -> KanbanApp {
-    use crate::infra::kanban::PgKanban;
+    use crate::infra::postgres::kanban::PgKanban;
     let pg = Arc::new(PgKanban::new(store));
     KanbanApp::new(
         Arc::clone(&pg) as Arc<dyn CardRepo>,

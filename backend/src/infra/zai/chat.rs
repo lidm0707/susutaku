@@ -11,7 +11,7 @@ use susutaku_mlx::tok::TokKind;
 use zai_api::client::DEFAULT_MODEL;
 
 use crate::domain::{GenReply, ReplyRx};
-use crate::infra::zai_settings::SettingsState;
+use crate::infra::zai::settings::SettingsState;
 use crate::port::outbound::Inference;
 
 pub struct ZaiEngine {

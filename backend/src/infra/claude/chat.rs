@@ -3,7 +3,7 @@
 
 use serde_json::Value;
 
-use crate::infra::claude_auth::claude_home;
+use crate::infra::claude::auth::claude_home;
 
 const RESULT_EVENT: &str = "result";
 const ASSISTANT_EVENT: &str = "assistant";

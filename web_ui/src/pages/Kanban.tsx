@@ -14,6 +14,9 @@ import {
   fetch_pipelines,
   fetch_users,
   fetch_agent_machine,
+  query_param,
+  set_query_param,
+  PARAM_CARD,
   move_card,
   remove_card,
   set_agent,
@@ -190,6 +193,19 @@ export default function Kanban() {
       refresh();
     });
   }, [project_id]);
+
+  useEffect(() => {
+    set_query_param(PARAM_CARD, detail ? String(detail.id) : null);
+  }, [detail]);
+
+  useEffect(() => {
+    if (cards.length === 0 || detail != null) return;
+    const id = query_param(PARAM_CARD);
+    if (id == null) return;
+    const card = cards.find((c) => String(c.id) === id);
+    if (card) open_detail(card);
+    else set_query_param(PARAM_CARD, null);
+  }, [cards]);
 
   async function refresh() {
     try {

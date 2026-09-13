@@ -1,9 +1,13 @@
-//! Entities: persisted and use-case objects.
+//! Entities: persisted objects, one module per DB table.
 
-pub mod kanban;
-pub mod tool_call;
+pub mod agent_config;
+pub mod card;
+pub mod pipeline;
+pub mod project;
+pub mod workspace;
 
-pub use kanban::{
-    AgentConfigDraft, CardMove, CardPatch, NewCard, NewPipeline, NewProject, NewWorkspace,
-};
-pub use tool_call::ToolCall;
+pub use agent_config::AgentConfigDraft;
+pub use card::{CardMove, CardPatch, NewCard};
+pub use pipeline::NewPipeline;
+pub use project::NewProject;
+pub use workspace::NewWorkspace;

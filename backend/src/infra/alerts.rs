@@ -3,7 +3,7 @@
 
 use std::time::Duration;
 
-use super::zai_settings::{SettingsState, read_doc};
+use super::zai::settings::{SettingsState, read_doc};
 
 pub const FIELD_WEBHOOK_URL: &str = "alert_discord_webhook_url";
 pub const WEBHOOK_TIMEOUT_SECS: u64 = 5;

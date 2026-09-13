@@ -4810,6 +4810,102 @@ select.agent-multi {
   display: inline-flex;
   align-self: center;
 }
+.chat-queue {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin: 0 0.4rem 0.35rem;
+  padding: 0.3rem 0.4rem;
+  border: 1px solid #333;
+  border-radius: 8px;
+  background: #15151a;
+}
+.chat-queue-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.chat-queue-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  border: none;
+  background: none;
+  color: #aaa;
+  font-size: 0.72rem;
+  cursor: pointer;
+  padding: 0;
+}
+.chat-queue-toggle svg.rot-270 {
+  transform: rotate(-90deg);
+}
+.chat-queue-clear {
+  border: none;
+  background: none;
+  color: #888;
+  font-size: 0.72rem;
+  cursor: pointer;
+  padding: 0;
+}
+.chat-queue-clear:hover {
+  color: #f33;
+}
+.chat-queue-item {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  max-width: 100%;
+  padding: 0.15rem 0.4rem;
+  border: 1px solid #444;
+  border-radius: 6px;
+  background: #1a1a20;
+  font-size: 0.75rem;
+  color: #ccc;
+}
+.chat-queue-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: text;
+  padding: 0;
+}
+.chat-queue-edit {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid #555;
+  border-radius: 4px;
+  background: #101014;
+  color: #eee;
+  font: inherit;
+  padding: 0.1rem 0.3rem;
+}
+.chat-queue-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-shrink: 0;
+}
+.chat-queue-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  border: none;
+  background: none;
+  color: #999;
+  font-size: 0.7rem;
+  cursor: pointer;
+  padding: 0;
+}
+.chat-queue-actions button:hover {
+  color: #f33;
+}
 .chat-attach-chip img {
   height: 2rem;
   max-width: 5rem;
@@ -4840,4 +4936,49 @@ select.agent-multi {
   border: 1px solid #333;
   margin-bottom: 0.35rem;
   cursor: zoom-in;
+}
+
+.attachments-page {
+  max-width: 1080px;
+}
+
+.attachments-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.attachments-table th,
+.attachments-table td {
+  text-align: left;
+  padding: 0.4rem 0.5rem;
+  border-bottom: 1px solid #2a2a32;
+}
+
+.attachments-table th {
+  color: #888;
+  font-weight: normal;
+}
+
+.attachments-table .chip {
+  margin-right: 0.35rem;
+}
+
+.attachments-table td:last-child {
+  white-space: nowrap;
+}
+
+.attachments-table td:last-child button {
+  background: transparent;
+  border: 1px solid #444;
+  border-radius: 6px;
+  color: #bbb;
+  padding: 0.25rem;
+  margin-left: 0.25rem;
+  cursor: pointer;
+}
+
+.attachments-table td:last-child button:hover {
+  border-color: #888;
+  color: #e6e6ea;
 }

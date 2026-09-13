@@ -13,6 +13,7 @@ import {
   Settings,
   Workflow,
   MessageSquareText,
+  Paperclip,
   Gauge,
   GitPullRequest,
 } from "lucide-react";
@@ -42,6 +43,7 @@ const ITEMS = [
   { to: "/kanban", title: "kanban", Icon: KanbanSquare },
   { to: "/pipelines", title: "pipelines", Icon: Workflow },
   { to: "/routine", title: "routine", Icon: Clock },
+  { to: "/attachments", title: "attachments", Icon: Paperclip },
   { to: "/agents", title: "agents", Icon: Bot },
   { to: "/settings", title: "settings", Icon: Settings },
 ];

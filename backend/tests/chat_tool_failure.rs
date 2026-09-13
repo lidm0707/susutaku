@@ -105,6 +105,7 @@ async fn search_failure_does_not_abort_chat() {
             board_token: None,
             agent: None,
             image: None,
+            thread_id: None,
         })
         .await
         .expect("chat must survive a failed search tool");

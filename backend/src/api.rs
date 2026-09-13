@@ -21,18 +21,17 @@ use crate::domain::{
     AgentConfigDraft, CardMove, CardPatch, ChatCmd, NewCard, NewPipeline, NewProject, NewWorkspace,
     SearchMode, TOOL_KIND_NAMES, ToolSet, ToolUse,
 };
-use crate::infra::claude_auth::{ClaudeAuth, LoginStatus as ClaudeLoginStatus};
-use crate::infra::claude_chat;
-use crate::infra::codex_auth;
-use crate::infra::codex_auth::{CodexAuth, LoginStatus};
-use crate::infra::codex_chat;
-use crate::infra::host_spec::{self, HostSpec};
-use crate::infra::local_settings;
+use crate::infra::claude::auth::{ClaudeAuth, LoginStatus as ClaudeLoginStatus};
+use crate::infra::claude::chat as claude_chat;
+use crate::infra::client::host_spec::{self, HostSpec};
+use crate::infra::codex::auth::{CodexAuth, LoginStatus};
+use crate::infra::codex::chat as codex_chat;
 use crate::infra::provider_quota::QuotaBoard;
 use crate::infra::sandbox_jail::AgentSandbox;
 use crate::infra::search::{DuckDuckGo, PageFetcher};
-use crate::infra::zai_chat::ZaiEngine;
-use crate::infra::zai_settings::{SettingsState, ZaiSettings};
+
+use crate::infra::zai::chat::ZaiEngine;
+use crate::infra::zai::settings::{SettingsState, ZaiSettings};
 use crate::port::inbound::ChatHandling;
 use crate::port::outbound::{
     AgentConfigRepo, BoardOps, ChatMemory, Fetcher, ModelEndpoint, ModelSwitch, Runner, Searcher,
@@ -71,7 +70,9 @@ fn zai_chat_deps<T: ModelSwitch + 'static>(
         models: models as Arc<dyn ModelSwitch>,
         memory: crate::infra::chat_memory::from_env().map(|m| Arc::new(m) as Arc<dyn ChatMemory>),
         board: Arc::new(BoardService::new(kanban_store.clone())),
-        agents: Arc::new(crate::infra::kanban::PgKanban::new(kanban_store.clone())),
+        agents: Arc::new(crate::infra::postgres::kanban::PgKanban::new(
+            kanban_store.clone(),
+        )),
         settings,
         store: kanban_store,
     })
@@ -264,8 +265,12 @@ fn kanban_router(state: KanbanStore) -> Router {
         .route("/api/events", get(events_ws))
         .route(
             "/api/attachments",
-            post(upload_attachment).layer(DefaultBodyLimit::max(ATTACHMENT_MAX_BYTES)),
+            get(list_attachments)
+                .post(upload_attachment)
+                .delete(delete_attachment)
+                .layer(DefaultBodyLimit::max(ATTACHMENT_MAX_BYTES)),
         )
+        .route("/api/attachments/file", get(serve_attachment))
         .route("/api/pipelines", get(list_pipelines).post(create_pipeline))
         .route(
             "/api/pipelines/{id}",
@@ -310,6 +315,240 @@ const ATTACHMENT_UPLOAD_PREFIX: &str = "upload-";
 const ATTACHMENT_FIELD: &str = "file";
 const ATTACHMENT_DEFAULT_NAME: &str = "image";
 const ATTACHMENT_MAX_BYTES: usize = 32 * 1024 * 1024;
+const ATTACHMENT_PATH_QUERY: &str = "path";
+
+#[derive(serde::Serialize, utoipa::ToSchema)]
+struct AttachmentCardRef {
+    id: i64,
+    title: String,
+    project_id: Option<i64>,
+}
+
+#[derive(serde::Serialize, utoipa::ToSchema)]
+struct AttachmentInfo {
+    path: String,
+    name: String,
+    size: i64,
+    modified: Option<String>,
+    cards: Vec<AttachmentCardRef>,
+}
+
+const ATTACHMENT_CHAT_PREFIX: &str = "chat-";
+const DATA_URL_PREFIX: &str = "data:";
+
+/// Persist a chat image (data URL) into the attachments tree so it shows up
+/// on the attachments page. Best-effort: a failure is logged and ignored.
+fn store_chat_image(data_url: &str) {
+    const B64_SEP: &str = ";base64,";
+    let Some((head, data)) = data_url.split_once(B64_SEP) else {
+        return;
+    };
+    let mime = head.strip_prefix(DATA_URL_PREFIX).unwrap_or("image/png");
+    use base64::Engine as _;
+    let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(data) else {
+        return;
+    };
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or_default();
+    let ext = match mime {
+        "image/jpeg" => "jpg",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        _ => "png",
+    };
+    let dir = format!("{ATTACHMENTS_DIR}/{ATTACHMENT_UPLOAD_PREFIX}{nanos}");
+    let path = format!("{dir}/{ATTACHMENT_CHAT_PREFIX}{nanos}.{ext}");
+    tokio::spawn(async move {
+        if tokio::fs::create_dir_all(&dir).await.is_err() {
+            return;
+        }
+        if tokio::fs::write(&path, &bytes).await.is_ok() {
+            crate::app::events::publish(crate::app::events::EventKind::Attachment);
+        } else {
+            tracing::warn!("failed to store chat image {path}");
+        }
+    });
+}
+
+/// A card "holds" an attachment when the attachment path appears in the
+/// card title, description, or agent state JSON.
+fn cards_holding(path: &str, cards: &[kanban_rs::CardRow]) -> Vec<AttachmentCardRef> {
+    cards
+        .iter()
+        .filter(|c| {
+            c.title.contains(path)
+                || c.description.contains(path)
+                || c.agent_state.as_deref().is_some_and(|s| s.contains(path))
+        })
+        .map(|c| AttachmentCardRef {
+            id: c.id,
+            title: c.title.clone(),
+            project_id: c.project_id,
+        })
+        .collect()
+}
+
+/// Reject paths outside the uploads tree or containing traversal segments.
+fn safe_attachment_path(raw: &str) -> Option<String> {
+    let prefix = format!("{ATTACHMENTS_DIR}/{ATTACHMENT_UPLOAD_PREFIX}");
+    if !raw.starts_with(&prefix) || raw.split('/').any(|seg| seg == ".." || seg.is_empty()) {
+        return None;
+    }
+    Some(raw.to_string())
+}
+
+fn attachment_mime(name: &str) -> &'static str {
+    const MIME_PNG: &str = "image/png";
+    const MIME_JPEG: &str = "image/jpeg";
+    const MIME_GIF: &str = "image/gif";
+    const MIME_WEBP: &str = "image/webp";
+    const MIME_PDF: &str = "application/pdf";
+    const MIME_TEXT: &str = "text/plain; charset=utf-8";
+    const MIME_OCTET: &str = "application/octet-stream";
+    let ext = name.rsplit('.').next().unwrap_or("");
+    match ext {
+        "png" => MIME_PNG,
+        "jpg" | "jpeg" => MIME_JPEG,
+        "gif" => MIME_GIF,
+        "webp" => MIME_WEBP,
+        "pdf" => MIME_PDF,
+        "txt" | "md" | "csv" | "json" | "log" => MIME_TEXT,
+        _ => MIME_OCTET,
+    }
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/attachments",
+    responses((status = 200, body = [AttachmentInfo]), (status = 403, body = str))
+)]
+async fn list_attachments(
+    State(state): State<KanbanStore>,
+    user: AuthUser,
+) -> Result<Json<Vec<AttachmentInfo>>, ApiError> {
+    require_edit(&user)?;
+    let cards = state
+        .store
+        .list(None)
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let mut out = Vec::new();
+    let root = std::path::Path::new(ATTACHMENTS_DIR);
+    if !root.exists() {
+        return Ok(Json(out));
+    }
+    let mut dirs = tokio::fs::read_dir(root)
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    while let Some(dir) = dirs
+        .next_entry()
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+    {
+        if !dir.file_type().await.map(|t| t.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        let mut files = tokio::fs::read_dir(dir.path())
+            .await
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+        while let Some(file) = files
+            .next_entry()
+            .await
+            .map_err(|e| ApiError::internal(e.to_string()))?
+        {
+            if !file.file_type().await.map(|t| t.is_file()).unwrap_or(false) {
+                continue;
+            }
+            let path = file
+                .path()
+                .to_string_lossy()
+                .trim_start_matches("./")
+                .to_string();
+            let meta = file
+                .metadata()
+                .await
+                .map_err(|e| ApiError::internal(e.to_string()))?;
+            let modified = meta.modified().ok().and_then(|t| {
+                let secs = t
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or_default();
+                chrono::DateTime::from_timestamp_secs(secs as i64).map(|dt| dt.to_rfc3339())
+            });
+            out.push(AttachmentInfo {
+                cards: cards_holding(&path, &cards),
+                name: file.file_name().to_string_lossy().to_string(),
+                path,
+                size: meta.len() as i64,
+                modified,
+            });
+        }
+    }
+    out.sort_by(|a, b| b.path.cmp(&a.path));
+    Ok(Json(out))
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/attachments",
+    responses((status = 200), (status = 400, body = str), (status = 403, body = str), (status = 404, body = str))
+)]
+async fn delete_attachment(
+    State(_state): State<KanbanStore>,
+    user: AuthUser,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> Result<StatusCode, ApiError> {
+    require_edit(&user)?;
+    let raw = params
+        .get(ATTACHMENT_PATH_QUERY)
+        .ok_or_else(|| ApiError::bad_request("missing path"))?
+        .clone();
+    let path = safe_attachment_path(&raw)
+        .ok_or_else(|| ApiError::bad_request("invalid attachment path"))?;
+    tokio::fs::remove_file(&path)
+        .await
+        .map_err(|_| ApiError::not_found(ApiError::NOT_FOUND_MSG))?;
+    if let Some(parent) = std::path::Path::new(&path).parent() {
+        let _ = tokio::fs::remove_dir(parent).await;
+    }
+    crate::app::events::publish(crate::app::events::EventKind::Attachment);
+    Ok(StatusCode::OK)
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/attachments/file",
+    params(("path" = String, Query)),
+    responses((status = 200, body = Vec<u8>), (status = 400, body = str), (status = 403, body = str), (status = 404, body = str))
+)]
+async fn serve_attachment(
+    _user: AuthUser,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> Result<Response, ApiError> {
+    let raw = params
+        .get(ATTACHMENT_PATH_QUERY)
+        .ok_or_else(|| ApiError::bad_request("missing path"))?
+        .clone();
+    let path = safe_attachment_path(&raw)
+        .ok_or_else(|| ApiError::bad_request("invalid attachment path"))?;
+    let data = tokio::fs::read(&path)
+        .await
+        .map_err(|_| ApiError::not_found(ApiError::NOT_FOUND_MSG))?;
+    let name = std::path::Path::new(&path)
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| ATTACHMENT_DEFAULT_NAME.to_string());
+    Ok((
+        [
+            (http::header::CONTENT_TYPE, attachment_mime(&name)),
+            (http::header::CONTENT_DISPOSITION, "inline"),
+        ],
+        data,
+    )
+        .into_response())
+}
 
 #[derive(serde::Serialize, utoipa::ToSchema)]
 struct UploadReply {
@@ -370,6 +609,7 @@ async fn upload_attachment(
         tokio::fs::write(&path, &data)
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?;
+        crate::app::events::publish(crate::app::events::EventKind::Attachment);
         return Ok(Json(UploadReply { path }));
     }
     Err(ApiError::bad_request("missing upload field"))
@@ -679,6 +919,7 @@ async fn chat<T: ChatHandling>(
             board_token,
             agent: req.agent.clone(),
             image: None,
+            thread_id: req.thread_id.map(|id| id.to_string()),
         })
         .await
         .map_err(ApiError::internal)?;
@@ -738,7 +979,7 @@ async fn codex_status(State(auth): State<Arc<CodexAuth>>) -> Json<CodexStatusRep
 )]
 async fn codex_models() -> Json<Vec<CodexModelInfo>> {
     Json(
-        codex_cli::list_models(&codex_auth::codex_home())
+        codex_cli::list_models(&crate::infra::codex::auth::codex_home())
             .iter()
             .map(|m| CodexModelInfo {
                 id: m.slug.clone(),
@@ -1087,14 +1328,14 @@ async fn set_client_env(
     State(state): State<Arc<SettingsState>>,
     Json(req): Json<ClientEnvRequest>,
 ) -> Result<Json<ClientEnvReply>, ApiError> {
-    let mut env = crate::infra::client_env::ClientEnv {
+    let mut env = crate::infra::client::env::ClientEnv {
         user_agent: req.user_agent,
         platform: req.platform,
         language: req.language,
         timezone: req.timezone,
         screen: req.screen,
         workspace_path: req.workspace_path,
-        ..crate::infra::client_env::ClientEnv::default()
+        ..crate::infra::client::env::ClientEnv::default()
     };
     stamp_host(&mut env);
     state.set_client_env(&env).map_err(ApiError::internal)?;
@@ -1112,8 +1353,8 @@ async fn set_client_env(
     }))
 }
 
-fn stamp_host(env: &mut crate::infra::client_env::ClientEnv) {
-    let (hostname, os, arch) = crate::infra::client_env::host_fingerprint();
+fn stamp_host(env: &mut crate::infra::client::env::ClientEnv) {
+    let (hostname, os, arch) = crate::infra::client::env::host_fingerprint();
     env.hostname = hostname;
     env.os = os;
     env.arch = arch;
@@ -1165,7 +1406,7 @@ struct GitRepoReply {
     secret_set: bool,
 }
 
-fn git_repo_reply(repo: &crate::infra::git_repos::GitRepo) -> GitRepoReply {
+fn git_repo_reply(repo: &crate::infra::settings::git::GitRepo) -> GitRepoReply {
     GitRepoReply {
         project_id: repo.project_id,
         url: repo.url.clone(),
@@ -1344,6 +1585,9 @@ async fn chat_zai(
     };
     let gated_image =
         gate_image(deps.agents.clone(), req.agent.as_deref(), req.image.clone()).await?;
+    if let Some(data_url) = gated_image.as_deref() {
+        store_chat_image(data_url);
+    }
     let outcome = zai
         .execute(ChatCmd {
             message,
@@ -1354,6 +1598,7 @@ async fn chat_zai(
             board_token,
             agent: req.agent.clone(),
             image: gated_image,
+            thread_id: req.thread_id.map(|id| id.to_string()),
         })
         .await
         .map_err(ApiError::internal)?;
@@ -2679,7 +2924,7 @@ impl AgentBriefDto {
 }
 
 fn model_server_url() -> String {
-    local_settings::read_saved()
+    crate::infra::settings::local::read_saved()
         .map(|s| s.endpoint)
         .filter(|e| !e.is_empty())
         .unwrap_or_else(|| MODEL_SERVER_DEFAULT.to_string())
@@ -3216,9 +3461,9 @@ struct StoredOutcome {
 /// Installer for remote sandbox clients; `role` selects auto/model/worker.
 /// Unauthenticated by design — it only probes the downloading machine.
 async fn install_script(
-    axum::extract::Query(q): axum::extract::Query<crate::infra::install::InstallQuery>,
+    axum::extract::Query(q): axum::extract::Query<crate::infra::client::install::InstallQuery>,
 ) -> Response {
-    use crate::infra::install;
+    use crate::infra::client::install;
     let role = match q.role.as_deref().map(install::parse_role) {
         None => install::Role::default(),
         Some(Some(r)) => r,
@@ -3392,6 +3637,8 @@ struct ChatRequest {
     /// Agent name from the chat modal; registers the exchange with the
     /// manager so the agent shows in machines with its transcript.
     agent: Option<String>,
+    /// Chat thread id; scopes long-term memory recall/remember to the thread.
+    thread_id: Option<i64>,
 }
 
 /// One tool call the agent made, for display in the chat UI.

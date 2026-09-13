@@ -10,6 +10,7 @@ pub mod project;
 pub mod prompt;
 pub mod resource;
 pub mod skill;
+pub mod tool_call;
 pub mod workspace;
 
 pub use agent_config::AgentConfigService;
@@ -19,4 +20,5 @@ pub use pipeline::PipelineService;
 pub use project::ProjectService;
 pub use resource::ResourceService;
 pub use skill::SkillService;
+pub use tool_call::ToolCall;
 pub use workspace::WorkspaceService;

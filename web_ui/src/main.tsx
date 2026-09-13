@@ -10,6 +10,7 @@ import Settings from "./pages/Settings.jsx";
 import Sandbox from "./pages/Sandbox.jsx";
 import Pipelines from "./pages/Pipelines.jsx";
 import Routine from "./pages/Routine.jsx";
+import Attachments from "./pages/Attachments.jsx";
 import { get_token } from "./lib.js";
 import { Toaster } from "./ui/Toast.jsx";
 import SideNav from "./components/SideNav.tsx";
@@ -48,6 +49,7 @@ function App() {
         <Route path="/kanban" element={<RequireAuth><Kanban /></RequireAuth>} />
         <Route path="/pipelines" element={<RequireAuth><Pipelines /></RequireAuth>} />
         <Route path="/routine" element={<RequireAuth><Routine /></RequireAuth>} />
+        <Route path="/attachments" element={<RequireAuth><Attachments /></RequireAuth>} />
         <Route path="/agents" element={<RequireAuth><AgentSettings /></RequireAuth>} />
         <Route path="/settings" element={<RequireAuth><Settings /></RequireAuth>} />
         <Route path="/sandbox" element={<RequireAuth><Sandbox /></RequireAuth>} />

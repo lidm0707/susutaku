@@ -10,7 +10,7 @@ pub mod tool_set;
 pub mod tool_use;
 
 pub use board::{BoardOp, BoardRequest, BoardResult};
-pub use chat::{ChatCmd, ChatOutcome};
+pub use chat::{ChatCmd, ChatOutcome, MEMORY_THREAD_DEFAULT};
 pub use gen_reply::{GenReply, ReplyRx};
 pub use memory_hit::MemoryHit;
 pub use search_mode::SearchMode;

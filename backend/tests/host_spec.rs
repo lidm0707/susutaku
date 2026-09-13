@@ -1,4 +1,4 @@
-use backend::infra::host_spec::host_spec;
+use backend::infra::client::host_spec::host_spec;
 
 #[test]
 fn host_spec_reports_this_machine() {

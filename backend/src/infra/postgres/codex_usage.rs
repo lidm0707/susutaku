@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use codex_usage_rs::Store;
 
-use crate::infra::kanban::DATABASE_URL_ENV;
+use crate::infra::postgres::kanban::DATABASE_URL_ENV;
 
 /// Connect to the usage Postgres store (same DB as kanban).
 pub async fn connect() -> Store {

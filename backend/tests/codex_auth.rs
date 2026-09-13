@@ -1,4 +1,4 @@
-use backend::infra::codex_auth::code_from_request;
+use backend::infra::codex::auth::code_from_request;
 
 #[test]
 fn extracts_code_from_callback_request() {

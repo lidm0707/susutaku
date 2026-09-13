@@ -7,9 +7,8 @@ use std::sync::RwLock;
 use serde::{Deserialize, Serialize};
 use zai_api::client::{DEFAULT_MODEL, ENV_API_KEY};
 
-use super::client_env::{self, ClientEnv};
-use super::git_repos::{self, GitRepo};
-use super::local_settings;
+use crate::infra::client::env::ClientEnv;
+use crate::infra::settings::git::GitRepo;
 
 pub const SETTINGS_FILE: &str = "setting.json";
 /// Override for containers: the deploy stack points this at a volume so
@@ -106,15 +105,15 @@ impl SettingsState {
         let doc = read_doc();
         Self {
             zai: RwLock::new(read_file().unwrap_or_default()),
-            client_env: RwLock::new(client_env::read(&doc)),
+            client_env: RwLock::new(crate::infra::client::env::read(&doc)),
             system_prompt: RwLock::new(read_system_prompt()),
             local_endpoint: RwLock::new(
-                local_settings::read(&doc)
+                crate::infra::settings::local::read(&doc)
                     .map(|s| s.endpoint)
                     .unwrap_or_default(),
             ),
-            alert_webhook: RwLock::new(super::alerts::read_webhook()),
-            git_repos: RwLock::new(git_repos::read(&doc)),
+            alert_webhook: RwLock::new(crate::infra::alerts::read_webhook()),
+            git_repos: RwLock::new(crate::infra::settings::git::read(&doc)),
         }
     }
 
@@ -129,18 +128,18 @@ impl SettingsState {
     pub fn set_alert_webhook(&self, url: Option<&str>) -> Result<(), String> {
         let mut doc = read_doc();
         match url.map(str::trim).filter(|u| !u.is_empty()) {
-            Some(u) => doc[super::alerts::FIELD_WEBHOOK_URL] = serde_json::json!(u),
+            Some(u) => doc[crate::infra::alerts::FIELD_WEBHOOK_URL] = serde_json::json!(u),
             None => {
                 doc.as_object_mut()
                     .ok_or_else(|| "settings doc is not an object".to_owned())?
-                    .remove(super::alerts::FIELD_WEBHOOK_URL);
+                    .remove(crate::infra::alerts::FIELD_WEBHOOK_URL);
             }
         }
         write_doc(&doc)?;
         *self
             .alert_webhook
             .write()
-            .unwrap_or_else(|e| e.into_inner()) = super::alerts::read_webhook();
+            .unwrap_or_else(|e| e.into_inner()) = crate::infra::alerts::read_webhook();
         Ok(())
     }
 
@@ -153,7 +152,7 @@ impl SettingsState {
 
     pub fn set_local_endpoint(&self, url: &str) -> Result<(), String> {
         let mut doc = read_doc();
-        local_settings::write(&mut doc, url);
+        crate::infra::settings::local::write(&mut doc, url);
         write_doc(&doc)?;
         *self
             .local_endpoint
@@ -184,9 +183,9 @@ impl SettingsState {
         secret: Option<&str>,
     ) -> Result<(), String> {
         let url = url.trim();
-        git_repos::validate_url(url)?;
+        crate::infra::settings::git::validate_url(url)?;
         if let Some(s) = secret.filter(|s| !s.is_empty()) {
-            git_repos::validate_secret(s)?;
+            crate::infra::settings::git::validate_secret(s)?;
         }
         let stored_secret = self.git_repo(project_id).and_then(|r| r.secret);
         let mut repos = self.git_repos.write().unwrap_or_else(|e| e.into_inner());
@@ -230,7 +229,7 @@ impl SettingsState {
 
     fn write_git_repos(&self, repos: &[GitRepo]) -> Result<(), String> {
         let mut doc = read_doc();
-        git_repos::write(&mut doc, repos);
+        crate::infra::settings::git::write(&mut doc, repos);
         write_doc(&doc)?;
         *self.git_repos.write().unwrap_or_else(|e| e.into_inner()) = repos.to_owned();
         Ok(())
@@ -245,7 +244,7 @@ impl SettingsState {
 
     pub fn set_client_env(&self, env: &ClientEnv) -> Result<(), String> {
         let mut doc = read_doc();
-        client_env::write(&mut doc, env);
+        crate::infra::client::env::write(&mut doc, env);
         write_doc(&doc)?;
         *self.client_env.write().unwrap_or_else(|e| e.into_inner()) = Some(env.clone());
         Ok(())

@@ -1,6 +1,6 @@
 //! Integration tests for the public installer API surface only.
 
-use backend::infra::install::{self, Capability, Role};
+use backend::infra::client::install::{self, Capability, Role};
 
 const GIB: usize = 1024 * 1024 * 1024;
 

@@ -14,6 +14,7 @@ pub enum EventKind {
     Card,
     Pipeline,
     Cron,
+    Attachment,
 }
 
 #[derive(Debug, Clone, Serialize)]

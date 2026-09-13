@@ -3,7 +3,7 @@
 use serde_json::Value;
 use std::path::Path;
 
-use crate::infra::codex_auth::codex_home;
+use crate::infra::codex::auth::codex_home;
 
 const AGENT_EVENT: &str = "agent_message";
 const ERROR_EVENT: &str = "error";

@@ -142,12 +142,12 @@ impl QdrantMemory {
         Ok(())
     }
 
-    fn upsert(&self, role: &str, text: &str, vector: Vec<f32>) -> Result<(), String> {
+    fn upsert(&self, thread: &str, role: &str, text: &str, vector: Vec<f32>) -> Result<(), String> {
         let point = serde_json::json!({
             "points": [{
                 "id": uuid_v4_counter(),
                 "vector": vector,
-                "payload": { "role": role, "text": text },
+                "payload": { "thread": thread, "role": role, "text": text },
             }]
         });
         let url = format!(
@@ -174,19 +174,24 @@ fn uuid_v4_counter() -> u64 {
 }
 
 impl ChatMemory for QdrantMemory {
-    fn remember(&self, role: &str, text: &str) -> Result<(), String> {
+    fn remember(&self, thread: &str, role: &str, text: &str) -> Result<(), String> {
         if text.trim().is_empty() {
             return Ok(());
         }
         let vector = self.embed(text)?;
         let dim = vector.len();
         self.ensure_collection(dim)?;
-        self.upsert(role, text, vector)
+        self.upsert(thread, role, text, vector)
     }
 
-    fn recall(&self, query: &str, k: usize) -> Result<Vec<MemoryHit>, String> {
+    fn recall(&self, thread: &str, query: &str, k: usize) -> Result<Vec<MemoryHit>, String> {
         let vector = self.embed(query)?;
-        let body = serde_json::json!({ "vector": vector, "limit": k, "with_payload": true });
+        let body = serde_json::json!({
+            "vector": vector,
+            "limit": k,
+            "with_payload": true,
+            "filter": { "must": [{ "key": "thread", "match": { "value": thread } }] },
+        });
         let url = format!(
             "{}/collections/{}/points/search",
             self.qdrant_url, self.collection

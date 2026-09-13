@@ -16,11 +16,14 @@ pub enum ToolCall {
 const TOOL_PREFIX: &str = "TOOL:";
 const INVOKE_OPEN: &str = "<invoke";
 const NAME_ATTR: &str = "name=";
+const PARAM_TITLE: &str = "title";
+const PARAM_TITLE_ALIAS: &str = "name";
 const PARAM_CLOSE: &str = "</parameter>";
 const XML_SEARCH: &str = "search";
 const XML_FETCH: &str = "fetch";
 const XML_SHELL: &str = "shell";
 const XML_CARD_CREATE: &str = "card_create";
+const XML_CARD_CREATE_ALIAS: &str = "create_card";
 const XML_CARD_ROUTINE: &str = "card_routine";
 const XML_CARD_LINK: &str = "card_link";
 const XML_PIPELINE_CREATE: &str = "pipeline_create";
@@ -110,9 +113,9 @@ impl ToolCall {
             XML_SEARCH => Some(Self::Search(p("query")?.to_string())),
             XML_FETCH => Some(Self::Fetch(p("url")?.to_string())),
             XML_SHELL => Some(Self::Shell(p("command")?.to_string())),
-            XML_CARD_CREATE => Some(Self::CardCreate {
+            XML_CARD_CREATE | XML_CARD_CREATE_ALIAS => Some(Self::CardCreate {
                 project_id: p("project_id")?.trim().parse().ok()?,
-                title: p("title")?.to_string(),
+                title: p(PARAM_TITLE).or_else(|| p(PARAM_TITLE_ALIAS))?.to_string(),
             }),
             XML_CARD_ROUTINE => Some(Self::CardSchedule {
                 card_id: p("card_id")?.trim().parse().ok()?,

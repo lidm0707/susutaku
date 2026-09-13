@@ -8,7 +8,8 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "gen:api": "orval --config orval.config.ts"
+    "gen:api": "orval --config orval.config.ts",
+    "build:wallet": "wasm-pack build ../crates/solana_wallet --target web --out-dir src/wallet-pkg --release"
   },
   "dependencies": {
     "@xyflow/react": "^12.11.6",

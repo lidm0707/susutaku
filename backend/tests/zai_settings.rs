@@ -1,4 +1,4 @@
-use backend::infra::zai_settings::SettingsState;
+use backend::infra::zai::settings::SettingsState;
 
 #[test]
 fn empty_values_do_not_overwrite() {

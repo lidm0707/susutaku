@@ -10,7 +10,7 @@ pub struct LocalSettings {
 }
 
 pub fn read_saved() -> Option<LocalSettings> {
-    read(&super::zai_settings::read_doc())
+    read(&crate::infra::zai::settings::read_doc())
 }
 
 pub fn read(doc: &serde_json::Value) -> Option<LocalSettings> {
