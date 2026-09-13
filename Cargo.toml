@@ -31,6 +31,12 @@ members = [
     "crates/wgpu-rs",
     "crates/research-rs",
     "crates/solana_wallet",
+    "crates/math",
+    "crates/physic",
+    "crates/bio",
+    "crates/chemi",
+    "crates/quatum",
+    "crates/plan",
 ]
 
 [workspace.package]
@@ -61,6 +67,12 @@ local-model = { path = "crates/local_model" }
 wgpu-rs = { path = "crates/wgpu-rs" }
 research-rs = { path = "crates/research-rs" }
 solana-wallet = { path = "crates/solana_wallet" }
+math = { path = "crates/math" }
+physic = { path = "crates/physic" }
+bio = { path = "crates/bio" }
+chemi = { path = "crates/chemi" }
+quatum = { path = "crates/quatum" }
+plan = { path = "crates/plan" }
 ureq = "2"
 serde_json = "1"
 pdf-extract = "0.7"

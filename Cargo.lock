@@ -369,6 +369,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "bio"
+version = "0.1.0"
+
+[[package]]
 name = "bit-set"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -613,6 +617,10 @@ dependencies = [
  "cpufeatures 0.3.1",
  "rand_core 0.10.1",
 ]
+
+[[package]]
+name = "chemi"
+version = "0.1.0"
 
 [[package]]
 name = "chrono"
@@ -3047,6 +3055,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "47e1ffaa40ddd1f3ed91f717a33c8c0ee23fff369e3aa8772b9605cc1d22f4c3"
 
 [[package]]
+name = "math"
+version = "0.1.0"
+
+[[package]]
 name = "matrixmultiply"
 version = "0.3.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3793,6 +3805,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "physic"
+version = "0.1.0"
+dependencies = [
+ "math",
+]
+
+[[package]]
 name = "pin-project"
 version = "1.1.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3859,6 +3878,10 @@ name = "plain"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
+
+[[package]]
+name = "plan"
+version = "0.1.0"
 
 [[package]]
 name = "png"
@@ -4078,6 +4101,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f6d64c71eb498fe9eae14ce4ec935c555749aef511cca85b5568910d6e48001"
 dependencies = [
  "bytemuck",
+]
+
+[[package]]
+name = "quatum"
+version = "0.1.0"
+dependencies = [
+ "math",
 ]
 
 [[package]]
