@@ -18,6 +18,13 @@ use serde::Serialize;
 pub const AGENTS_ROOT: &str = "work/agents";
 pub const EMPTY_PATCH: &str = "";
 
+/// Remote repo an agent work tree starts from; cloned on first spawn.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteRepo {
+    pub url: String,
+    pub token: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum AgentRunState {
@@ -62,11 +69,11 @@ struct AgentSlot {
     base_commit: Option<String>,
 }
 
-pub struct ManagerProcess {
+pub struct Manager {
     agents: RwLock<HashMap<String, Arc<AgentSlot>>>,
 }
 
-impl ManagerProcess {
+impl Manager {
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
             agents: RwLock::new(HashMap::new()),
@@ -77,6 +84,17 @@ impl ManagerProcess {
     /// non-empty tree (crashed run, backend restart) holds no live agent, so
     /// it is reclaimed before the fresh sandbox is created.
     pub fn spawn(&self, agent: &str) -> Result<PathBuf, String> {
+        self.spawn_with_repo(agent, None)
+    }
+
+    /// Like [`spawn`](Self::spawn), but seeds a fresh work tree by cloning
+    /// `repo` (token kept out of on-disk config). An existing tree is reused
+    /// as-is — the repo only applies to the first spawn.
+    pub fn spawn_with_repo(
+        &self,
+        agent: &str,
+        repo: Option<&RemoteRepo>,
+    ) -> Result<PathBuf, String> {
         let mut agents = self
             .agents
             .write()
@@ -86,6 +104,7 @@ impl ManagerProcess {
         }
         let work_tree = PathBuf::from(AGENTS_ROOT).join(sanitize(agent));
         reclaim_stale(&work_tree);
+        seed_work_tree(&work_tree, repo)?;
         let sandbox = Sandbox::new_in(&work_tree).map_err(|e| e.to_string())?;
         let base_commit = GitRepo::open_or_init(&work_tree)
             .ok()
@@ -205,6 +224,26 @@ impl ManagerProcess {
             .get(agent)
             .cloned()
             .ok_or_else(|| format!("agent {agent} not spawned"))
+    }
+}
+
+/// Clones `repo` into the fresh work tree; falls back to an empty init repo
+/// so a broken remote never blocks the agent from starting.
+fn seed_work_tree(work_tree: &Path, repo: Option<&RemoteRepo>) -> Result<(), String> {
+    let Some(repo) = repo else {
+        return GitRepo::open_or_init(work_tree)
+            .map(|_| ())
+            .map_err(|e| e.to_string());
+    };
+    match GitRepo::clone_into(&repo.url, work_tree, repo.token.as_deref()) {
+        Ok(_) => Ok(()),
+        Err(e) => {
+            eprintln!("[manager] clone {} failed ({e}); starting empty", repo.url);
+            let _ = fs::remove_dir_all(work_tree);
+            GitRepo::open_or_init(work_tree)
+                .map(|_| ())
+                .map_err(|e| e.to_string())
+        }
     }
 }
 

@@ -14,7 +14,7 @@ use backend::infra::sandbox_jail::AgentSandbox;
 use backend::infra::search::{DuckDuckGo, PageFetcher};
 use backend::infra::settings::local;
 use backend::port::outbound::ChatMemory;
-use manager_rs::ManagerProcess;
+use manager_rs::manager::Manager;
 use tracing_subscriber::EnvFilter;
 
 const PORT: u16 = 8991;
@@ -57,7 +57,7 @@ fn init_tracing() {
     tracing_subscriber::fmt().with_env_filter(filter).init();
 }
 
-fn spawn_health_log(manager: Arc<ManagerProcess>) {
+fn spawn_health_log(manager: Arc<Manager>) {
     tokio::spawn(async move {
         let start = tokio::time::Instant::now() + HEALTH_INTERVAL;
         let mut tick = tokio::time::interval_at(start, HEALTH_INTERVAL);
@@ -104,7 +104,7 @@ async fn main() {
 
     let usage_store = Arc::new(codex_usage::connect().await);
     codex_usage::spawn_scheduler(usage_store.clone(), codex_home());
-    let manager = ManagerProcess::new();
+    let manager = Manager::new();
     spawn_health_log(manager.clone());
     let addr = SocketAddr::from(([0, 0, 0, 0], PORT));
     let listener = tokio::net::TcpListener::bind(addr).await.expect("bind");

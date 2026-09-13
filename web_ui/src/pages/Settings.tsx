@@ -20,6 +20,7 @@ import {
   Clock,
   Bell,
   HelpCircle,
+  GitBranch,
 } from "lucide-react";
 import { Modal } from "../ui/Overlay.jsx";
 import { toast } from "../ui/Toast.jsx";
@@ -54,9 +55,16 @@ import {
   type CodexUsageRow,
   fetch_alert_settings,
   save_alert_settings,
+  fetch_workspaces,
+  fetch_projects,
+  fetch_git_repos,
+  set_git_repo,
+  remove_git_repo,
+  type GitRepo,
+  type Project,
 } from "../lib.js";
 
-type Tab = "client" | "providers" | "alerts" | "timezone" | "users";
+type Tab = "client" | "providers" | "alerts" | "timezone" | "users" | "git";
 
 const ZAI_MODELS = ["glm-4.6", "glm-4.6v", "glm-4.5", "glm-4.5-air", "glm-4.5-flash", "glm-4.5v"] as const;
 
@@ -66,6 +74,7 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "alerts", label: "alerts" },
   { id: "timezone", label: "timezone" },
   { id: "users", label: "users" },
+  { id: "git", label: "git repos" },
 ];
 
 export default function Settings() {
@@ -94,6 +103,7 @@ export default function Settings() {
         {tab === "alerts" && <AlertsTab />}
         {tab === "timezone" && <TimezoneTab />}
         {tab === "users" && <UsersTab />}
+        {tab === "git" && <GitReposTab />}
       </section>
     </main>
   );
@@ -1266,5 +1276,148 @@ function CreateUserModal({
         {error && <p className="error">{error}</p>}
       </form>
     </Modal>
+  );
+}
+
+/* --- git repos --- */
+
+interface ProjectRepo extends GitRepo {
+  project: Project;
+}
+
+function GitReposTab() {
+  const [entries, setEntries] = useState<ProjectRepo[]>([]);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
+
+  async function reload() {
+    setLoading(true);
+    setError("");
+    try {
+      const workspaces = await fetch_workspaces();
+      const projects = (
+        await Promise.all(workspaces.map((w) => fetch_projects(w.id)))
+      ).flat();
+      const repos = await fetch_git_repos();
+      setEntries(
+        projects.map((p) => ({
+          project: p,
+          project_id: p.id,
+          url: repos.find((r) => r.project_id === p.id)?.url || "",
+          secret_set: repos.find((r) => r.project_id === p.id)?.secret_set || false,
+        }))
+      );
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void reload();
+  }, []);
+
+  return (
+    <section aria-label="git repos">
+      <h3>project git repos</h3>
+      <p className="sub">
+        one repo per project — agent work trees are cloned from it on first spawn;
+        tokens are write-only and never sent back
+      </p>
+      {loading && <p className="sub">loading…</p>}
+      {error && <p className="error">{error}</p>}
+      {!loading && entries.length === 0 && <p className="sub">no projects yet</p>}
+      {entries.map((entry) => (
+        <GitRepoRow key={entry.project_id} entry={entry} on_saved={reload} />
+      ))}
+    </section>
+  );
+}
+
+function GitRepoRow({
+  entry,
+  on_saved,
+}: {
+  entry: ProjectRepo;
+  on_saved: () => Promise<void>;
+}) {
+  const [url, setUrl] = useState(entry.url);
+  const [secret, setSecret] = useState("");
+  const [status, setStatus] = useState("");
+  const [error, setError] = useState("");
+
+  async function save(clear: boolean) {
+    setStatus("");
+    setError("");
+    try {
+      await set_git_repo(entry.project_id, url.trim(), clear ? "" : secret || undefined);
+      setSecret("");
+      setStatus(clear ? "token cleared" : "saved");
+      await on_saved();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function remove() {
+    setStatus("");
+    setError("");
+    try {
+      await remove_git_repo(entry.project_id);
+      await on_saved();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  return (
+    <form
+      className="env-card"
+      aria-label={`git repo for ${entry.project.name}`}
+      onSubmit={(e) => {
+        e.preventDefault();
+        void save(false);
+      }}
+    >
+      <h4>
+        <GitBranch size={14} /> {entry.project.name}
+        {entry.secret_set && <span className="saved-mark"> token set</span>}
+      </h4>
+      <div className="form-row">
+        <input
+          type="url"
+          value={url}
+          onChange={(e) => setUrl(e.target.value)}
+          placeholder="https://github.com/org/repo.git"
+          autoComplete="off"
+          spellCheck={false}
+        />
+      </div>
+      <div className="form-row">
+        <input
+          type="password"
+          value={secret}
+          onChange={(e) => setSecret(e.target.value)}
+          placeholder={entry.secret_set ? "replace access token…" : "access token (write-only)…"}
+          autoComplete="new-password"
+        />
+      </div>
+      <div className="form-row">
+        <button type="submit">save</button>
+        {entry.secret_set && (
+          <button type="button" onClick={() => void save(true)}>
+            clear token
+          </button>
+        )}
+        {entry.url && (
+          <button type="button" onClick={() => void remove()}>
+            <Trash2 size={14} /> remove
+          </button>
+        )}
+        {status && <span className="saved-mark">{status}</span>}
+        {error && <span className="error">{error}</span>}
+      </div>
+    </form>
   );
 }

@@ -37,6 +37,10 @@ impl GitRepo {
         &self.root
     }
 
+    pub(crate) fn from_parts(root: PathBuf, inner: git2::Repository) -> Self {
+        Self { root, inner }
+    }
+
     pub(crate) fn raw(&self) -> &git2::Repository {
         &self.inner
     }

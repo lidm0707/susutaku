@@ -228,6 +228,40 @@ export async function save_client_env(
   return res.json();
 }
 
+export interface GitRepo {
+  project_id: number;
+  url: string;
+  secret_set: boolean;
+}
+
+export async function fetch_git_repos(): Promise<GitRepo[]> {
+  const res = await fetch(`${API_BASE}/api/settings/git/repos`);
+  if (!res.ok) throw new ApiError(res.status, await res.text());
+  const body = await res.json();
+  return body.repos as GitRepo[];
+}
+
+export async function set_git_repo(
+  project_id: number,
+  url: string,
+  secret?: string
+): Promise<GitRepo> {
+  const res = await fetch(`${API_BASE}/api/settings/git/repos/${project_id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url, secret }),
+  });
+  if (!res.ok) throw new ApiError(res.status, await res.text());
+  return res.json();
+}
+
+export async function remove_git_repo(project_id: number): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/settings/git/repos/${project_id}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) throw new ApiError(res.status, await res.text());
+}
+
 export interface PromptSection {
   role: string;
   body: string;

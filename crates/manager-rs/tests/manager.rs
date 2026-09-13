@@ -1,6 +1,6 @@
 use std::fs;
 
-use manager_rs::{AGENTS_ROOT, ManagerProcess};
+use manager_rs::manager::{AGENTS_ROOT, Manager};
 
 #[test]
 fn stale_work_tree_is_reclaimed_on_spawn() {
@@ -8,7 +8,7 @@ fn stale_work_tree_is_reclaimed_on_spawn() {
     fs::create_dir_all(stale.join("leftover")).expect("create stale tree");
     fs::write(stale.join("leftover").join("junk.txt"), "old run").expect("junk");
 
-    let manager = ManagerProcess::new();
+    let manager = Manager::new();
     manager.spawn("stale-agent").expect("spawn over stale tree");
 
     assert!(!stale.join("leftover").exists(), "stale content wiped");
@@ -17,7 +17,7 @@ fn stale_work_tree_is_reclaimed_on_spawn() {
 
 #[test]
 fn spawn_run_finish_round_trip() {
-    let manager = ManagerProcess::new();
+    let manager = Manager::new();
     let work_tree = manager.spawn("tester-1").expect("spawn");
     assert!(work_tree.starts_with(AGENTS_ROOT));
 
@@ -40,7 +40,7 @@ fn spawn_run_finish_round_trip() {
 
 #[test]
 fn spawn_is_idempotent_per_agent() {
-    let manager = ManagerProcess::new();
+    let manager = Manager::new();
     let a = manager.spawn("dup").expect("spawn");
     let b = manager.spawn("dup").expect("spawn again");
     assert_eq!(a, b, "same work tree reused");
@@ -50,14 +50,14 @@ fn spawn_is_idempotent_per_agent() {
 
 #[test]
 fn run_unknown_agent_fails() {
-    let manager = ManagerProcess::new();
+    let manager = Manager::new();
     assert!(manager.run("ghost", "echo x").is_err());
     assert!(manager.finish("ghost").is_err());
 }
 
 #[test]
 fn slot_lookup_rejects_every_operation_for_unknown_agent() {
-    let manager = ManagerProcess::new();
+    let manager = Manager::new();
     assert!(manager.push_context("ghost", "hello").is_err());
     assert!(manager.logs("ghost").is_err());
     assert!(manager.snapshot().is_empty());
@@ -65,7 +65,7 @@ fn slot_lookup_rejects_every_operation_for_unknown_agent() {
 
 #[test]
 fn sanitize_maps_special_characters_in_work_tree_name() {
-    let manager = ManagerProcess::new();
+    let manager = Manager::new();
     let work_tree = manager.spawn("bad name/x.y").expect("spawn");
     assert_eq!(
         work_tree,
@@ -78,7 +78,7 @@ fn sanitize_maps_special_characters_in_work_tree_name() {
 
 #[test]
 fn logs_reports_runs_transcript_and_last_result() {
-    let manager = ManagerProcess::new();
+    let manager = Manager::new();
     manager.spawn("logger").expect("spawn");
     manager.push_context("logger", "task notes").expect("push");
     manager.run("logger", "echo hi").expect("run");
@@ -102,7 +102,7 @@ fn logs_reports_runs_transcript_and_last_result() {
 
 #[test]
 fn finish_without_runs_returns_empty_transcript_and_no_result() {
-    let manager = ManagerProcess::new();
+    let manager = Manager::new();
     manager.spawn("quiet").expect("spawn");
 
     let outcome = manager.finish("quiet").expect("finish");

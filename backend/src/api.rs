@@ -87,7 +87,7 @@ pub fn router<T: ChatHandling + ModelSwitch + 'static>(
     runner: Arc<dyn Runner>,
     kanban_store: std::sync::Arc<kanban_rs::Store>,
     usage_store: std::sync::Arc<codex_usage_rs::Store>,
-    manager: Arc<manager_rs::ManagerProcess>,
+    manager: Arc<manager_rs::manager::Manager>,
     model_cfg: Arc<dyn ModelEndpoint>,
 ) -> Router {
     let kanban_store_for_sched = kanban_store.clone();
@@ -103,6 +103,7 @@ pub fn router<T: ChatHandling + ModelSwitch + 'static>(
         .route("/api/models", get(models))
         .with_state(catalog);
     let core = core.merge(models_router);
+    let settings_state = Arc::new(SettingsState::load());
     let manager_router = Router::new()
         .route(
             "/api/manager/agents",
@@ -114,6 +115,7 @@ pub fn router<T: ChatHandling + ModelSwitch + 'static>(
         .with_state(ManagerState {
             manager: manager.clone(),
             store: kanban_store.clone(),
+            settings: settings_state.clone(),
         });
     let core = core.merge(manager_router);
     let machines_router = Router::new()
@@ -140,7 +142,6 @@ pub fn router<T: ChatHandling + ModelSwitch + 'static>(
         .route("/api/auth/claude/status", get(claude_status))
         .route("/api/chat/claude", post(chat_claude))
         .with_state(Arc::new(ClaudeAuth::new(codex_workspace.clone())));
-    let settings_state = Arc::new(SettingsState::load());
     crate::app::say_hi::spawn(settings_state.clone());
     let zai_deps = zai_chat_deps(
         use_case.clone(),
@@ -898,7 +899,7 @@ async fn select_model<T: ModelSwitch>(
     responses((status = 200, body = ChatReply), (status = 500, body = str))
 )]
 async fn chat<T: ChatHandling>(
-    Extension(manager): Extension<Arc<manager_rs::ManagerProcess>>,
+    Extension(manager): Extension<Arc<manager_rs::manager::Manager>>,
     State(use_case): State<Arc<T>>,
     headers: axum::http::HeaderMap,
     Json(req): Json<ChatRequest>,
@@ -1410,7 +1411,7 @@ struct GitRepoReply {
 fn git_repo_reply(repo: &crate::infra::settings::git::GitRepo) -> GitRepoReply {
     GitRepoReply {
         project_id: repo.project_id,
-        url: repo.url.clone(),
+        url: crate::infra::settings::git::redact_url(&repo.url),
         secret_set: repo.secret_set(),
     }
 }
@@ -1442,7 +1443,7 @@ async fn list_git_repos(State(state): State<Arc<SettingsState>>) -> Json<GitRepo
     put,
     path = "/api/settings/git/repos/{project_id}",
     request_body = GitRepoRequest,
-    responses((status = 200, body = GitRepoReply), (status = 500, body = str))
+    responses((status = 200, body = GitRepoReply), (status = 400, body = str), (status = 500, body = str))
 )]
 async fn set_git_repo(
     State(state): State<Arc<SettingsState>>,
@@ -1451,7 +1452,7 @@ async fn set_git_repo(
 ) -> Result<Json<GitRepoReply>, ApiError> {
     state
         .set_git_repo(project_id, &req.url, req.secret.as_deref())
-        .map_err(ApiError::internal)?;
+        .map_err(ApiError::bad_request)?;
     let repo = state
         .git_repo(project_id)
         .ok_or_else(|| ApiError::internal("repo not found after save"))?;
@@ -1478,7 +1479,7 @@ async fn remove_git_repo(
 /// Registers a chat agent with the manager (spawn on demand) and records the
 /// user message in its transcript, so the agent shows in machines/inspect.
 fn note_chat_agent(
-    manager: Arc<manager_rs::ManagerProcess>,
+    manager: Arc<manager_rs::manager::Manager>,
     agent: Option<String>,
     message: &str,
 ) -> impl std::future::Future<Output = ()> + Send {
@@ -1503,7 +1504,7 @@ fn note_chat_agent(
 
 /// Appends the assistant reply to the chat agent's transcript.
 fn note_chat_reply(
-    manager: Arc<manager_rs::ManagerProcess>,
+    manager: Arc<manager_rs::manager::Manager>,
     agent: Option<String>,
     reply: &str,
 ) -> impl std::future::Future<Output = ()> + Send {
@@ -1556,7 +1557,7 @@ async fn gate_image(
     responses((status = 200, body = ChatReply), (status = 500, body = str))
 )]
 async fn chat_zai(
-    Extension(manager): Extension<Arc<manager_rs::ManagerProcess>>,
+    Extension(manager): Extension<Arc<manager_rs::manager::Manager>>,
     Extension(deps): Extension<Arc<ZaiChatDeps>>,
     State(_state): State<Arc<SettingsState>>,
     headers: http::HeaderMap,
@@ -1810,8 +1811,9 @@ type KanbanStore = std::sync::Arc<KanbanState>;
 /// output is stored.
 #[derive(Clone)]
 struct ManagerState {
-    manager: Arc<manager_rs::ManagerProcess>,
+    manager: Arc<manager_rs::manager::Manager>,
     store: std::sync::Arc<kanban_rs::Store>,
+    settings: Arc<SettingsState>,
 }
 
 fn kanban_state(
@@ -3023,7 +3025,7 @@ fn hub_client_sandbox(
     }
 }
 
-fn machine_views(manager: &manager_rs::ManagerProcess) -> Vec<MachineView> {
+fn machine_views(manager: &manager_rs::manager::Manager) -> Vec<MachineView> {
     const GIB: u64 = 1024 * 1024 * 1024;
     let host = host_spec::host_spec();
     let mut views = vec![MachineView {
@@ -3053,7 +3055,7 @@ fn machine_views(manager: &manager_rs::ManagerProcess) -> Vec<MachineView> {
 /// State for the machines routes: agent inventory of this backend.
 #[derive(Clone)]
 struct MachinesState {
-    manager: std::sync::Arc<manager_rs::ManagerProcess>,
+    manager: std::sync::Arc<manager_rs::manager::Manager>,
 }
 
 #[utoipa::path(
@@ -3264,6 +3266,9 @@ pub struct AgentListReply {
 #[derive(Deserialize, utoipa::ToSchema)]
 struct AgentSpawnRequest {
     agent: String,
+    /// Seed the agent work tree from this project's configured git repo
+    /// (only applies on the first spawn, while the work tree is fresh).
+    project_id: Option<i64>,
 }
 
 #[derive(Serialize, utoipa::ToSchema)]
@@ -3298,9 +3303,15 @@ async fn spawn_agent(
     State(state): State<ManagerState>,
     Json(req): Json<AgentSpawnRequest>,
 ) -> Result<Json<AgentSpawnReply>, ApiError> {
+    let repo = req.project_id.and_then(|id| {
+        state.settings.git_repo(id).map(|r| manager_rs::manager::RemoteRepo {
+            url: r.url,
+            token: r.secret,
+        })
+    });
     let work_tree = state
         .manager
-        .spawn(&req.agent)
+        .spawn_with_repo(&req.agent, repo.as_ref())
         .map_err(ApiError::bad_request)?;
     Ok(Json(AgentSpawnReply {
         agent: req.agent,

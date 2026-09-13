@@ -10,6 +10,8 @@ pub const FIELD_SECRET: &str = "secret";
 
 const MAX_URL_LEN: usize = 2048;
 const MAX_SECRET_LEN: usize = 512;
+pub const HTTPS_PREFIX: &str = "https://";
+pub const HTTP_PREFIX: &str = "http://";
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct GitRepo {
@@ -34,7 +36,50 @@ pub fn validate_url(raw: &str) -> Result<(), String> {
     if raw.len() > MAX_URL_LEN {
         return Err(format!("repo url longer than {MAX_URL_LEN} bytes"));
     }
+    let is_http = raw.starts_with(HTTPS_PREFIX) || raw.starts_with(HTTP_PREFIX);
+    if !is_http {
+        return Err("repo url must start with https:// or http://".into());
+    }
+    if has_userinfo(raw) {
+        return Err(
+            "repo url must not embed credentials — put the token in the secret field".into(),
+        );
+    }
     Ok(())
+}
+
+/// `true` when the url carries `user:pass@` before the host — a token pasted
+/// into the url would be echoed back by the settings API and stored on disk.
+fn has_userinfo(url: &str) -> bool {
+    url.find("://")
+        .map(|scheme_end| rest_of(url, scheme_end))
+        .is_some_and(|rest| {
+            rest.find('/')
+                .unwrap_or(rest.len())
+                .checked_sub(1)
+                .and_then(|end| rest.get(..end))
+                .is_some_and(|authority| authority.contains('@'))
+        })
+}
+
+fn rest_of(url: &str, scheme_end: usize) -> &str {
+    url.get(scheme_end + 3..).unwrap_or("")
+}
+
+/// Strips any embedded userinfo — the settings API must never echo a url
+/// that carries a credential.
+pub fn redact_url(url: &str) -> String {
+    url.find("://")
+        .map(|scheme_end| {
+            let rest = rest_of(url, scheme_end);
+            match rest.find('@') {
+                Some(at) if rest.find('/').is_none_or(|s| at < s) => {
+                    format!("{}://{}", &url[..scheme_end], &rest[at + 1..])
+                }
+                _ => url.to_owned(),
+            }
+        })
+        .unwrap_or_else(|| url.to_owned())
 }
 
 pub fn validate_secret(raw: &str) -> Result<(), String> {

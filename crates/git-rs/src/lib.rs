@@ -1,6 +1,7 @@
 //! Git control over a work tree via git2: commit all changes, patch text,
 //! dirty state. Host-side only — the agent sandbox never talks to git remotes.
 
+pub mod clone;
 pub mod commit;
 pub mod diff;
 pub mod error;

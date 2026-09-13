@@ -6,7 +6,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use manager_rs::ManagerProcess;
+use manager_rs::manager::Manager;
 use proto_rs::client;
 use proto_rs::{AgentBrief, ClientMeta, ROLE_MODEL, ROLE_WORKER};
 use tokio::time::sleep;
@@ -25,7 +25,7 @@ pub const CLIENT_RAM_ENV: &str = "SUSUTAKU_CLIENT_RAM_GIB";
 pub struct ClientNode {
     hub_addr: String,
     sandbox: Arc<AgentSandbox>,
-    manager: Arc<ManagerProcess>,
+    manager: Arc<Manager>,
 }
 
 impl ClientNode {
@@ -33,7 +33,7 @@ impl ClientNode {
         Self {
             hub_addr: hub_addr.to_string(),
             sandbox,
-            manager: ManagerProcess::new(),
+            manager: Manager::new(),
         }
     }
 
@@ -84,7 +84,7 @@ impl ClientNode {
 #[derive(Clone)]
 struct NodeHandlers {
     sandbox: Arc<AgentSandbox>,
-    manager: Arc<ManagerProcess>,
+    manager: Arc<Manager>,
 }
 
 impl NodeHandlers {
