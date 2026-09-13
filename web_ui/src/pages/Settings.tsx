@@ -1289,8 +1289,9 @@ function GitReposTab() {
   const [entries, setEntries] = useState<ProjectRepo[]>([]);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
+  const [pane, setPane] = useState("");
 
-  async function reload() {
+  async function reload(): Promise<ProjectRepo[]> {
     setLoading(true);
     setError("");
     try {
@@ -1299,48 +1300,52 @@ function GitReposTab() {
         await Promise.all(workspaces.map((w) => fetch_projects(w.id)))
       ).flat();
       const repos = await fetch_git_repos();
-      setEntries(
-        projects.map((p) => ({
-          project: p,
-          project_id: p.id,
-          url: repos.find((r) => r.project_id === p.id)?.url || "",
-          secret_set: repos.find((r) => r.project_id === p.id)?.secret_set || false,
-        }))
-      );
+      const next = projects.map((p) => ({
+        project: p,
+        project_id: p.id,
+        url: repos.find((r) => r.project_id === p.id)?.url || "",
+        secret_set: repos.find((r) => r.project_id === p.id)?.secret_set || false,
+      }));
+      setEntries(next);
+      return next;
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));
+      return [];
     } finally {
       setLoading(false);
     }
   }
 
   useEffect(() => {
-    void reload();
+    void reload().then((next) => {
+      if (next.length > 0) setPane((cur) => (cur === "" ? String(next[0].project_id) : cur));
+    });
   }, []);
 
+  const items: SideItem[] = entries.map((e) => ({
+    id: String(e.project_id),
+    name: e.project.name,
+    desc: e.url ? e.secret_set ? "repo + token set" : "repo set" : "no repo",
+    icon: <GitBranch size={16} />,
+  }));
+  const active = entries.find((e) => String(e.project_id) === pane);
+
   return (
-    <section aria-label="git repos">
-      <h3>project git repos</h3>
-      <p className="sub">
-        one repo per project — agent work trees are cloned from it on first spawn;
-        tokens are write-only and never sent back
-      </p>
+    <SplitLayout items={items} active={pane} on_pick={setPane} label="git repos">
       {loading && <p className="sub">loading…</p>}
-      {error && <p className="error">{error}</p>}
       {!loading && entries.length === 0 && <p className="sub">no projects yet</p>}
-      {entries.map((entry) => (
-        <GitRepoRow key={entry.project_id} entry={entry} on_saved={reload} />
-      ))}
-    </section>
+      {!loading && error && <p className="error">{error}</p>}
+      {active && <GitRepoForm key={active.project_id} entry={active} on_saved={reload} />}
+    </SplitLayout>
   );
 }
 
-function GitRepoRow({
+function GitRepoForm({
   entry,
   on_saved,
 }: {
   entry: ProjectRepo;
-  on_saved: () => Promise<void>;
+  on_saved: () => Promise<unknown>;
 }) {
   const [url, setUrl] = useState(entry.url);
   const [secret, setSecret] = useState("");
@@ -1365,6 +1370,7 @@ function GitRepoRow({
     setError("");
     try {
       await remove_git_repo(entry.project_id);
+      setUrl("");
       await on_saved();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));
@@ -1372,52 +1378,58 @@ function GitRepoRow({
   }
 
   return (
-    <form
-      className="env-card"
-      aria-label={`git repo for ${entry.project.name}`}
-      onSubmit={(e) => {
-        e.preventDefault();
-        void save(false);
-      }}
-    >
-      <h4>
+    <section className="provider-section" aria-label={`git repo for ${entry.project.name}`}>
+      <h3>
         <GitBranch size={14} /> {entry.project.name}
-        {entry.secret_set && <span className="saved-mark"> token set</span>}
-      </h4>
-      <div className="form-row">
-        <input
-          type="url"
-          value={url}
-          onChange={(e) => setUrl(e.target.value)}
-          placeholder="https://github.com/org/repo.git"
-          autoComplete="off"
-          spellCheck={false}
-        />
-      </div>
-      <div className="form-row">
-        <input
-          type="password"
-          value={secret}
-          onChange={(e) => setSecret(e.target.value)}
-          placeholder={entry.secret_set ? "replace access token…" : "access token (write-only)…"}
-          autoComplete="new-password"
-        />
-      </div>
-      <div className="form-row">
-        <button type="submit">save</button>
-        {entry.secret_set && (
-          <button type="button" onClick={() => void save(true)}>
-            clear token
-          </button>
-        )}
-        {entry.url && (
-          <button type="button" onClick={() => void remove()}>
-            <Trash2 size={14} /> remove
-          </button>
-        )}
-        {status && <span className="saved-mark">{status}</span>}
-        {error && <span className="error">{error}</span>}
-      </div>
-    </form>
+      </h3>
+      <p className="sub">
+        {entry.url
+          ? entry.secret_set
+            ? "repo + token set — token is write-only"
+            : "repo set, no token (public repo or ssh)"
+          : "no repo yet — agent work trees start empty"}
+      </p>
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          void save(false);
+        }}
+      >
+        <div className="form-row">
+          <input
+            type="url"
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            placeholder="https://github.com/org/repo.git"
+            autoComplete="off"
+            spellCheck={false}
+          />
+        </div>
+        <div className="form-row">
+          <input
+            type="password"
+            value={secret}
+            onChange={(e) => setSecret(e.target.value)}
+            placeholder={entry.secret_set ? "replace access token…" : "access token (write-only)…"}
+            autoComplete="new-password"
+          />
+        </div>
+        <div className="form-row">
+          <button type="submit">save</button>
+          {entry.secret_set && (
+            <button type="button" onClick={() => void save(true)}>
+              clear token
+            </button>
+          )}
+          {entry.url && (
+            <button type="button" onClick={() => void remove()}>
+              <Trash2 size={14} /> remove
+            </button>
+          )}
+          {status && <span className="saved-mark">{status}</span>}
+          {error && <span className="error">{error}</span>}
+        </div>
+      </form>
+    </section>
   );
 }
