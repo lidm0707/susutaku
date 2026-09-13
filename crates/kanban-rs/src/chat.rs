@@ -8,6 +8,7 @@ pub struct ChatThreadRow {
     pub agent: String,
     pub title: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, sqlx::FromRow)]
@@ -30,7 +31,10 @@ impl crate::store::Store {
     ) -> Result<ChatThreadRow, StoreError> {
         let row = sqlx::query_as!(
             ChatThreadRow,
-            r#"INSERT INTO chat_threads (agent, title) VALUES ($1, $2) RETURNING id, agent, title, created_at"#,
+            r#"INSERT INTO chat_threads (agent, title) VALUES ($1, $2)
+               RETURNING id, agent, title,
+                         created_at,
+                         created_at AS "updated_at!""#,
             agent,
             title
         )
@@ -42,7 +46,13 @@ impl crate::store::Store {
     pub async fn list_chat_threads(&self) -> Result<Vec<ChatThreadRow>, StoreError> {
         let rows = sqlx::query_as!(
             ChatThreadRow,
-            r#"SELECT id, agent, title, created_at FROM chat_threads ORDER BY id DESC LIMIT 200"#
+            r#"SELECT t.id, t.agent, t.title, t.created_at,
+                      COALESCE(MAX(m.created_at), t.created_at) AS "updated_at!"
+               FROM chat_threads t
+               LEFT JOIN chat_messages m ON m.thread_id = t.id
+               GROUP BY t.id
+               ORDER BY COALESCE(MAX(m.created_at), t.created_at) DESC, t.id DESC
+               LIMIT 200"#
         )
         .fetch_all(&self.pool)
         .await?;

@@ -20,6 +20,10 @@ impl AgentConfigService {
         self.repo.list().await
     }
 
+    pub async fn by_name(&self, name: &str) -> Result<Option<AgentConfigRow>, StoreError> {
+        self.repo.by_name(name).await
+    }
+
     pub async fn create(&self, cfg: AgentConfigDraft) -> Result<AgentConfigRow, StoreError> {
         self.repo.create(cfg).await
     }

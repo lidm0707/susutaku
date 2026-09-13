@@ -59,7 +59,17 @@ const OUTPUT_TEMPLATES: Record<string, string> = {
 
 const OUTPUT_TYPES = Object.keys(OUTPUT_TEMPLATES);
 
-const EMPTY = { name: "", model: "", persona: "", prompt: "", output: "", receive_images: true };
+const TOOL_NAMES = ["search", "fetch", "shell", "board"] as const;
+
+const EMPTY = {
+  name: "",
+  model: "",
+  persona: "",
+  prompt: "",
+  output: "",
+  allowed_tools: [] as string[],
+  receive_images: true,
+};
 
 type Fields = typeof EMPTY;
 
@@ -133,7 +143,7 @@ export default function AgentSettings() {
     setError(err instanceof Error ? err.message : String(err));
   }
 
-  function set(k: keyof Fields, v: string | boolean) {
+  function set(k: keyof Fields, v: string | boolean | string[]) {
     setFields({ ...fields, [k]: v });
   }
 
@@ -235,6 +245,7 @@ export default function AgentSettings() {
       persona: a.persona || "",
       prompt: a.prompt || "",
       output: a.output || "",
+      allowed_tools: a.allowed_tools ?? [],
       receive_images: a.receive_images !== false,
     });
     if (typeof a.id === "number") load_agent_skills(a.id);
@@ -312,6 +323,7 @@ export default function AgentSettings() {
       persona: fields.persona,
       prompt: fields.prompt,
       output: fields.output,
+      allowed_tools: fields.allowed_tools,
       receive_images: fields.receive_images,
     };
     setError("");
@@ -517,15 +529,39 @@ export default function AgentSettings() {
                 placeholder="what the output should look like…"
               />
             </Field>
+            <Field label="tools" icon={<Terminal size={12} />}>
+              <div role="group" aria-label="allowed tools" className="agent-tool-list">
+                {TOOL_NAMES.map((t) => (
+                  <label key={t} className="agent-tool-toggle">
+                    <input
+                      type="checkbox"
+                      checked={fields.allowed_tools.includes(t)}
+                      onChange={(e) =>
+                        set(
+                          "allowed_tools",
+                          e.target.checked
+                            ? [...fields.allowed_tools, t]
+                            : fields.allowed_tools.filter((x) => x !== t),
+                        )
+                      }
+                    />
+                    {" "}{t}
+                  </label>
+                ))}
+              </div>
+              <p className="agent-tool-hint">none checked = all tools allowed</p>
+            </Field>
             <Field label="images" icon={<Sparkles size={12} />}>
-              <label className="agent-images-toggle">
-                <input
-                  type="checkbox"
-                  checked={fields.receive_images}
-                  onChange={(e) => set("receive_images", e.target.checked)}
-                />
-                {" "}agent may receive images (screenshots)
-              </label>
+              <div className="agent-tool-list">
+                <label className="agent-tool-toggle">
+                  <input
+                    type="checkbox"
+                    checked={fields.receive_images}
+                    onChange={(e) => set("receive_images", e.target.checked)}
+                  />
+                  receive images (screenshots)
+                </label>
+              </div>
             </Field>
             <Field label="skills" icon={<Sparkles size={12} />}>
               {typeof selected === "number" && (

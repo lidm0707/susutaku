@@ -66,6 +66,8 @@ export interface Agent {
   persona: string;
   prompt: string;
   output: string;
+  /// Tool allow-list (search|fetch|shell|board); empty/omitted = all tools.
+  allowed_tools?: string[];
   /// false = the agent must never receive images (screenshots).
   receive_images?: boolean;
 }
@@ -622,6 +624,7 @@ export interface ChatThreadRow {
   agent: string;
   title: string;
   created_at: string;
+  updated_at: string;
 }
 
 export interface ChatMessageRow {

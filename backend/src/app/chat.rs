@@ -200,6 +200,10 @@ impl ChatUseCase {
 }
 
 impl ChatHandling for ChatUseCase {
+    fn inference(&self) -> Option<Arc<dyn Inference>> {
+        Some(self.engine.clone())
+    }
+
     /// Zed-style agentic loop: the model may call tools before answering.
     async fn execute(&self, cmd: ChatCmd) -> Result<ChatOutcome, String> {
         let allow_tools = cmd.mode == SearchMode::Auto;

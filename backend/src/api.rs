@@ -34,7 +34,8 @@ use crate::infra::zai::chat::ZaiEngine;
 use crate::infra::zai::settings::{SettingsState, ZaiSettings};
 use crate::port::inbound::ChatHandling;
 use crate::port::outbound::{
-    AgentConfigRepo, BoardOps, ChatMemory, Fetcher, ModelEndpoint, ModelSwitch, Runner, Searcher,
+    AgentConfigRepo, BoardOps, ChatMemory, Fetcher, Inference, ModelEndpoint, ModelSwitch, Runner,
+    Searcher,
 };
 use prompt_sys::{MAX_PROMPT_CHARS, PromptBuilder, Role as PromptRole};
 use proto_rs::AgentBrief;
@@ -208,18 +209,18 @@ pub fn router<T: ChatHandling + ModelSwitch + 'static>(
     let quota = Router::new()
         .route("/api/quota", get(quota_board))
         .with_state((settings_state.clone(), usage_store));
+    let sched = std::sync::Arc::new(crate::app::schedule_work::spawn(
+        std::sync::Arc::new(crate::app::kanban::build(kanban_store_for_sched)),
+        use_case.inference(),
+    ));
+    let engine = use_case.inference();
     core.merge(auth)
         .merge(claude)
         .merge(settings)
         .merge(local_settings_router)
         .merge(usage)
         .merge(quota)
-        .merge(kanban_router(kanban_state(
-            kanban_store,
-            std::sync::Arc::new(crate::app::schedule_work::spawn(std::sync::Arc::new(
-                crate::app::kanban::build(kanban_store_for_sched),
-            ))),
-        )))
+        .merge(kanban_router(kanban_state(kanban_store, sched, engine)))
         .layer(tower_http::trace::TraceLayer::new_for_http())
         .layer(Extension(manager))
 }
@@ -1800,6 +1801,7 @@ struct KanbanState {
     app: KanbanApp,
     store: std::sync::Arc<kanban_rs::Store>,
     sched: std::sync::Arc<crate::app::schedule_work::ScheduleHandle>,
+    engine: Option<std::sync::Arc<dyn Inference>>,
 }
 
 type KanbanStore = std::sync::Arc<KanbanState>;
@@ -1815,11 +1817,13 @@ struct ManagerState {
 fn kanban_state(
     store: std::sync::Arc<kanban_rs::Store>,
     sched: std::sync::Arc<crate::app::schedule_work::ScheduleHandle>,
+    engine: Option<std::sync::Arc<dyn Inference>>,
 ) -> KanbanStore {
     std::sync::Arc::new(KanbanState {
         app: crate::app::kanban::build(store.clone()),
         store,
         sched,
+        engine,
     })
 }
 
@@ -2122,9 +2126,10 @@ async fn test_pipeline(
         .map(|Json(req)| req.input)
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| TEST_SEED_DEFAULT.to_owned());
-    let record = crate::app::pipeline_run::test_pipeline(&state.app, id, &input)
-        .await
-        .map_err(kanban_err)?;
+    let record =
+        crate::app::pipeline_run::test_pipeline(&state.app, state.engine.clone(), id, &input)
+            .await
+            .map_err(kanban_err)?;
     Ok(Json(record))
 }
 
@@ -2162,7 +2167,7 @@ async fn run_card(
     user: AuthUser,
 ) -> Result<Json<crate::app::pipeline_run::RunRecord>, ApiError> {
     require_edit(&user)?;
-    let record = crate::app::pipeline_run::run_card_pipeline(&state.app, id)
+    let record = crate::app::pipeline_run::run_card_pipeline(&state.app, state.engine.clone(), id)
         .await
         .map_err(kanban_err)?;
     record_activity(

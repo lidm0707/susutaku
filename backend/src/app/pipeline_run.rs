@@ -1,17 +1,20 @@
 //! Executes a card's attached pipeline: topological stage walk over the spec,
 //! per-stage log, result merged into the card's agent state.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
+use std::sync::Arc;
 
 use kanban_rs::resource::UpsertResource;
 use kanban_rs::store::{AgentState, CardRow, StoreError};
-use kanban_rs::{COLUMN_DOING, COLUMN_DONE, COLUMN_FAILED};
+use kanban_rs::{AgentConfigRow, COLUMN_DOING, COLUMN_DONE, COLUMN_FAILED};
 use piplines::agent::{AgentNode, META_AGENT};
 use piplines::graph::{NodeDef, PipelineSpec};
 use piplines::payload::{Payload, PayloadKind};
+use susutaku_mlx::tok::TokKind;
+
+use crate::port::outbound::Inference;
 use piplines::stage::Stage;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use utoipa::ToSchema;
 
 use super::kanban::KanbanApp;
@@ -30,6 +33,15 @@ pub const STAGE_NOTE_PASSTHROUGH: &str = "payload passed through";
 pub const STAGE_NOTE_OUTPUT: &str = "captured pipeline output";
 pub const STAGE_NOTE_RESOURCE: &str = "stored resource: ";
 pub const TEXT_SEP: &str = "\n\n";
+pub const INFER_MAX_TOKENS: usize = 1024;
+pub const NOTE_NO_ENGINE: &str = "model_infer: no inference engine configured";
+pub const NOTE_INFER_ERR: &str = "model_infer: engine rejected the job: ";
+pub const NOTE_INFER_DROP: &str = "model_infer: engine dropped the job";
+pub const NOTE_INFER_DONE: &str = "model replied";
+pub const PROMPT_PERSONA: &str = "persona: ";
+pub const PROMPT_INSTRUCTION: &str = "instruction: ";
+pub const PROMPT_OUTPUT: &str = "output format: ";
+pub const PROMPT_INPUT: &str = "\n\ninput:\n";
 pub const NODE_PREPARE: &str = "pipeline";
 pub const STAGE_PREPARE: &str = "prepare";
 pub const PIPELINE_ID_NONE: i64 = 0;
@@ -67,7 +79,11 @@ pub struct RunOutcome {
     pub resources: Vec<(String, String)>,
 }
 
-pub async fn run_card_pipeline(app: &KanbanApp, card_id: i64) -> Result<RunRecord, StoreError> {
+pub async fn run_card_pipeline(
+    app: &KanbanApp,
+    engine: Option<Arc<dyn Inference>>,
+    card_id: i64,
+) -> Result<RunRecord, StoreError> {
     let card = app
         .cards
         .get(card_id)
@@ -76,7 +92,15 @@ pub async fn run_card_pipeline(app: &KanbanApp, card_id: i64) -> Result<RunRecor
     let outcome = match load_spec(app, &card).await {
         Ok((spec, pipeline_id, pipeline_name)) => {
             move_to_column(app, card_id, &card.column_id, COLUMN_DOING).await?;
-            execute(&spec, seed_payload(&card), pipeline_id, &pipeline_name).await
+            execute(
+                app,
+                engine.as_ref(),
+                &spec,
+                seed_payload(&card),
+                pipeline_id,
+                &pipeline_name,
+            )
+            .await
         }
         // The run cannot start: still record a failed run so the card moves
         // to the failed column instead of silently staying put.
@@ -145,6 +169,7 @@ async fn move_to_column(
 /// resource writes, no agent-state changes. Returns the run record only.
 pub async fn test_pipeline(
     app: &KanbanApp,
+    engine: Option<Arc<dyn Inference>>,
     pipeline_id: i64,
     seed_text: &str,
 ) -> Result<RunRecord, StoreError> {
@@ -159,7 +184,15 @@ pub async fn test_pipeline(
         serde_json::from_str(&pipeline.spec).map_err(|e| StoreError::BadSpec(e.to_string()))?;
     spec.validate()
         .map_err(|e| StoreError::BadSpec(e.to_string()))?;
-    let outcome = execute(&spec, Payload::text(seed_text), pipeline_id, &pipeline.name).await;
+    let outcome = execute(
+        app,
+        engine.as_ref(),
+        &spec,
+        Payload::text(seed_text),
+        pipeline_id,
+        &pipeline.name,
+    )
+    .await;
     Ok(outcome.record)
 }
 
@@ -172,7 +205,14 @@ fn seed_payload(card: &CardRow) -> Payload {
     Payload::text(text)
 }
 
-async fn execute(spec: &PipelineSpec, seed: Payload, pipeline_id: i64, name: &str) -> RunOutcome {
+async fn execute(
+    app: &KanbanApp,
+    engine: Option<&Arc<dyn Inference>>,
+    spec: &PipelineSpec,
+    seed: Payload,
+    pipeline_id: i64,
+    name: &str,
+) -> RunOutcome {
     let mut stages: Vec<RunStage> = Vec::new();
     let mut failed = false;
     // Output of each completed node, routed to consumers via links.
@@ -180,6 +220,7 @@ async fn execute(spec: &PipelineSpec, seed: Payload, pipeline_id: i64, name: &st
     let mut resources: Vec<(String, String)> = Vec::new();
     let mut final_output: Option<Payload> = None;
     let mut agent_name = RUNNER_NAME.to_owned();
+    let mut agent_cfg: Option<AgentConfigRow> = None;
     for node in topo_order(spec) {
         let inputs = inputs_for(spec, node, &seed, &done);
         let Some(payload) = inputs else {
@@ -190,13 +231,16 @@ async fn execute(spec: &PipelineSpec, seed: Payload, pipeline_id: i64, name: &st
             stages.push(skipped(node));
             continue;
         }
-        match apply_node(node, payload).await {
+        match apply_node(node, payload, engine, agent_cfg.as_ref()).await {
             Ok(next) => {
                 if let Some(res) = next.resource {
                     resources.push(res);
                 }
-                if let Some(agent) = next.payload.get_meta(META_AGENT) {
+                if let Some(agent) = next.payload.get_meta(META_AGENT)
+                    && agent_name != agent
+                {
                     agent_name = agent.to_owned();
+                    agent_cfg = app.agents.by_name(agent).await.ok().flatten();
                 }
                 final_output = Some(next.payload.clone());
                 done.insert(node.id.as_str(), next.payload);
@@ -293,7 +337,12 @@ impl NodeResult {
     }
 }
 
-async fn apply_node(node: &NodeDef, payload: Payload) -> Result<NodeResult, String> {
+async fn apply_node(
+    node: &NodeDef,
+    payload: Payload,
+    engine: Option<&Arc<dyn Inference>>,
+    agent: Option<&AgentConfigRow>,
+) -> Result<NodeResult, String> {
     match node.stage.as_str() {
         piplines::graph::STAGE_INGEST => Ok(NodeResult::passthrough(
             payload,
@@ -312,6 +361,7 @@ async fn apply_node(node: &NodeDef, payload: Payload) -> Result<NodeResult, Stri
         piplines::graph::STAGE_SEARCH => search_node(node, payload).await,
         piplines::graph::STAGE_REF_IMAGE => ref_image_node(node, payload).await,
         piplines::graph::STAGE_TRANSFORM => transform(node, payload),
+        piplines::graph::STAGE_MODEL_INFER => infer_node(payload, engine, agent).await,
         piplines::graph::STAGE_OUTPUT_RESOURCE => output_resource(node, payload),
         piplines::graph::STAGE_RENDER => Ok(NodeResult::passthrough(
             payload,
@@ -324,6 +374,51 @@ async fn apply_node(node: &NodeDef, payload: Payload) -> Result<NodeResult, Stri
 }
 
 pub const PARAM_NAME: &str = "name";
+
+/// Calls the model with the resolved agent's settings (persona, instruction,
+/// output format) prepended to the payload text; the reply replaces the text.
+async fn infer_node(
+    payload: Payload,
+    engine: Option<&Arc<dyn Inference>>,
+    agent: Option<&AgentConfigRow>,
+) -> Result<NodeResult, String> {
+    let Some(engine) = engine else {
+        return Err(NOTE_NO_ENGINE.to_owned());
+    };
+    let mut prompt = String::new();
+    if let Some(cfg) = agent {
+        for (header, body) in [
+            (PROMPT_PERSONA, cfg.persona.as_str()),
+            (PROMPT_INSTRUCTION, cfg.prompt.as_str()),
+            (PROMPT_OUTPUT, cfg.output.as_str()),
+        ] {
+            if !body.is_empty() {
+                prompt.push_str(header);
+                prompt.push_str(body);
+                prompt.push('\n');
+            }
+        }
+    }
+    prompt.push_str(PROMPT_INPUT);
+    prompt.push_str(payload.as_str().unwrap_or_default());
+    let rx = engine
+        .submit(prompt, INFER_MAX_TOKENS, TokKind::Normal, false)
+        .map_err(|e| format!("{NOTE_INFER_ERR}{e}"))?;
+    let reply = rx
+        .await
+        .map_err(|_| NOTE_INFER_DROP.to_string())?
+        .map_err(|e| format!("{NOTE_INFER_ERR}{e}"))?;
+    let chars = reply.text.chars().count();
+    let agent_meta = payload.get_meta(META_AGENT).map(str::to_owned);
+    let mut next = Payload::text(reply.text);
+    if let Some(name) = agent_meta {
+        next.set_meta(META_AGENT, name);
+    }
+    Ok(NodeResult::passthrough(
+        next,
+        format!("{NOTE_INFER_DONE} {chars} chars"),
+    ))
+}
 
 fn output_resource(node: &NodeDef, payload: Payload) -> Result<NodeResult, String> {
     let name = node

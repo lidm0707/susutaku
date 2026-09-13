@@ -64,7 +64,7 @@ async fn unscheduled_cards_are_ignored() {
     // no pipeline lookups, no agent writes
     let app = app(cards, MockPipelineRepo::new());
     let handle = ScheduleHandle::new();
-    schedule_work::run_once(&app, &handle).await;
+    schedule_work::run_once(&app, None, &handle).await;
     assert!(handle.entries().is_empty());
 }
 
@@ -76,7 +76,7 @@ async fn scheduled_card_gets_a_next_run() {
         .returning(|_| Ok(vec![card_row(Some(EVERY_MINUTE))]));
     let app = app(cards, MockPipelineRepo::new());
     let handle = ScheduleHandle::new();
-    schedule_work::run_once(&app, &handle).await;
+    schedule_work::run_once(&app, None, &handle).await;
     let entries = handle.entries();
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].card_id, CARD_ID);
@@ -92,7 +92,7 @@ async fn bad_cron_is_dropped() {
         .returning(|_| Ok(vec![card_row(Some("not a cron"))]));
     let app = app(cards, MockPipelineRepo::new());
     let handle = ScheduleHandle::new();
-    schedule_work::run_once(&app, &handle).await;
+    schedule_work::run_once(&app, None, &handle).await;
     assert!(handle.entries().is_empty());
 }
 
@@ -105,11 +105,11 @@ async fn removed_cron_is_forgotten() {
         .times(1)
         .returning(|_| Ok(vec![card_row(Some(EVERY_MINUTE))]));
     let app_cron = app(with_cron, MockPipelineRepo::new());
-    schedule_work::run_once(&app_cron, &handle).await;
+    schedule_work::run_once(&app_cron, None, &handle).await;
     assert_eq!(handle.entries().len(), 1);
     // cron removed -> entry pruned on the next pass
     let app = app(empty_cards(), MockPipelineRepo::new());
-    schedule_work::run_once(&app, &handle).await;
+    schedule_work::run_once(&app, None, &handle).await;
     assert!(handle.entries().is_empty());
 }
 

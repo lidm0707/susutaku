@@ -10,6 +10,7 @@ use utoipa::ToSchema;
 use work::services::cron::Cron;
 
 use super::kanban::KanbanApp;
+use crate::port::outbound::Inference;
 
 pub const TICK_SECS: u64 = 30;
 
@@ -59,19 +60,23 @@ impl ScheduleHandle {
 pub const SCHEDULE_LOCK: &str = "schedule state lock";
 
 /// One scheduler pass without spawning a task; used by tests and spawn.
-pub async fn run_once(app: &KanbanApp, handle: &ScheduleHandle) {
-    run_due(app, &handle.state).await;
+pub async fn run_once(
+    app: &KanbanApp,
+    engine: Option<&Arc<dyn Inference>>,
+    handle: &ScheduleHandle,
+) {
+    run_due(app, engine, &handle.state).await;
 }
 
 /// Spawns the background ticker; returns the shared inspection handle.
-pub fn spawn(app: Arc<KanbanApp>) -> ScheduleHandle {
+pub fn spawn(app: Arc<KanbanApp>, engine: Option<Arc<dyn Inference>>) -> ScheduleHandle {
     let handle = ScheduleHandle::new();
     let state = Arc::clone(&handle.state);
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(Duration::from_secs(TICK_SECS));
         loop {
             tick.tick().await;
-            run_due(&app, &state).await;
+            run_due(&app, engine.as_ref(), &state).await;
         }
     });
     handle
@@ -85,7 +90,7 @@ pub fn unix_now() -> u64 {
 }
 
 /// Due decisions keep the lock scope tiny; pipeline runs happen unlocked.
-async fn run_due(app: &KanbanApp, state: &Arc<RwLock<State>>) {
+async fn run_due(app: &KanbanApp, engine: Option<&Arc<dyn Inference>>, state: &Arc<RwLock<State>>) {
     let now = unix_now();
     let cards = app.cards.list(None).await.unwrap_or_default();
     let scheduled: HashSet<i64> = cards
@@ -113,7 +118,7 @@ async fn run_due(app: &KanbanApp, state: &Arc<RwLock<State>>) {
         if now < due {
             continue;
         }
-        let next = if super::pipeline_run::run_card_pipeline(app, id)
+        let next = if super::pipeline_run::run_card_pipeline(app, engine.cloned(), id)
             .await
             .is_ok()
         {

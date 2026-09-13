@@ -199,12 +199,20 @@ fn expect_run_moves_todo_to(cards: &mut MockCardRepo, target: &str) {
 }
 
 fn runner_app(cards: MockCardRepo, pipelines: MockPipelineRepo) -> KanbanApp {
+    runner_app_with(cards, pipelines, MockAgentConfigRepo::new())
+}
+
+fn runner_app_with(
+    cards: MockCardRepo,
+    pipelines: MockPipelineRepo,
+    agents: MockAgentConfigRepo,
+) -> KanbanApp {
     KanbanApp::new(
         Arc::new(cards),
         Arc::new(MockCommentRepo::new()),
         Arc::new(pipelines),
         Arc::new(MockResourceRepo::new()),
-        Arc::new(MockAgentConfigRepo::new()),
+        Arc::new(agents),
         Arc::new(MockSkillRepo::new()),
         Arc::new(MockWorkspaceRepo::new()),
         Arc::new(MockProjectRepo::new()),
@@ -236,7 +244,7 @@ async fn run_card_pipeline_records_ok_and_persists_state() {
         Ok(vec![row])
     });
 
-    let record = pipeline_run::run_card_pipeline(&runner_app(cards, pipelines), CARD_ID)
+    let record = pipeline_run::run_card_pipeline(&runner_app(cards, pipelines), None, CARD_ID)
         .await
         .expect("ran");
     assert_eq!(record.status, pipeline_run::StageStatus::Ok);
@@ -261,10 +269,13 @@ async fn run_card_pipeline_agent_node_sets_agent_name() {
         row.spec = SPEC_AGENT.into();
         Ok(vec![row])
     });
+    let mut agents = MockAgentConfigRepo::new();
+    agents.expect_by_name().returning(|_| Ok(None));
 
-    let record = pipeline_run::run_card_pipeline(&runner_app(cards, pipelines), CARD_ID)
-        .await
-        .expect("ran");
+    let record =
+        pipeline_run::run_card_pipeline(&runner_app_with(cards, pipelines, agents), None, CARD_ID)
+            .await
+            .expect("ran");
     assert_eq!(record.status, pipeline_run::StageStatus::Ok);
 }
 
@@ -287,7 +298,7 @@ async fn run_card_pipeline_unwired_stage_fails_run_with_note() {
         Ok(vec![row])
     });
 
-    let record = pipeline_run::run_card_pipeline(&runner_app(cards, pipelines), CARD_ID)
+    let record = pipeline_run::run_card_pipeline(&runner_app(cards, pipelines), None, CARD_ID)
         .await
         .expect("run record persisted");
     assert_eq!(record.status, pipeline_run::StageStatus::Failed);
@@ -341,7 +352,7 @@ async fn run_card_pipeline_ref_image_loads_file_into_payload() {
         Ok(vec![row])
     });
 
-    let record = pipeline_run::run_card_pipeline(&runner_app(cards, pipelines), CARD_ID)
+    let record = pipeline_run::run_card_pipeline(&runner_app(cards, pipelines), None, CARD_ID)
         .await
         .expect("ran");
     assert_eq!(record.status, pipeline_run::StageStatus::Ok);
@@ -374,7 +385,7 @@ async fn run_card_pipeline_without_pipeline_persists_failed_run() {
         .returning(|_, _| Ok(()));
 
     let record =
-        pipeline_run::run_card_pipeline(&runner_app(cards, MockPipelineRepo::new()), CARD_ID)
+        pipeline_run::run_card_pipeline(&runner_app(cards, MockPipelineRepo::new()), None, CARD_ID)
             .await
             .expect("failed run persisted");
     assert_eq!(record.status, pipeline_run::StageStatus::Failed);
