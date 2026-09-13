@@ -7,8 +7,8 @@ license.workspace = true
 [dependencies]
 chrono = "0.4"
 chrono-tz = "0.10"
-axum = { version = "0.8", features = ["multipart"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "fs"] }
+axum = { version = "0.8", features = ["multipart", "ws"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "fs", "sync"] }
 tower-http = { version = "0.6", features = ["cors", "fs", "trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -21,6 +21,7 @@ proto-rs = { workspace = true }
 susutaku-mlx = { workspace = true }
 core-agent = { workspace = true }
 ureq = { workspace = true }
+fastembed = "5"
 codex-cli = { path = "../crates/agent_3th_cli/codex_cli" }
 claude-cli = { path = "../crates/agent_3th_cli/claude_cli" }
 zai-api = { path = "../crates/cloud_model_api/zai_api" }

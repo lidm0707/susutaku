@@ -33,7 +33,16 @@ export interface ChatReply {
   searched?: boolean;
   tokenizer?: string;
   status?: string;
+  tools?: ChatToolUse[];
+  memories?: string[];
   [key: string]: unknown;
+}
+
+export interface ChatToolUse {
+  tool: string;
+  input?: string;
+  ok?: boolean;
+  summary?: string;
 }
 
 export interface Agent {
@@ -227,6 +236,43 @@ export function save_token(token: string): void {
 
 export function clear_token(): void {
   localStorage.removeItem(TOKEN_KEY);
+}
+
+export interface BoardEvent {
+  kind: "card" | "pipeline" | "cron";
+}
+
+const WS_RECONNECT_MS = 5000;
+
+/// Subscribe to backend board events over websocket. Returns an unsubscribe
+/// function; reconnects automatically until unsubscribed.
+export function connect_events(on_event: (e: BoardEvent) => void): () => void {
+  let ws: WebSocket | null = null;
+  let closed = false;
+  let retry: number | null = null;
+  const connect = () => {
+    const ws_base = API_BASE
+      ? API_BASE.replace(/^http/, "ws")
+      : `${location.protocol === "https:" ? "wss" : "ws"}//${location.host}`;
+    const token = encodeURIComponent(get_token());
+    ws = new WebSocket(`${ws_base}/api/events?token=${token}`);
+    ws.onmessage = (m) => {
+      try {
+        on_event(JSON.parse(m.data));
+      } catch {
+        // ignore malformed frames
+      }
+    };
+    ws.onclose = () => {
+      if (!closed) retry = window.setTimeout(connect, WS_RECONNECT_MS);
+    };
+  };
+  connect();
+  return () => {
+    closed = true;
+    if (retry != null) window.clearTimeout(retry);
+    ws?.close();
+  };
 }
 
 async function api(path: string, opts: RequestInit = {}, silent = false): Promise<Response> {

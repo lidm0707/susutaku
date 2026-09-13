@@ -61,7 +61,7 @@ export function Modal({ open, title, on_close, children, wide, className, docked
   return (
     <Portal>
     <div
-      className={docked || docked_left ? "overlay docked docked-left" : "overlay"}
+      className={docked ? "overlay docked" : docked_left ? "overlay docked docked-left" : "overlay"}
       onMouseDown={(e) => e.target === e.currentTarget && on_close()}
     >
       <div

@@ -6,6 +6,7 @@ use axum::{
     Json, Router,
     extract::{
         DefaultBodyLimit, Extension, FromRequestParts, Multipart, Path, Query, Request, State,
+        ws::{Message, WebSocketUpgrade},
     },
     http::{self, StatusCode, request::Parts},
     response::{IntoResponse, Response},
@@ -18,7 +19,7 @@ use crate::app::kanban::{CardView, KanbanApp};
 use crate::app::{BoardService, ChatUseCase};
 use crate::domain::{
     AgentConfigDraft, CardMove, CardPatch, ChatCmd, NewCard, NewPipeline, NewProject, NewWorkspace,
-    SearchMode, ToolSet,
+    SearchMode, TOOL_KIND_NAMES, ToolSet, ToolUse,
 };
 use crate::infra::claude_auth::{ClaudeAuth, LoginStatus as ClaudeLoginStatus};
 use crate::infra::claude_chat;
@@ -257,6 +258,7 @@ fn kanban_router(state: KanbanStore) -> Router {
         .route("/api/kanban/cards/{id}/schedule", put(set_card_schedule))
         .route("/api/cronjobs", get(list_cronjobs))
         .route("/api/activity", get(list_activity))
+        .route("/api/events", get(events_ws))
         .route(
             "/api/attachments",
             post(upload_attachment).layer(DefaultBodyLimit::max(ATTACHMENT_MAX_BYTES)),
@@ -677,10 +679,13 @@ async fn chat<T: ChatHandling>(
         .await
         .map_err(ApiError::internal)?;
     note_chat_reply(manager, req.agent, &outcome.text).await;
+    let tools: Vec<ToolUseDto> = outcome.tools.iter().map(ToolUseDto::from_use).collect();
     Ok(Json(ChatReply {
         model: outcome.model,
         reply: outcome.text,
         searched: outcome.searched,
+        tools,
+        memories: outcome.memories,
         tokenizer: tok.as_str(),
         prompt_tokens: outcome.stats.prompt_tokens,
         prompt_tps: outcome.stats.prompt_tps(),
@@ -764,6 +769,8 @@ async fn chat_codex(
         model,
         reply,
         searched: false,
+        tools: Vec::new(),
+        memories: Vec::new(),
         tokenizer: TOKENIZER,
         prompt_tokens: 0,
         prompt_tps: ZERO_TPS,
@@ -1332,11 +1339,14 @@ async fn chat_zai(
             }
         });
     }
+    let tools: Vec<ToolUseDto> = outcome.tools.iter().map(ToolUseDto::from_use).collect();
     const ZERO_TPS: f64 = 0.0;
     Ok(Json(ChatReply {
         model: outcome.model,
         reply: outcome.text,
         searched: outcome.searched,
+        tools,
+        memories: outcome.memories,
         tokenizer: TOKENIZER,
         prompt_tokens: outcome.stats.prompt_tokens,
         prompt_tps: ZERO_TPS,
@@ -1471,6 +1481,8 @@ async fn chat_claude(
         model: Some(MODEL.to_string()),
         reply,
         searched: false,
+        tools: Vec::new(),
+        memories: Vec::new(),
         tokenizer: TOKENIZER,
         prompt_tokens: 0,
         prompt_tps: ZERO_TPS,
@@ -1683,6 +1695,7 @@ async fn create_card(
         format!("created task \"{}\"", row.title),
     )
     .await;
+    crate::app::events::publish(crate::app::events::EventKind::Card);
     Ok(Json(CardDto::from(CardView {
         card: row,
         pipeline_name: None,
@@ -1718,6 +1731,7 @@ async fn move_card(
         format!("moved task {id} to {}", req.column_id),
     )
     .await;
+    crate::app::events::publish(crate::app::events::EventKind::Card);
     Ok("ok")
 }
 
@@ -1729,6 +1743,7 @@ async fn remove_card(
 ) -> Result<&'static str, ApiError> {
     require_edit(&user)?;
     state.app.cards.remove(id).await.map_err(kanban_err)?;
+    crate::app::events::publish(crate::app::events::EventKind::Card);
     Ok("ok")
 }
 
@@ -1776,6 +1791,7 @@ async fn set_agent(
         )
         .await
         .map_err(kanban_err)?;
+    crate::app::events::publish(crate::app::events::EventKind::Card);
     Ok("ok")
 }
 
@@ -1852,6 +1868,7 @@ async fn set_card_pipeline(
         .set_pipeline(id, req.pipeline_id)
         .await
         .map_err(kanban_err)?;
+    crate::app::events::publish(crate::app::events::EventKind::Card);
     Ok("ok")
 }
 
@@ -1875,6 +1892,7 @@ async fn run_card(
         format!("started pipeline run for task {id}"),
     )
     .await;
+    crate::app::events::publish(crate::app::events::EventKind::Card);
     Ok(Json(record))
 }
 
@@ -1901,6 +1919,7 @@ async fn set_card_schedule(
         .set_cron(id, req.cron.clone())
         .await
         .map_err(kanban_err)?;
+    crate::app::events::publish(crate::app::events::EventKind::Cron);
     Ok("ok")
 }
 
@@ -1977,6 +1996,7 @@ async fn update_card(
         })
         .await
         .map_err(kanban_err)?;
+    crate::app::events::publish(crate::app::events::EventKind::Card);
     let view = state
         .app
         .card_view(id)
@@ -2062,6 +2082,7 @@ async fn create_pipeline(
         format!("created pipeline {}", row.name),
     )
     .await;
+    crate::app::events::publish(crate::app::events::EventKind::Pipeline);
     let spec = serde_json::from_str(&row.spec).unwrap_or(serde_json::Value::Null);
     Ok(Json(PipelineDto {
         id: row.id,
@@ -2102,6 +2123,7 @@ async fn update_pipeline(
         format!("updated pipeline {}", req.name),
     )
     .await;
+    crate::app::events::publish(crate::app::events::EventKind::Pipeline);
     Ok("ok")
 }
 
@@ -2114,6 +2136,7 @@ async fn remove_pipeline(
     require_edit(&user)?;
     state.app.pipelines.remove(id).await.map_err(cfg_err)?;
     record_activity(&state.store, "pipeline", format!("removed pipeline {id}")).await;
+    crate::app::events::publish(crate::app::events::EventKind::Pipeline);
     Ok("ok")
 }
 
@@ -2443,6 +2466,51 @@ async fn set_agent_output_status_handler(
     )
     .await;
     Ok("ok")
+}
+
+#[derive(Deserialize)]
+struct EventTokenQuery {
+    token: Option<String>,
+}
+
+async fn events_ws(
+    State(state): State<KanbanStore>,
+    axum::extract::Query(q): axum::extract::Query<EventTokenQuery>,
+    ws: WebSocketUpgrade,
+) -> Response {
+    let token = q.token.unwrap_or_default();
+    let authorized = state
+        .store
+        .auth(&token)
+        .await
+        .map(|u| u.is_some())
+        .unwrap_or(false);
+    if !authorized {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let mut rx = crate::app::events::subscribe();
+    ws.on_upgrade(move |mut socket| async move {
+        loop {
+            tokio::select! {
+                ev = rx.recv() => {
+                    if let Ok(ev) = ev {
+                        let Ok(text) = serde_json::to_string(&ev) else { continue };
+                        if socket.send(Message::text(text)).await.is_err() {
+                            break;
+                        }
+                    }
+                }
+                msg = socket.recv() => {
+                    if matches!(
+                        msg,
+                        None | Some(Err(_)) | Some(Ok(Message::Close(_)))
+                    ) {
+                        break;
+                    }
+                }
+            }
+        }
+    })
 }
 
 async fn record_activity(store: &kanban_rs::Store, kind: &str, message: impl std::fmt::Display) {
@@ -3290,11 +3358,39 @@ struct ChatRequest {
     agent: Option<String>,
 }
 
+/// One tool call the agent made, for display in the chat UI.
+#[derive(Serialize, utoipa::ToSchema)]
+struct ToolUseDto {
+    tool: String,
+    input: String,
+    ok: bool,
+    summary: String,
+}
+
+impl ToolUseDto {
+    fn from_use(u: &ToolUse) -> Self {
+        Self {
+            tool: TOOL_KIND_NAMES
+                .iter()
+                .find(|(_, k)| *k == u.kind)
+                .map_or("unknown", |(n, _)| *n)
+                .to_string(),
+            input: u.input.clone(),
+            ok: u.ok,
+            summary: u.summary.clone(),
+        }
+    }
+}
+
 #[derive(Serialize, utoipa::ToSchema)]
 struct ChatReply {
     model: Option<String>,
     reply: String,
     searched: bool,
+    /// Tool calls made this turn, in order (shell, search, fetch, board).
+    tools: Vec<ToolUseDto>,
+    /// Recalled memory lines used as context; empty = memory not used.
+    memories: Vec<String>,
     tokenizer: &'static str,
     prompt_tokens: usize,
     prompt_tps: f64,

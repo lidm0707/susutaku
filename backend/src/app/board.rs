@@ -52,6 +52,7 @@ impl BoardOps for BoardService {
                     .create_pipeline(&name, &spec)
                     .await
                     .map_err(|e| e.to_string())?;
+                crate::app::events::publish(crate::app::events::EventKind::Pipeline);
                 Ok(format!("pipeline {id} created: {name}"))
             }
             BoardOp::CreateCard { project_id, title } => {
@@ -66,6 +67,7 @@ impl BoardOps for BoardService {
                     estimate: None,
                 };
                 let id = self.store.add(card).await.map_err(|e| e.to_string())?;
+                crate::app::events::publish(crate::app::events::EventKind::Card);
                 Ok(format!(
                     "card {id} created in project {project_id}: {title}"
                 ))
@@ -78,6 +80,7 @@ impl BoardOps for BoardService {
                     .set_card_pipeline(card_id, Some(pipeline_id))
                     .await
                     .map_err(|e| e.to_string())?;
+                crate::app::events::publish(crate::app::events::EventKind::Card);
                 Ok(format!("pipeline {pipeline_id} attached to card {card_id}"))
             }
             BoardOp::SetCron { card_id, cron } => {
@@ -88,11 +91,10 @@ impl BoardOps for BoardService {
                     .set_cron(card_id, cron.as_deref())
                     .await
                     .map_err(|e| e.to_string())?;
+                crate::app::events::publish(crate::app::events::EventKind::Cron);
                 match cron {
-                    Some(expr) => Ok(format!(
-                        "card {card_id} scheduled with cron `{expr}`{CRON_HINT}"
-                    )),
-                    None => Ok(format!("card {card_id} unscheduled")),
+                    Some(expr) => Ok(format!("card {card_id} routine set: `{expr}`{CRON_HINT}")),
+                    None => Ok(format!("card {card_id} routine cleared")),
                 }
             }
             BoardOp::Summary => {
@@ -125,7 +127,7 @@ impl BoardOps for BoardService {
                 }
                 for card in self.store.list(None).await.map_err(|e| e.to_string())? {
                     let cron = match &card.cron {
-                        Some(expr) => format!(", cron `{expr}`"),
+                        Some(expr) => format!(", routine `{expr}`"),
                         None => String::new(),
                     };
                     let project = match card.project_id {

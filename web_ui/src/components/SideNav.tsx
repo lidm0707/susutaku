@@ -41,7 +41,7 @@ import QuotaBoard from "./QuotaBoard.tsx";
 const ITEMS = [
   { to: "/kanban", title: "kanban", Icon: KanbanSquare },
   { to: "/pipelines", title: "pipelines", Icon: Workflow },
-  { to: "/cronjobs", title: "cronjobs", Icon: Clock },
+  { to: "/routine", title: "routine", Icon: Clock },
   { to: "/agents", title: "agents", Icon: Bot },
   { to: "/settings", title: "settings", Icon: Settings },
 ];

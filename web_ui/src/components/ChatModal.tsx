@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
-import { Bot, Brain, Crosshair, MessageSquarePlus, PanelRight, Send, X } from "lucide-react";
+import { Bot, Brain, Check, Copy, MessageSquarePlus, PanelRight, Send, Wrench, X } from "lucide-react";
 import {
   API_BASE,
   chat_codex,
@@ -12,18 +12,20 @@ import {
   fetch_chat_messages,
   fetch_chat_threads,
   fetch_codex_models,
+  fetch_cronjobs,
   fetch_models,
   fetch_system_prompt,
   pretty_name,
   select_model,
   type Agent,
   type ChatReply,
+  type ChatToolUse,
   type CodexModel,
+  type CronJob,
   type ModelInfo,
   type PromptSection,
 } from "../lib.js";
 import { Modal } from "../ui/Overlay.js";
-import { focus_label, focus_section, set_focus, use_focus, type Focus } from "./focus.js";
 
 const MAX_TOKENS = 512;
 
@@ -71,7 +73,7 @@ export function use_chat_docked(): boolean {
 const PAGE_LABELS: Record<string, string> = {
   "/kanban": "kanban",
   "/pipelines": "pipelines",
-  "/cronjobs": "cronjobs",
+  "/routine": "routine",
   "/agents": "agents",
   "/settings": "settings",
   "/sandbox": "sandbox",
@@ -80,6 +82,30 @@ const PAGE_LABELS: Record<string, string> = {
 
 export function page_label(pathname: string): string {
   return PAGE_LABELS[pathname] ?? "kanban";
+}
+
+const ROUTINE_CONTEXT_MAX = 20;
+
+function fmt_run(unix: number): string {
+  return new Date(unix * 1000).toISOString().replace("T", " ").slice(0, 16) + " UTC";
+}
+
+async function page_data(pathname: string): Promise<string> {
+  if (pathname !== "/routine") return "";
+  let jobs: CronJob[] = [];
+  try {
+    jobs = await fetch_cronjobs();
+  } catch {
+    return "";
+  }
+  if (!jobs.length) return "routines: none defined";
+  const lines = jobs.slice(0, ROUTINE_CONTEXT_MAX).map(
+    (j) =>
+      `- card #${j.card_id} "${j.title}": schedule "${j.cron}"` +
+      (j.pipeline_name ? `, pipeline "${j.pipeline_name}"` : "") +
+      (j.next_run ? `, next run ${fmt_run(j.next_run)}` : ", not scheduled in queue"),
+  );
+  return `routines (card schedules):\n${lines.join("\n")}`;
 }
 
 function split_thinking(text: string): { thinking: string; reply: string } {
@@ -93,6 +119,80 @@ function split_thinking(text: string): { thinking: string; reply: string } {
   return { thinking, reply };
 }
 
+const FENCE_RE = /```([a-zA-Z0-9_-]*)\n?([\s\S]*?)(?:```|$)/g;
+const INLINE_CODE_RE = /`([^`\n]+)`/g;
+const COPY_RESET_MS = 1500;
+
+interface CodeSegment {
+  kind: "code";
+  lang: string;
+  body: string;
+}
+
+interface TextSegment {
+  kind: "text";
+  body: string;
+}
+
+function split_segments(text: string): (CodeSegment | TextSegment)[] {
+  const segments: (CodeSegment | TextSegment)[] = [];
+  let last = 0;
+  for (const m of text.matchAll(FENCE_RE)) {
+    const at = m.index;
+    if (at === undefined) break;
+    if (at > last) segments.push({ kind: "text", body: text.slice(last, at) });
+    segments.push({ kind: "code", lang: m[1], body: m[2] });
+    last = at + m[0].length;
+  }
+  if (last < text.length) segments.push({ kind: "text", body: text.slice(last) });
+  return segments;
+}
+
+function InlineText({ body }: { body: string }) {
+  const parts: (string | JSX.Element)[] = [];
+  let last = 0;
+  for (const m of body.matchAll(INLINE_CODE_RE)) {
+    const at = m.index ?? 0;
+    if (at > last) parts.push(body.slice(last, at));
+    parts.push(<code key={at}>{m[1]}</code>);
+    last = at + m[0].length;
+  }
+  if (last < body.length) parts.push(body.slice(last));
+  return <p>{parts}</p>;
+}
+
+function CodeBlock({ lang, body }: { lang: string; body: string }) {
+  const [copied, set_copied] = useState(false);
+  const copy = () => {
+    navigator.clipboard.writeText(body).then(() => {
+      set_copied(true);
+      setTimeout(() => set_copied(false), COPY_RESET_MS);
+    });
+  };
+  return (
+    <div className="msg-code">
+      <div className="msg-code-head">
+        <span>{lang || "code"}</span>
+        <button type="button" onClick={copy} aria-label="copy code">
+          {copied ? <Check size={12} /> : <Copy size={12} />}
+        </button>
+      </div>
+      <pre><code>{body}</code></pre>
+    </div>
+  );
+}
+
+function MessageText({ text }: { text: string }) {
+  const segments = split_segments(text);
+  return (
+    <div className="msg-body">
+      {segments.map((s, i) =>
+        s.kind === "code" ? <CodeBlock key={i} lang={s.lang} body={s.body} /> : <InlineText key={i} body={s.body} />,
+      )}
+    </div>
+  );
+}
+
 interface Msg {
   id: number;
   role: "user" | "assistant";
@@ -104,14 +204,14 @@ interface Msg {
   model?: string;
   prompt_tps?: number;
   tps?: number;
+  tools?: ChatToolUse[];
+  memories?: string[];
 }
 
 interface Thread {
   id: number;
   title: string;
   messages: Msg[];
-  focus: Focus | null;
-  detached: boolean;
   server_id: number | null;
   loaded: boolean;
 }
@@ -119,7 +219,7 @@ interface Thread {
 export default function ChatModal({ open, on_close }: { open: boolean; on_close: () => void }) {
   const { pathname } = useLocation();
   const [threads, setThreads] = useState<Thread[]>([
-    { id: 0, title: "thread 1", messages: [], focus: null, detached: false, server_id: null, loaded: true },
+    { id: 0, title: "thread 1", messages: [], server_id: null, loaded: true },
   ]);
   const [activeId, setActiveId] = useState(0);
   const [input, setInput] = useState("");
@@ -144,8 +244,6 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
   const active = threads.find((t) => t.id === activeId) ?? threads[0];
   const messages = active.messages;
   const selected = agents.filter((a) => selectedIds.includes(a.id as number));
-  const liveFocus = use_focus();
-  const threadFocus = active.detached ? null : (active.focus ?? liveFocus);
 
   useEffect(() => {
     if (!toast) return;
@@ -184,8 +282,6 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
             id: nextThreadId.current++,
             title: r.title || `thread ${r.id}`,
             messages: [],
-            focus: null,
-            detached: false,
             server_id: r.id,
             loaded: false,
           }));
@@ -263,7 +359,8 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
       apply_dock_w(`${w}px`);
     };
     const on_up = () => {
-      localStorage.setItem(DOCK_W_KEY, dock_w.current);
+      const px = parseInt(dock_w.current, 10);
+      localStorage.setItem(DOCK_W_KEY, Number.isFinite(px) ? String(px) : "");
       document.documentElement.classList.remove("chat-dock-resizing");
       window.removeEventListener("mousemove", on_move);
       window.removeEventListener("mouseup", on_up);
@@ -276,18 +373,6 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
     setThreads((ts) => ts.map((t) => (t.id === id ? { ...t, messages: fn(t.messages) } : t)));
   }
 
-  function detach_focus() {
-    set_focus(null);
-    setThreads((ts) =>
-      ts.map((t) =>
-        t.id === activeId
-          ? t.messages.length
-            ? { ...t, detached: true }
-            : t
-          : t
-      )
-    );
-  }
 
   function set_title_from(id: number, text: string) {
     setThreads((ts) =>
@@ -303,7 +388,7 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
     const id = nextThreadId.current++;
     setThreads((ts) => [
       ...ts,
-      { id, title: `thread ${id + 1}`, messages: [], focus: null, detached: false, server_id: null, loaded: true },
+      { id, title: `thread ${id + 1}`, messages: [], server_id: null, loaded: true },
     ]);
     setActiveId(id);
     setError("");
@@ -321,8 +406,6 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
           id: nextThreadId.current++,
           title: "thread 1",
           messages: [] as Msg[],
-          focus: null,
-          detached: false,
           server_id: null,
           loaded: true,
         };
@@ -378,8 +461,6 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
     }
     const tid = activeId;
     const thread = threads.find((t) => t.id === tid);
-    const focus: Focus | null =
-      thread && thread.messages.length ? (thread.detached ? null : thread.focus) : liveFocus;
     setInput("");
     setError("");
     setBusy(true);
@@ -399,13 +480,9 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
       })),
     ]);
     const page = page_label(pathname);
-    const focusText = focus_section(focus);
-    const contexted = focusText
-      ? `${focusText}\n[context: user is currently on the ${page} page]\n\n${text}`
-      : `[context: user is currently on the ${page} page]\n\n${text}`;
-    setThreads((ts) =>
-      ts.map((t) => (t.id === tid && !t.messages.length ? { ...t, focus } : t))
-    );
+    const data = await page_data(pathname);
+    const contexted =
+      `[context: user is currently on the ${page} page${data ? `\n${data}` : ""}]\n\n${text}`;
     let serverThreadId = thread?.server_id ?? null;
     if (serverThreadId === null) {
       try {
@@ -439,6 +516,8 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
         model: data.model,
         prompt_tps: data.prompt_tps,
         tps: data.decode_tps,
+        tools: data.tools,
+        memories: data.memories,
       });
     });
     if (failures) {
@@ -511,6 +590,29 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
                     <pre>{m.thinking}</pre>
                   </details>
                 )}
+                {m.tools && m.tools.length > 0 && (
+                  <details className="thinking tool-trace">
+                    <summary><Wrench size={12} /> tools ({m.tools.length})</summary>
+                    <ul>
+                      {m.tools.map((t, i) => (
+                        <li key={i}>
+                          <code>{t.tool}</code>{t.input ? ` ${t.input}` : ""} {t.ok === false ? "✗" : "✓"}
+                          {t.summary && <pre>{t.summary}</pre>}
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
+                )}
+                {m.memories && m.memories.length > 0 && (
+                  <details className="thinking memory-trace">
+                    <summary><Brain size={12} /> memory ({m.memories.length})</summary>
+                    <ul>
+                      {m.memories.map((mem, i) => (
+                        <li key={i}><pre>{mem}</pre></li>
+                      ))}
+                    </ul>
+                  </details>
+                )}
                 {m.pending ? (
                   <span className="run-dots" role="status" aria-label="agent is running">
                     <span /><span /><span />
@@ -518,7 +620,7 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
                 ) : m.failed ? (
                   <p className="error">run failed</p>
                 ) : (
-                  <p>{m.text}</p>
+                  <MessageText text={m.text} />
                 )}
                 {!m.pending && !m.failed && !!m.tps && m.tps > 0 && (
                   <small>{m.model} · prompt {m.prompt_tps?.toFixed(1)} tok/s · decode {m.tps.toFixed(1)} tok/s</small>
@@ -578,20 +680,6 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
                 </div>
               )}
             </div>
-            {threadFocus && (
-              <span className="chat-focus-chip" title={focus_label(threadFocus)}>
-                <Crosshair size={11} />
-                <span className="chat-focus-label">{focus_label(threadFocus)}</span>
-                <button
-                  type="button"
-                  onClick={detach_focus}
-                  aria-label="detach focus"
-                  title="detach focus"
-                >
-                  <X size={10} />
-                </button>
-              </span>
-            )}
             <input
               value={input}
               onChange={(e) => setInput(e.target.value)}

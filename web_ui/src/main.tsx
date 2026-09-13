@@ -9,7 +9,7 @@ import Login from "./pages/Login.jsx";
 import Settings from "./pages/Settings.jsx";
 import Sandbox from "./pages/Sandbox.jsx";
 import Pipelines from "./pages/Pipelines.jsx";
-import Cronjobs from "./pages/Cronjobs.jsx";
+import Routine from "./pages/Routine.jsx";
 import { get_token } from "./lib.js";
 import { Toaster } from "./ui/Toast.jsx";
 import SideNav from "./components/SideNav.tsx";
@@ -45,7 +45,7 @@ function App() {
         <Route path="/models" element={<Navigate to="/kanban" replace />} />
         <Route path="/kanban" element={<RequireAuth><Kanban /></RequireAuth>} />
         <Route path="/pipelines" element={<RequireAuth><Pipelines /></RequireAuth>} />
-        <Route path="/cronjobs" element={<RequireAuth><Cronjobs /></RequireAuth>} />
+        <Route path="/routine" element={<RequireAuth><Routine /></RequireAuth>} />
         <Route path="/agents" element={<RequireAuth><AgentSettings /></RequireAuth>} />
         <Route path="/settings" element={<RequireAuth><Settings /></RequireAuth>} />
         <Route path="/sandbox" element={<RequireAuth><Sandbox /></RequireAuth>} />

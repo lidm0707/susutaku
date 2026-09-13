@@ -3,6 +3,7 @@
 
 pub mod board;
 pub mod chat;
+pub mod events;
 pub mod kanban;
 pub mod pipeline_run;
 pub mod say_hi;

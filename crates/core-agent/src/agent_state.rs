@@ -64,13 +64,20 @@ impl AgentState {
         self.history.read().map(|h| h.clone()).unwrap_or_default()
     }
 
-    pub fn apply_search(&self, query: &str, results: &[SearchResult]) -> String {
+    /// Record one tool execution in the transcript and return its summary.
+    /// The generic half of the agent loop: any tool the harness dispatches
+    /// lands here (search, fetch, lsp — see `toolcall::Tool`).
+    pub fn apply_tool(&self, tool_name: &str, query: &str, output: &str) -> String {
         self.set_phase(Phase::Acting);
-        self.push(Role::User, query);
-        let summary = SearchResult::summarize(results);
-        self.push(Role::Tool, summary.clone());
+        self.push(Role::User, format!("[{tool_name}] {query}"));
+        self.push(Role::Tool, output.to_string());
         self.set_phase(Phase::Done);
-        summary
+        output.to_string()
+    }
+
+    pub fn apply_search(&self, query: &str, results: &[SearchResult]) -> String {
+        let summary = SearchResult::summarize(results);
+        self.apply_tool("web_search", query, &summary)
     }
 }
 

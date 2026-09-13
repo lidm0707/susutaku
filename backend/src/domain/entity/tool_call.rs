@@ -18,7 +18,7 @@ const TOOL_SEARCH: &str = "SEARCH";
 const TOOL_FETCH: &str = "FETCH";
 const TOOL_SHELL: &str = "SHELL";
 const TOOL_CARD_CREATE: &str = "CARD_CREATE";
-const TOOL_CARD_SCHEDULE: &str = "CARD_SCHEDULE";
+const TOOL_CARD_ROUTINE: &str = "CARD_ROUTINE";
 const TOOL_CARD_LINK: &str = "CARD_LINK";
 const TOOL_PIPELINE_CREATE: &str = "PIPELINE_CREATE";
 const TOOL_BOARD_LIST: &str = "BOARD_LIST";
@@ -51,7 +51,7 @@ impl ToolCall {
                     title: title.to_string(),
                 })
             }
-            TOOL_CARD_SCHEDULE => {
+            TOOL_CARD_ROUTINE => {
                 let (card_id, cron) = arg.split_once(' ')?;
                 Some(Self::CardSchedule {
                     card_id: card_id.parse().ok()?,

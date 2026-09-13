@@ -36,7 +36,7 @@ fn parses_board_tool_calls() {
         })
     );
     assert_eq!(
-        ToolCall::parse("TOOL: CARD_SCHEDULE 7 0 */5 * * *"),
+        ToolCall::parse("TOOL: CARD_ROUTINE 7 0 */5 * * *"),
         Some(ToolCall::CardSchedule {
             card_id: 7,
             cron: "0 */5 * * *".into()
@@ -54,7 +54,7 @@ fn parses_board_tool_calls() {
 #[test]
 fn malformed_board_tool_call_is_none() {
     assert_eq!(ToolCall::parse("TOOL: CARD_CREATE oops no number"), None);
-    assert_eq!(ToolCall::parse("TOOL: CARD_SCHEDULE 7"), None);
+    assert_eq!(ToolCall::parse("TOOL: CARD_ROUTINE 7"), None);
 }
 
 struct FakeBoard;

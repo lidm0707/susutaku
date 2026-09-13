@@ -17,7 +17,8 @@ pub use service::{
     AgentConfigService, CardService, CommentService, PipelineService, ProjectService,
     ResourceService, SkillService, WorkspaceService,
 };
+pub use valueobject::TOOL_SUMMARY_MAX;
 pub use valueobject::{
     BoardOp, BoardRequest, BoardResult, ChatCmd, ChatOutcome, GenReply, MemoryHit, ReplyRx,
-    SearchMode, SearchResult, ToolKind, ToolSet,
+    SearchMode, SearchResult, TOOL_KIND_NAMES, ToolKind, ToolSet, ToolUse,
 };

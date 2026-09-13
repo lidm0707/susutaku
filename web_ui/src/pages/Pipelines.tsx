@@ -29,7 +29,6 @@ import {
   Package,
   Play,
   Plus,
-  Save,
   Search,
   Trash2,
   Workflow,
@@ -37,6 +36,7 @@ import {
 } from "lucide-react";
 import {
   clear_token,
+  connect_events,
   create_pipeline,
   fetch_pipelines,
   remove_pipeline,
@@ -53,7 +53,6 @@ import {
 } from "../lib.js";
 import { PromptModal } from "../ui/Overlay.js";
 import { toast } from "../ui/Toast.js";
-import { set_focus } from "../components/focus.js";
 
 // basic connector nodes a user can pick, then legacy stages (old saved specs only)
 const STAGES = [
@@ -94,6 +93,8 @@ const ConnectCtx = createContext<Set<string> | null>(null);
 const DEBOUNCE_MS = 800;
 const SAVING_MARK = "saving…";
 const SAVED_MARK = "saved";
+// approx drop-menu width, to clamp it inside the canvas right edge
+const CARD_MENU_W = 240;
 
 /// CSS handle class per port kind, so the user sees what connects to what.
 const PORT_CLASS: Record<PortKind, string> = {
@@ -311,7 +312,9 @@ export default function Pipelines() {
   const dragRef = useRef(false);
   // source node of a connection drag released on empty canvas (n8n-style);
   // a drop menu at the cursor spawns that stage already linked to the source
-  const [pending, setPending] = useState<{ source: string; x: number; y: number } | null>(null);
+  const [pending, setPending] = useState<{ source: string | null; x: number; y: number } | null>(null);
+  // dropdown-style selected row in the add-node menu (arrow keys + enter)
+  const [pendingIdx, setPendingIdx] = useState(0);
   // source node id while a connection drag is live (for red invalid handles)
   const [connectFrom, setConnectFrom] = useState<string | null>(null);
   const canvasRef = useRef<HTMLDivElement | null>(null);
@@ -329,6 +332,11 @@ export default function Pipelines() {
         setSchemaTick((t) => t + 1);
       })
       .catch(() => {});
+    return connect_events((e) => {
+      if (e.kind !== "pipeline") return;
+      if (document.visibilityState !== "visible") return;
+      load_pipelines();
+    });
   }, []);
 
   async function handle(err: unknown) {
@@ -368,7 +376,6 @@ export default function Pipelines() {
     setStatus("");
     setRun(null);
     setSelected(p.id);
-    set_focus({ kind: "pipeline", id: p.id, name: p.name });
     setName(p.name);
     setEditId(null);
     const { ns, es } = load_flow(p);
@@ -391,6 +398,23 @@ export default function Pipelines() {
     } catch (err) {
       handle(err);
     }
+  }
+
+  const addBtnRef = useRef<HTMLButtonElement | null>(null);
+  // open the node-choose menu under the "+" button; clicking "+" again closes it
+  function open_node_menu() {
+    if (pending) {
+      setPending(null);
+      return;
+    }
+    const canvas = canvasRef.current;
+    const btn = addBtnRef.current;
+    if (!canvas || !btn) return;
+    const base = canvas.getBoundingClientRect();
+    const b = btn.getBoundingClientRect();
+    const x = Math.min(b.left - base.left, canvas.clientWidth - CARD_MENU_W);
+    setPending({ source: null, x, y: b.bottom - base.top });
+    setPendingIdx(0);
   }
 
   function spawn_node(stage: Stage = "fetch", connect_from?: string) {
@@ -451,6 +475,7 @@ export default function Pipelines() {
       const rect = canvasRef.current?.getBoundingClientRect();
       if (!rect) return;
       setPending({ source: state.fromNode.id, x: pt.x - rect.left, y: pt.y - rect.top });
+      setPendingIdx(0);
     },
     []
   );
@@ -562,15 +587,6 @@ export default function Pipelines() {
     }
   }
 
-  async function save() {
-    setStatus(SAVING_MARK);
-    if (saveTimer.current != null) {
-      window.clearTimeout(saveTimer.current);
-      saveTimer.current = null;
-    }
-    await do_save(true);
-    await load_pipelines();
-  }
 
   function schedule_save() {
     if (saveTimer.current != null) window.clearTimeout(saveTimer.current);
@@ -613,7 +629,6 @@ export default function Pipelines() {
     try {
       await remove_pipeline(selected);
       setSelected(null);
-      set_focus(null);
       await load_pipelines();
     } catch (err) {
       handle(err);
@@ -692,17 +707,15 @@ export default function Pipelines() {
                 spellCheck={false}
                 aria-label="pipeline name"
               />
-              <button className="kanban-mini" onClick={() => spawn_node()} title="add node">
-                <Plus size={13} /> node
+
+              <button type="button" ref={addBtnRef} className="pipeline-circle" onClick={open_node_menu} title="add node" aria-label="add node">
+                <Plus size={14} />
               </button>
-              <button className="kanban-mini" onClick={() => setTestOpen(true)} disabled={selected == null || selected === "new"} title="test run with seed text">
-                <Play size={13} /> test
+              <button type="button" className="pipeline-circle" onClick={() => setTestOpen(true)} disabled={selected == null || selected === "new"} title="test run with seed text" aria-label="test run">
+                <Play size={14} />
               </button>
-              <button className="kanban-mini" onClick={del} disabled={selected == null || selected === "new"} title="delete pipeline">
-                <Trash2 size={13} />
-              </button>
-              <button type="button" className="pipeline-save" onClick={save} disabled={selected == null || selected === "new"} title="save pipeline">
-                <Save size={13} /> save pipeline
+              <button type="button" className="pipeline-circle" onClick={del} disabled={selected == null || selected === "new"} title="delete pipeline" aria-label="delete pipeline">
+                <Trash2 size={14} />
               </button>
               {status && <span className="saved-mark">{status}</span>}
             </div>
@@ -743,16 +756,42 @@ export default function Pipelines() {
               />
             </ConnectCtx.Provider>
               {pending && (
-                <div className="pipe-drop-menu" style={{ left: pending.x, top: pending.y }} role="menu">
+                <div
+                  className="pipe-drop-menu"
+                  style={{ left: pending.x, top: pending.y }}
+                  role="menu"
+                  tabIndex={-1}
+                  autoFocus
+                  onKeyDown={(e) => {
+                    if (e.key === "ArrowDown") {
+                      e.preventDefault();
+                      setPendingIdx((i) => Math.min(i + 1, BASIC_NODES.length - 1));
+                    } else if (e.key === "ArrowUp") {
+                      e.preventDefault();
+                      setPendingIdx((i) => Math.max(i - 1, 0));
+                    } else if (e.key === "Enter") {
+                      e.preventDefault();
+                      const { stage } = BASIC_NODES[pendingIdx];
+                      const src = pending.source ?? undefined;
+                      setPending(null);
+                      spawn_node(stage, src);
+                    } else if (e.key === "Escape") {
+                      setPending(null);
+                    }
+                  }}
+                >
                   <span className="pipe-drop-title">add node</span>
-                  {BASIC_NODES.map(({ stage, label, desc, Icon }) => (
+                  {BASIC_NODES.map(({ stage, label, desc, Icon }, idx) => (
                     <button
                       key={stage}
                       type="button"
                       role="menuitem"
+                      aria-selected={idx === pendingIdx}
+                      className={idx === pendingIdx ? "selected" : undefined}
                       title={SCHEMA[stage]?.doc ?? desc}
+                      onMouseEnter={() => setPendingIdx(idx)}
                       onClick={() => {
-                        const src = pending.source;
+                        const src = pending.source ?? undefined;
                         setPending(null);
                         spawn_node(stage, src);
                       }}
@@ -864,20 +903,6 @@ export default function Pipelines() {
               </div>
             )}
 
-            <div className="pipeline-dock">
-              {BASIC_NODES.map(({ stage, label, desc, Icon }) => (
-                <button
-                  key={stage}
-                  type="button"
-                  className="pipeline-dock-btn"
-                  title={`${label} — ${SCHEMA[stage]?.doc ?? desc}`}
-                  aria-label={`add ${label} node`}
-                  onClick={() => spawn_node(stage)}
-                >
-                  <Icon size={15} />
-                </button>
-              ))}
-            </div>
             {run && !editId && (
               <div className="pipeline-run">
                 <div className="pipeline-run-head">

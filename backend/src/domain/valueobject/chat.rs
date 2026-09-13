@@ -1,6 +1,6 @@
 //! Chat turn value objects exchanged over the ChatHandling port.
 
-use crate::domain::SearchMode;
+use crate::domain::{SearchMode, ToolUse};
 
 /// Driving-adapter request: one chat turn.
 pub struct ChatCmd {
@@ -24,5 +24,9 @@ pub struct ChatOutcome {
     pub model: Option<String>,
     pub text: String,
     pub searched: bool,
+    /// Tool calls made this turn, in order (denied calls included).
+    pub tools: Vec<ToolUse>,
+    /// Recalled memory lines prepended to the context; empty = none used.
+    pub memories: Vec<String>,
     pub stats: susutaku_mlx::stats::GenStats,
 }

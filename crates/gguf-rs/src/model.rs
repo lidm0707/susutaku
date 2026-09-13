@@ -11,16 +11,24 @@ use susutaku_mlx::stats::GenStats;
 use susutaku_mlx::tok::ChatTok;
 use susutaku_mlx::tpl::ChatTpl;
 
+use katgpt_speculative::acceptance_forecast::AcceptanceForecast;
+
 const CHATML_TPL: ChatTpl = ChatTpl::Chatml;
 
 /// Speculative draft (bigram, from katgpt-rs bigram_markov): draft window and
 /// the minimum row probability for a drafted token to be committed.
-const DRAFT_STEPS: usize = 4;
+pub const DRAFT_STEPS: usize = 4;
 const DRAFT_TOP_M: usize = 8;
 const DRAFT_MIN_PROB: f32 = 0.5;
 /// A drafted token already present in the last N history tokens is a bigram
 /// repetition loop — dropped before it can feed itself.
 const DRAFT_ANTI_REPEAT: usize = 8;
+/// Entropy→acceptance forecast (katgpt-rs AcceptanceForecast, Bebop bound
+/// α ≈ a − b·H): slope and the gate below which drafting is skipped — a
+/// high-entropy span makes bigram drafts junk faster than they decode.
+const DRAFT_ALPHA_B: f32 = 0.2;
+const DRAFT_ALPHA_DECAY: f32 = 0.1;
+pub const DRAFT_MIN_ALPHA: f32 = 0.35;
 
 /// Every EOS-candidate token id defined by the model's tokenizer.
 fn eos_ids(dir: &Path) -> Vec<u32> {
@@ -33,11 +41,26 @@ fn eos_ids(dir: &Path) -> Vec<u32> {
         .collect()
 }
 
+/// Draft window length scaled by the forecast acceptance rate: a middling α
+/// shrinks the window instead of gambling the full DRAFT_STEPS on it.
+pub fn adaptive_draft_len(alpha: f32) -> usize {
+    ((DRAFT_STEPS as f32 * alpha).ceil() as usize).clamp(1, DRAFT_STEPS)
+}
+
+/// Last-position logits as an owned f32 vec (the forecast's input shape).
+fn logits_f32(t: &Tensor) -> Result<Vec<f32>, String> {
+    t.to_dtype(candle_core::DType::F32)
+        .and_then(|t| t.squeeze(0))
+        .and_then(|t| t.to_vec1())
+        .map_err(|e| e.to_string())
+}
+
 pub struct Model {
     weights: weights::Weights,
     device: Device,
     eos_ids: Vec<u32>,
     vocab: u32,
+    forecast: AcceptanceForecast,
 }
 
 impl Model {
@@ -61,6 +84,7 @@ impl Model {
             device,
             eos_ids: eos_ids(dir),
             vocab,
+            forecast: AcceptanceForecast::with_params(1.0, DRAFT_ALPHA_B, DRAFT_ALPHA_DECAY),
         })
     }
 
@@ -93,13 +117,16 @@ impl Model {
         use_draft: bool,
     ) -> Result<(String, GenStats), String> {
         self.weights.clear_kv_cache();
+        self.forecast.reset_ema();
         let mut hist = tok.encode(prompt, true)?;
         let prompt_tokens = hist.len();
 
         let t0 = Instant::now();
         let mut generated = 0usize;
         let mut processed = hist.len();
-        let mut next = sample(&self.forward(&hist, 0)?, TEMP)?;
+        let first = self.forward(&hist, 0)?;
+        self.forecast.observe_and_forecast(&logits_f32(&first)?);
+        let mut next = sample(&first, TEMP)?;
         let prompt_secs = t0.elapsed().as_secs_f64();
         while generated < max_tokens && !self.is_eos(next) {
             hist.push(next);
@@ -107,9 +134,12 @@ impl Model {
             if generated >= max_tokens {
                 break;
             }
-            // `next` is sampled but not yet fed, so it opens every window.
-            let drafted = if use_draft {
-                self.draft_window(&hist, next)
+            // Low forecast acceptance skips the window entirely and a
+            // middling one shortens it (plan 15: bench showed CPU-neutral
+            // drafting when gated only by the static flag).
+            let alpha = self.forecast.forecast_alpha_current();
+            let drafted = if use_draft && alpha >= DRAFT_MIN_ALPHA {
+                self.draft_window(&hist, next, adaptive_draft_len(alpha))
             } else {
                 Vec::new()
             };
@@ -126,6 +156,9 @@ impl Model {
                 (logits, chunk.len())
             };
             processed += window;
+            // Observe the distribution this cycle's `next` was drawn from.
+            self.forecast
+                .observe_and_forecast(&logits_f32(&chunk_logits)?);
             next = sample(&chunk_logits, TEMP)?;
         }
         let decode_secs = t0.elapsed().as_secs_f64() - prompt_secs;
@@ -141,16 +174,16 @@ impl Model {
     }
 
     /// High-confidence bigram continuation of `last` from the history so far.
-    fn draft_window(&self, hist: &[u32], last: u32) -> Vec<u32> {
+    fn draft_window(&self, hist: &[u32], last: u32, steps: usize) -> Vec<u32> {
         use katgpt_speculative::bigram_markov::{BigramMarkovBuilder, BigramMarkovTable};
 
         let mut b = BigramMarkovBuilder::new();
         b.add_sequence(hist);
         let table: BigramMarkovTable = b.build(self.vocab as usize, DRAFT_TOP_M);
         let recent_start = hist.len().saturating_sub(DRAFT_ANTI_REPEAT);
-        let mut draft = Vec::with_capacity(DRAFT_STEPS);
+        let mut draft = Vec::with_capacity(steps);
         let mut prev = last;
-        for _ in 0..DRAFT_STEPS {
+        for _ in 0..steps {
             let Some((succ, probs)) = table.successors(prev) else {
                 break;
             };

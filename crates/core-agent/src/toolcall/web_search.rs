@@ -47,7 +47,8 @@ pub fn search(query: &str) -> Result<Vec<SearchResult>, String> {
 }
 
 pub fn request(url: &str) -> Result<Vec<SearchResult>, String> {
-    let body = ureq::get(url)
+    let body = crate::toolcall::http()
+        .get(url)
         .call()
         .map_err(|e| e.to_string())?
         .into_string()

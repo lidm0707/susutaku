@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { ArrowLeft, ArrowRight, Bot, CalendarClock, CheckCircle2, Clock, Eye, EyeOff, Flag, Hash, LayoutGrid, List, ListChecks, Loader2, Play, Plus, Save, Tag, Trash2, User, Workflow, X, XCircle, Zap } from "lucide-react";
 import {
   clear_token,
+  connect_events,
   add_comment,
   chat,
   create_card,
@@ -32,7 +33,6 @@ import {
 } from "../lib.js";
 import { Modal, SlideOver } from "../ui/Overlay.js";
 import { toast } from "../ui/Toast.js";
-import { set_focus } from "../components/focus.js";
 import { use_projects } from "../components/ProjectContext.tsx";
 
 const COLUMNS = [
@@ -181,6 +181,15 @@ export default function Kanban() {
     refresh();
   }, [project_id]);
 
+  useEffect(() => {
+    if (project_id == null) return;
+    return connect_events((e) => {
+      if (e.kind !== "card") return;
+      if (document.visibilityState !== "visible") return;
+      refresh();
+    });
+  }, [project_id]);
+
   async function refresh() {
     try {
       setCards(await fetch_cards(project_id as number));
@@ -255,19 +264,6 @@ export default function Kanban() {
 
   async function open_detail(card: Card) {
     setDetail(card);
-    set_focus({
-      kind: "card",
-      card: {
-        id: card.id,
-        project_id,
-        title: card.title,
-        description: card.description,
-        column_id: card.column_id,
-        priority: card.priority,
-        assignee: card.assignee,
-        agent_name: card.agent_name,
-      },
-    });
     setDTitle(card.title);
     setDDesc(card.description);
     setDAssignee(card.assignee || "");
@@ -307,7 +303,6 @@ export default function Kanban() {
         dDeadline
       );
       setDetail(null);
-      set_focus(null);
       await refresh();
     } catch (err) {
       handle(err);
@@ -906,7 +901,6 @@ export default function Kanban() {
         title={<>card #{detail?.id}</>}
         on_close={() => {
           setDetail(null);
-          set_focus(null);
         }}
       >
         <div className="kanban-detail">

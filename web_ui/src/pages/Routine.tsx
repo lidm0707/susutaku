@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { Clock, Play, Timer, Trash2 } from "lucide-react";
 import {
   clear_token,
+  connect_events,
   fetch_cards,
   fetch_cronjobs,
   run_card,
@@ -164,7 +165,7 @@ function next_run_label(secs: number): string {
   return `in ${Math.round(mins / 60)}h`;
 }
 
-export default function Cronjobs() {
+export default function Routine() {
   const nav = useNavigate();
   const [jobs, setJobs] = useState<CronJob[]>([]);
   const [cards, setCards] = useState<Card[]>([]);
@@ -204,6 +205,14 @@ export default function Cronjobs() {
   }, [refresh]);
 
   useEffect(() => {
+    return connect_events((e) => {
+      if (e.kind !== "cron") return;
+      if (document.visibilityState !== "visible") return;
+      refresh();
+    });
+  }, [refresh]);
+
+  useEffect(() => {
     if (selected != null && !jobs.some((j) => j.card_id === selected)) setSelected(null);
   }, [jobs, selected]);
 
@@ -239,17 +248,17 @@ export default function Cronjobs() {
   return (
     <main className="chat kanban-page agents-page">
       <header>
-        <h1>cronjobs</h1>
-        <span className="sub">{jobs.length} scheduled</span>
+        <h1>routine</h1>
+        <span className="sub">{jobs.length} routines</span>
       </header>
       <div className="agents-layout">
         <aside className="agents-side">
           <Button variant="ghost" className="agents-new" onClick={() => setAdding(true)}>
-            <Clock size={14} /> schedule a card
+            <Clock size={14} /> new routine
           </Button>
           <div className="agents-list">
             {jobs.length === 0 && (
-              <span className="agents-empty">no scheduled cards yet</span>
+              <span className="agents-empty">no routines yet</span>
             )}
             {jobs.map((job) => (
               <button
@@ -271,9 +280,9 @@ export default function Cronjobs() {
             </header>
             <div className="agent-editor-row">
               <div>
-                <span className="agent-item-name">schedule</span>
+                <span className="agent-item-name">routine</span>
                 <p className="cron-meta">
-                  <code>{active.cron}</code>
+                  <code>{active.cron}</code> · {describe_cron(active.cron)}
                   {active.pipeline_name ? ` · ${active.pipeline_name}` : ""}
                 </p>
               </div>
@@ -293,7 +302,7 @@ export default function Cronjobs() {
                 type="button"
                 onClick={() => save_schedule(active.card_id, null)}
               >
-                <Trash2 size={14} /> unschedule
+                <Trash2 size={14} /> clear routine
               </Button>
             </footer>
           </section>
@@ -301,18 +310,18 @@ export default function Cronjobs() {
           <div className="agent-editor agent-editor-empty">
             <Clock size={28} />
             <p>
-              select a scheduled card on the left,
+              select a routine on the left,
               <br />
-              or schedule a new one.
+              or add a new one.
             </p>
             <Button variant="ghost" onClick={() => setAdding(true)}>
-              <Clock size={14} /> schedule a card
+              <Clock size={14} /> new routine
             </Button>
           </div>
         )}
       </div>
 
-      <Modal open={adding} title="schedule a card" on_close={() => setAdding(false)}>
+      <Modal open={adding} title="new routine" on_close={() => setAdding(false)}>
         <form
           className="modal-form"
           onSubmit={(e) => {

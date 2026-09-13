@@ -44,7 +44,7 @@ import {
   type ZaiModel,
 } from "../../lib.js";
 import { Button, Field, Select, TextArea, TextInput } from "../../ui/controls.js";
-import { PromptModal } from "../../ui/Overlay.js";
+import { Modal, PromptModal, SlideOver } from "../../ui/Overlay.js";
 
 const CUSTOM = "__custom__";
 
@@ -85,6 +85,7 @@ export default function AgentSettings() {
   const [skills, setSkills] = useState<Skill[]>([]);
   const [agentSkills, setAgentSkills] = useState<Skill[]>([]);
   const [skillEdit, setSkillEdit] = useState<Skill | null>(null);
+  const [skillsOpen, setSkillsOpen] = useState(false);
   const [skillNewOpen, setSkillNewOpen] = useState(false);
 
   function load_skills() {
@@ -368,12 +369,23 @@ export default function AgentSettings() {
               onClick={() => {
                 setSysOpen(!sysOpen);
                 setSelected(null);
-                setSkillEdit(null);
               }}
             >
               <Sparkles size={14} />
               <span className="agent-item-name">system prompt</span>
               {!sysPrompt.trim() && <span className="agent-item-model">empty</span>}
+            </button>
+            <button
+              className={skillsOpen ? "agent-item active" : "agent-item"}
+              onClick={() => {
+                setSkillsOpen(true);
+                setSelected(null);
+                setSysOpen(false);
+              }}
+            >
+              <Sparkles size={14} />
+              <span className="agent-item-name">skills</span>
+              <span className="agent-item-model">{skills.length}</span>
             </button>
             {agents.length === 0 && <span className="agents-empty">no agents yet</span>}
             {agents.map((a) => (
@@ -388,53 +400,8 @@ export default function AgentSettings() {
               </button>
             ))}
           </div>
-          <div className="agents-list">
-            <div className="agent-item" role="presentation">
-              <Sparkles size={14} />
-              <span className="agent-item-name">skills</span>
-              <Button
-                variant="ghost"
-                type="button"
-                onClick={() => setSkillNewOpen(true)}
-                title="new skill"
-              >
-                <Plus size={12} />
-              </Button>
-            </div>
-            {skills.map((s) => (
-              <button
-                key={s.id}
-                className={skillEdit?.id === s.id ? "agent-item active" : "agent-item"}
-                onClick={() => setSkillEdit(s)}
-              >
-                <Terminal size={14} />
-                <span className="agent-item-name">{s.name}</span>
-              </button>
-            ))}
-          </div>
         </aside>
-        {skillEdit ? (
-          <form className="agent-editor" onSubmit={save_skill}>
-            <Field label={`skill: ${skillEdit.name}`} icon={<Terminal size={12} />}>
-              <TextArea
-                className="agent-prompt"
-                value={skillEdit.body}
-                onChange={(e) => setSkillEdit({ ...skillEdit, body: e.target.value })}
-                rows={16}
-                spellCheck={false}
-                placeholder="skill instructions injected into the agent prompt…"
-              />
-            </Field>
-            <footer className="agent-editor-foot">
-              <Button variant="primary" type="submit">
-                <Save size={14} /> save
-              </Button>
-              <Button variant="danger" type="button" onClick={() => del_skill(skillEdit.id)}>
-                <Trash2 size={14} /> delete
-              </Button>
-            </footer>
-          </form>
-        ) : sysOpen ? (
+        {sysOpen ? (
           <form className="agent-editor" onSubmit={save_sys}>
             <Field label="global system prompt" icon={<Sparkles size={12} />}>
               <TextArea
@@ -634,6 +601,72 @@ export default function AgentSettings() {
           </div>
         )}
       </div>
+      <SlideOver open={skillsOpen} title="skills" on_close={() => setSkillsOpen(false)}>
+        <div className="skills-manager">
+          <Button
+            variant="ghost"
+            type="button"
+            onClick={() => setSkillNewOpen(true)}
+          >
+            <Plus size={14} /> new skill
+          </Button>
+          <ul className="skills-manager-list">
+            {skills.length === 0 && <li className="agents-empty">no skills yet</li>}
+            {skills.map((s) => (
+              <li key={s.id}>
+                <button
+                  type="button"
+                  className="skills-manager-item"
+                  onClick={() => setSkillEdit(s)}
+                >
+                  <Terminal size={13} />
+                  <span>{s.name}</span>
+                  {!s.body.trim() && <span className="agent-item-model">empty</span>}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      </SlideOver>
+      <Modal
+        open={skillEdit != null}
+        title={`skill: ${skillEdit?.name ?? ""}`}
+        on_close={() => setSkillEdit(null)}
+      >
+        {skillEdit && (
+          <form
+            className="modal-form"
+            onSubmit={(e) => {
+              e.preventDefault();
+              save_skill(e);
+            }}
+          >
+            <TextArea
+              className="agent-prompt"
+              value={skillEdit.body}
+              onChange={(e) => setSkillEdit({ ...skillEdit, body: e.target.value })}
+              rows={12}
+              spellCheck={false}
+              placeholder="skill instructions injected into the agent prompt…"
+            />
+            <footer className="agent-editor-foot">
+              <Button variant="primary" type="submit">
+                <Save size={14} /> save
+              </Button>
+              <Button
+                variant="danger"
+                type="button"
+                onClick={() => {
+                  del_skill(skillEdit.id);
+                  setSkillEdit(null);
+                }}
+              >
+                <Trash2 size={14} /> delete
+              </Button>
+            </footer>
+          </form>
+        )}
+      </Modal>
       <PromptModal
         open={newOpen}
         title="new agent"

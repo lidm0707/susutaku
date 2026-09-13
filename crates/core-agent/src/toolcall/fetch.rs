@@ -12,7 +12,8 @@ pub fn fetch(url: &str) -> Result<String, String> {
     if !url.starts_with(HTTP_PREFIX) && !url.starts_with(HTTPS_PREFIX) {
         return Err("only http(s) urls are supported".to_string());
     }
-    let body = ureq::get(url)
+    let body = crate::toolcall::http()
+        .get(url)
         .set("User-Agent", USER_AGENT)
         .call()
         .map_err(|e| e.to_string())?

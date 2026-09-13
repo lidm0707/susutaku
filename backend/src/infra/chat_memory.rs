@@ -1,12 +1,19 @@
-//! Qdrant-backed chat memory adapter: OpenAI-compatible embeddings endpoint +
-//! Qdrant REST. Disabled when `SUSUTAKU_EMBEDDINGS_URL` is unset.
+//! Qdrant-backed chat memory adapter: embeddings via in-process fastembed
+//! (default) or an OpenAI-compatible endpoint, + Qdrant REST.
+//! Disabled when `SUSUTAKU_EMBEDDINGS_BACKEND` is unset.
 
 use crate::domain::MemoryHit;
 use crate::port::outbound::ChatMemory;
+use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 
+pub const EMBEDDINGS_BACKEND_ENV: &str = "SUSUTAKU_EMBEDDINGS_BACKEND";
+pub const EMBEDDINGS_BACKEND_FASTEMBED: &str = "fastembed";
+pub const EMBEDDINGS_BACKEND_HTTP: &str = "http";
 pub const EMBEDDINGS_URL_ENV: &str = "SUSUTAKU_EMBEDDINGS_URL";
 pub const EMBEDDINGS_MODEL_ENV: &str = "SUSUTAKU_EMBEDDINGS_MODEL";
 const EMBEDDINGS_MODEL_DEFAULT: &str = "nomic-embed-text";
+pub const FASTEMBED_CACHE_ENV: &str = "SUSUTAKU_EMBEDDINGS_CACHE";
+const FASTEMBED_CACHE_DEFAULT: &str = "/data/fastembed-cache";
 pub const QDRANT_URL_ENV: &str = "QDRANT_URL";
 const QDRANT_URL_DEFAULT: &str = "http://127.0.0.1:6333";
 pub const QDRANT_COLLECTION_ENV: &str = "QDRANT_COLLECTION";
@@ -17,15 +24,51 @@ fn env_or(key: &str, default: &str) -> String {
     std::env::var(key).unwrap_or_else(|_| default.to_string())
 }
 
-/// Builds the memory when the embeddings endpoint is configured; `None` means
+enum Embedder {
+    Http { url: String, model: String },
+    Fast(TextEmbedding),
+}
+
+fn fastembed_model(name: &str) -> EmbeddingModel {
+    match name {
+        "all-MiniLM-L6-v2" => EmbeddingModel::AllMiniLML6V2,
+        "nomic-embed-text-v1.5" => EmbeddingModel::NomicEmbedTextV15,
+        _ => EmbeddingModel::BGESmallENV15,
+    }
+}
+
+fn embedder_from_env() -> Option<Embedder> {
+    match env_or(EMBEDDINGS_BACKEND_ENV, "").as_str() {
+        EMBEDDINGS_BACKEND_FASTEMBED => {
+            let cache = env_or(FASTEMBED_CACHE_ENV, FASTEMBED_CACHE_DEFAULT);
+            let model = fastembed_model(&env_or(EMBEDDINGS_MODEL_ENV, ""));
+            let embedder = TextEmbedding::try_new(
+                InitOptions::new(model)
+                    .with_cache_dir(std::path::PathBuf::from(cache))
+                    .with_show_download_progress(true),
+            )
+            .map_err(|e| format!("fastembed init: {e}"))
+            .ok()?;
+            Some(Embedder::Fast(embedder))
+        }
+        EMBEDDINGS_BACKEND_HTTP => {
+            let url = std::env::var(EMBEDDINGS_URL_ENV)
+                .ok()
+                .filter(|s| !s.is_empty())?;
+            Some(Embedder::Http {
+                url,
+                model: env_or(EMBEDDINGS_MODEL_ENV, EMBEDDINGS_MODEL_DEFAULT),
+            })
+        }
+        _ => None,
+    }
+}
+
+/// Builds the memory when an embeddings backend is configured; `None` means
 /// chat runs without long-term memory.
 pub fn from_env() -> Option<QdrantMemory> {
-    let url = std::env::var(EMBEDDINGS_URL_ENV)
-        .ok()
-        .filter(|s| !s.is_empty())?;
     Some(QdrantMemory {
-        embeddings_url: url,
-        embeddings_model: env_or(EMBEDDINGS_MODEL_ENV, EMBEDDINGS_MODEL_DEFAULT),
+        embedder: std::sync::RwLock::new(embedder_from_env()?),
         qdrant_url: env_or(QDRANT_URL_ENV, QDRANT_URL_DEFAULT),
         collection: env_or(QDRANT_COLLECTION_ENV, QDRANT_COLLECTION_DEFAULT),
         api_key: std::env::var(QDRANT_API_KEY_ENV).ok(),
@@ -33,8 +76,8 @@ pub fn from_env() -> Option<QdrantMemory> {
 }
 
 pub struct QdrantMemory {
-    embeddings_url: String,
-    embeddings_model: String,
+    /// fastembed embed needs `&mut`; a write lock is taken only for the embed call.
+    embedder: std::sync::RwLock<Embedder>,
     qdrant_url: String,
     collection: String,
     api_key: Option<String>,
@@ -42,8 +85,24 @@ pub struct QdrantMemory {
 
 impl QdrantMemory {
     fn embed(&self, text: &str) -> Result<Vec<f32>, String> {
-        let body = serde_json::json!({ "input": text, "model": self.embeddings_model });
-        let mut req = ureq::post(&self.embeddings_url).set("Content-Type", "application/json");
+        match &mut *self
+            .embedder
+            .write()
+            .map_err(|_| "embedder lock poisoned".to_string())?
+        {
+            Embedder::Fast(model) => model
+                .embed(vec![text.to_string()], None)
+                .map_err(|e| format!("fastembed embed: {e}"))?
+                .into_iter()
+                .next()
+                .ok_or_else(|| "fastembed returned no embedding".to_string()),
+            Embedder::Http { url, model } => self.embed_http(text, url, model),
+        }
+    }
+
+    fn embed_http(&self, text: &str, url: &str, model: &str) -> Result<Vec<f32>, String> {
+        let body = serde_json::json!({ "input": text, "model": model });
+        let mut req = ureq::post(url).set("Content-Type", "application/json");
         if let Some(key) = &self.api_key {
             req = req.set("Authorization", &format!("Bearer {key}"));
         }

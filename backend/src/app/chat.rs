@@ -5,7 +5,8 @@ use std::sync::Arc;
 
 use crate::domain::{
     BoardOp, BoardRequest, ChatCmd, ChatOutcome, GenReply, Prompt, SearchMode, SearchResult,
-    TOOL_DENIED, TOOL_RESULT_HEADER, TOOL_ROUNDS_MAX, ToolCall, ToolKind, ToolSet,
+    TOOL_DENIED, TOOL_RESULT_HEADER, TOOL_ROUNDS_MAX, TOOL_SUMMARY_MAX, ToolCall, ToolKind,
+    ToolSet, ToolUse,
 };
 use crate::port::inbound::ChatHandling;
 use crate::port::outbound::{
@@ -18,6 +19,7 @@ const MEMORY_RECALL_TOP_K: usize = 5;
 const MEMORY_CONTEXT_HEADER: &str = "Earlier relevant conversation:\n";
 const TOOL_ERROR: &str = "tool failed: ";
 const TOOL_FALLBACK_NOTE: &str = "(the model could not finish this run; try again)";
+const BOARD_ERROR_PREFIX: &str = "error:";
 
 pub struct ChatUseCase {
     searcher: Arc<dyn Searcher>,
@@ -109,7 +111,13 @@ impl ChatUseCase {
             .map_err(|_| "shell task panicked".to_string())?
     }
 
-    fn outcome(&self, last_good: (String, String, GenStats), searched: bool) -> ChatOutcome {
+    fn outcome(
+        &self,
+        last_good: (String, String, GenStats),
+        searched: bool,
+        tools: Vec<ToolUse>,
+        memories: Vec<String>,
+    ) -> ChatOutcome {
         let (text, model, stats) = last_good;
         let text = if ToolCall::parse(&text).is_some() {
             TOOL_FALLBACK_NOTE.to_string()
@@ -120,6 +128,8 @@ impl ChatUseCase {
             model: Some(model),
             text,
             searched,
+            tools,
+            memories,
             stats,
         }
     }
@@ -194,15 +204,21 @@ impl ChatHandling for ChatUseCase {
         let memories = self.recall_blocking(&cmd.message).await;
         if !memories.is_empty() {
             context.push_str(MEMORY_CONTEXT_HEADER);
-            for line in memories {
-                context.push_str(&line);
+            for line in &memories {
+                context.push_str(line);
                 context.push('\n');
             }
         }
+        let mut trace: Vec<ToolUse> = Vec::new();
         let mut searched = false;
         if cmd.mode == SearchMode::Force {
             let results = self.search_blocking(&cmd.message).await?;
             searched = true;
+            trace.push(ToolUse::new(
+                ToolKind::Search,
+                &cmd.message,
+                &Ok(Prompt::format_results(&cmd.message, &results)),
+            ));
             context.push_str(&Prompt::format_results(&cmd.message, &results));
         }
 
@@ -224,26 +240,26 @@ impl ChatHandling for ChatUseCase {
             match call {
                 ToolCall::Search(query) if tools.allows(ToolKind::Search) => {
                     searched = true;
-                    let note = match self.search_blocking(&query).await {
-                        Ok(results) => Prompt::format_results(&cmd.message, &results),
-                        Err(e) => format!("{TOOL_ERROR}{e}"),
-                    };
+                    let result = self
+                        .search_blocking(&query)
+                        .await
+                        .map(|results| Prompt::format_results(&cmd.message, &results));
+                    trace.push(ToolUse::new(ToolKind::Search, &query, &result));
+                    let note = result.unwrap_or_else(|e| format!("{TOOL_ERROR}{e}"));
                     context.push_str(TOOL_RESULT_HEADER);
                     context.push_str(&note);
                 }
                 ToolCall::Fetch(url) if tools.allows(ToolKind::Fetch) => {
-                    let page = match self.fetch_blocking(&url).await {
-                        Ok(page) => page,
-                        Err(e) => format!("{TOOL_ERROR}{e}"),
-                    };
+                    let result = self.fetch_blocking(&url).await;
+                    trace.push(ToolUse::new(ToolKind::Fetch, &url, &result));
+                    let page = result.unwrap_or_else(|e| format!("{TOOL_ERROR}{e}"));
                     context.push_str(TOOL_RESULT_HEADER);
                     context.push_str(&page);
                 }
-                ToolCall::Shell(cmd) if tools.allows(ToolKind::Shell) => {
-                    let out = match self.shell_blocking(&cmd).await {
-                        Ok(out) => out,
-                        Err(e) => format!("{TOOL_ERROR}{e}"),
-                    };
+                ToolCall::Shell(shell_cmd) if tools.allows(ToolKind::Shell) => {
+                    let result = self.shell_blocking(&shell_cmd).await;
+                    trace.push(ToolUse::new(ToolKind::Shell, &shell_cmd, &result));
+                    let out = result.unwrap_or_else(|e| format!("{TOOL_ERROR}{e}"));
                     context.push_str(TOOL_RESULT_HEADER);
                     context.push_str(&out);
                 }
@@ -251,10 +267,18 @@ impl ChatHandling for ChatUseCase {
                     let token = cmd.board_token.clone();
                     let op = Self::board_op(&call).expect("matched guard");
                     let out = self.board_blocking(token, op).await;
+                    let ok = !out.starts_with(BOARD_ERROR_PREFIX);
+                    trace.push(ToolUse {
+                        kind: ToolKind::Board,
+                        input: String::new(),
+                        ok,
+                        summary: out.chars().take(TOOL_SUMMARY_MAX).collect(),
+                    });
                     context.push_str(TOOL_RESULT_HEADER);
                     context.push_str(&out);
                 }
                 _ => {
+                    trace.push(ToolUse::denied(ToolKind::Search, ""));
                     context.push_str(TOOL_RESULT_HEADER);
                     context.push_str(TOOL_DENIED);
                 }
@@ -276,7 +300,7 @@ impl ChatHandling for ChatUseCase {
                 }
                 Err(e) => {
                     tracing::warn!("chat tool round {rounds} inference failed: {e}");
-                    return Ok(self.outcome(last_good, searched));
+                    return Ok(self.outcome(last_good, searched, trace, memories));
                 }
             };
         }
@@ -296,7 +320,7 @@ impl ChatHandling for ChatUseCase {
                 Ok(r) => r,
                 Err(e) => {
                     tracing::warn!("chat final answer inference failed: {e}");
-                    return Ok(self.outcome(last_good, searched));
+                    return Ok(self.outcome(last_good, searched, trace, memories));
                 }
             };
         }
@@ -304,7 +328,12 @@ impl ChatHandling for ChatUseCase {
         self.remember_blocking("user", &cmd.message).await;
         self.remember_blocking("assistant", &reply.text).await;
 
-        Ok(self.outcome((reply.text, reply.model, reply.stats), searched))
+        Ok(self.outcome(
+            (reply.text, reply.model, reply.stats),
+            searched,
+            trace,
+            memories,
+        ))
     }
 }
 

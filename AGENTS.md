@@ -29,6 +29,17 @@ susutaku/
 │   ├── design_render/         ← bin: paints every UI page → bench/design/ PNG + boxes.json
 │   ├── agent_3th_cli/         ← claude_cli · codex_cli (CLI integrations)
 │   ├── cloud_model_api/       ← zai_api · ai_interface_layer (cloud model HTTP APIs)
+│   ├── git-rs/                ← git control over a work tree via git2 (commit, patch, dirty state; host-side only)
+│   ├── lsp-rs/                ← LSP client/codec + tools
+│   ├── knowledge_graph/       ← entity/triple/graph (knowledge graph + entity embedder)
+│   ├── latenspace/            ← latent context store (token-budgeted context entries)
+│   ├── token_gate_adapter/    ← TGA: tokenizer backend + speculative draft tables (HF tokenizers / katgpt BPE)
+│   ├── modelless/             ← engine-free language kit (English verb corpus + katgpt BPE)
+│   ├── research-rs/           ← research/distill utilities
+│   ├── prompt_bench/          ← bin: prompt benchmarking
+│   ├── codex-usage-rs/        ← codex usage analytics (rollouts, scheduler, snapshots, store)
+│   ├── wgpu-rs/               ← GPU/wgpu cdylib+rlib backend
+│   ├── ruliology/             ← (empty placeholder)
 ├── web_ui/                    ← React TS UI (vite): pages/, components/, ui/, api/
 ├── playwright/                ← e2e suite (tests/, fixtures, mock-model server)
 │                                pipeline-run.spec.ts captures every editor step
@@ -42,6 +53,10 @@ susutaku/
 ├── models/                    ← local model dirs (see names_models.md)
 ├── .plans/                    ← numbered plan files (00–99) — write one per task
 ├── check_pipe/                ← artifacts of the playwright-pipe e2e stack
+├── check_real/                ← artifacts of real-run checks
+├── assets/                    ← static assets
+├── log/                       ← runtime logs
+├── .sqlx/                     ← sqlx query metadata (offline compile)
 ├── bench/                     ← benchmark/design summaries (coverage, design renders)
 ├── docs/                      ← workflow docs (attachments, playwright, docker)
 ├── attachments/               ← uploaded file storage
@@ -63,6 +78,17 @@ susutaku/
 - `crates/agent_3th_cli/` — third-party CLI integrations (`claude_cli`, `codex_cli`)
 - `crates/cloud_model_api/` — cloud model HTTP APIs (`zai_api`, `ai_interface_layer`)
 - `crates/work` — applications/services built on the crates above
+- `crates/git-rs` — git work-tree control via git2 (commit-all, patch text, dirty state); host-side only
+- `crates/lsp-rs` — LSP client, codec, tool bindings
+- `crates/knowledge_graph` — entity/triple/graph model with entity embedder
+- `crates/latenspace` — latent context: token-budgeted `Context` entries
+- `crates/token_gate_adapter` — token gate adapter: unified encode/decode trait over HF `tokenizers` and katgpt BPE, plus speculative draft tables
+- `crates/modelless` — engine-free language kit: English verb corpus + katgpt BPE engine
+- `crates/research-rs` — research/distill utilities
+- `crates/prompt_bench` — prompt benchmarking binary
+- `crates/codex-usage-rs` — codex usage analytics: rollout parsing, scheduler, snapshots, store
+- `crates/wgpu-rs` — wgpu GPU backend (cdylib + rlib)
+- `crates/ruliology` — empty placeholder
 - `attachments/` — file attachment storage (see `docs/attachments.md`)
 - `piplines/`, `input/`, `output/`, `web_ui/` — pipeline and UI assets (`web_ui` includes a Kanban board page backed by `crates/kanban-rs` + Postgres)
 
