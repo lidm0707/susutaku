@@ -57,6 +57,7 @@ type ColumnId = (typeof COLUMNS)[number]["id"];
 type Priority = (typeof PRIORITIES)[number];
 
 const VIEW_BOARD = "board";
+const CARD_MIME = "application/x-susutaku-card";
 const VIEW_LIST = "list";
 type ViewMode = typeof VIEW_BOARD | typeof VIEW_LIST;
 
@@ -707,6 +708,7 @@ export default function Kanban() {
                 draggable
                 onDragStart={(e: React.DragEvent<HTMLDivElement>) => {
                   e.dataTransfer.setData("text/plain", String(card.id));
+                  e.dataTransfer.setData(CARD_MIME, String(card.id));
                   setDraggingId(card.id);
                 }}
                 onDragEnd={() => setDraggingId(null)}
@@ -788,6 +790,7 @@ export default function Kanban() {
                 draggable
                 onDragStart={(e: React.DragEvent<HTMLDivElement>) => {
                   e.dataTransfer.setData("text/plain", String(card.id));
+                  e.dataTransfer.setData(CARD_MIME, String(card.id));
                   setDraggingId(card.id);
                 }}
                 onDragEnd={() => setDraggingId(null)}

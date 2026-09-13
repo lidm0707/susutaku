@@ -63,4 +63,6 @@ pub struct AgentConfigDraft {
     pub output: String,
     /// Tool allow-list (search|fetch|shell|board); empty = all tools.
     pub allowed_tools: Vec<String>,
+    /// False = the agent must never receive images (screenshots, attachments).
+    pub receive_images: bool,
 }

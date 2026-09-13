@@ -82,6 +82,7 @@ async fn agent_crud_and_card_link() {
         prompt: "".into(),
         output: "".into(),
         allowed_tools: vec!["search".into(), "board".into()],
+        receive_images: true,
     };
     let id = store.create_agent(&cfg).await.expect("create agent");
     assert!(matches!(
@@ -112,6 +113,7 @@ async fn agent_crud_and_card_link() {
             prompt: "hi",
             output: "text",
             allowed_tools: &[],
+            receive_images: false,
         })
         .await
         .expect("update agent");
@@ -131,6 +133,7 @@ async fn agent_crud_and_card_link() {
                 prompt: "",
                 output: "",
                 allowed_tools: &[],
+                receive_images: true,
             })
             .await,
         Err(StoreError::NoSuchAgent)

@@ -78,11 +78,14 @@ impl ChatUseCase {
     async fn infer(
         &self,
         prompt: String,
+        image: Option<String>,
         max_tokens: usize,
         tok: TokKind,
         think: bool,
     ) -> Result<GenReply, String> {
-        let rx = self.engine.submit(prompt, max_tokens, tok, think)?;
+        let rx = self
+            .engine
+            .submit_with_image(prompt, image, max_tokens, tok, think)?;
         rx.await
             .map_err(|_| "inference dropped the job".to_string())?
     }
@@ -230,7 +233,13 @@ impl ChatHandling for ChatUseCase {
             &tools,
         );
         let mut reply = self
-            .infer(prompt, cmd.max_tokens, cmd.tokenizer, cmd.think)
+            .infer(
+                prompt,
+                cmd.image.clone(),
+                cmd.max_tokens,
+                cmd.tokenizer,
+                cmd.think,
+            )
             .await?;
         let mut last_good = (reply.text.clone(), reply.model.clone(), reply.stats);
 
@@ -291,7 +300,7 @@ impl ChatHandling for ChatUseCase {
                 &tools,
             );
             reply = match self
-                .infer(prompt, cmd.max_tokens, cmd.tokenizer, cmd.think)
+                .infer(prompt, None, cmd.max_tokens, cmd.tokenizer, cmd.think)
                 .await
             {
                 Ok(r) => {
@@ -311,6 +320,7 @@ impl ChatHandling for ChatUseCase {
             reply = match self
                 .infer(
                     Prompt::build(&cmd.message, &context, false, false, &tools),
+                    None,
                     cmd.max_tokens,
                     cmd.tokenizer,
                     cmd.think,

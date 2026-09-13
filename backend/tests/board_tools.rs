@@ -29,6 +29,22 @@ fn parses_board_tool_calls() {
     );
     assert_eq!(ToolCall::parse("TOOL: PIPELINE_CREATE"), None);
     assert_eq!(
+        ToolCall::parse("TOOL: PIPELINE_CREATE nightly "),
+        Some(ToolCall::PipelineCreate {
+            name: "nightly".into(),
+            spec: None
+        })
+    );
+    assert_eq!(
+        ToolCall::parse(
+            "<invoke name=\"pipeline_create\"><parameter name=\"name\">nightly</parameter><parameter name=\"spec\">   </parameter></invoke>"
+        ),
+        Some(ToolCall::PipelineCreate {
+            name: "nightly".into(),
+            spec: None
+        })
+    );
+    assert_eq!(
         ToolCall::parse("TOOL: CARD_CREATE 3 run backups"),
         Some(ToolCall::CardCreate {
             project_id: 3,
@@ -55,6 +71,41 @@ fn parses_board_tool_calls() {
 fn malformed_board_tool_call_is_none() {
     assert_eq!(ToolCall::parse("TOOL: CARD_CREATE oops no number"), None);
     assert_eq!(ToolCall::parse("TOOL: CARD_ROUTINE 7"), None);
+}
+
+#[test]
+fn parses_xml_invoke_fallback() {
+    let xml = "<invoke name=\"card_routine\">\n<parameter name=\"card_id\">6</parameter>\n<parameter name=\"cron\">0 * * * *</parameter>\n</invoke>";
+    assert_eq!(
+        ToolCall::parse(xml),
+        Some(ToolCall::CardSchedule {
+            card_id: 6,
+            cron: "0 * * * *".into()
+        })
+    );
+    assert_eq!(
+        ToolCall::parse(
+            "<invoke name=\"search\"><parameter name=\"query\">mlx rust</parameter></invoke>"
+        ),
+        Some(ToolCall::Search("mlx rust".into()))
+    );
+    assert_eq!(
+        ToolCall::parse("<invoke name=\"board_list\"></invoke>"),
+        Some(ToolCall::BoardList)
+    );
+    assert_eq!(
+        ToolCall::parse(
+            "<invoke name=\"pipeline_create\"><parameter name=\"name\">nightly</parameter></invoke>"
+        ),
+        Some(ToolCall::PipelineCreate {
+            name: "nightly".into(),
+            spec: None
+        })
+    );
+    assert_eq!(
+        ToolCall::parse("<invoke name=\"card_routine\"></invoke>"),
+        None
+    );
 }
 
 struct FakeBoard;

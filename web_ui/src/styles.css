@@ -949,6 +949,19 @@ button:disabled {
   color: #e6e6ea;
 }
 
+.chat-thread-share {
+  background: transparent;
+  border: none;
+  color: #666;
+  display: flex;
+  padding: 0.2rem;
+  cursor: pointer;
+}
+
+.chat-thread-share:hover {
+  color: #e6e6ea;
+}
+
 
 .chat-agent-pick {
   position: relative;
@@ -4745,4 +4758,86 @@ select.agent-multi {
   gap: 0.5rem;
   border-top: 1px solid #2a2a33;
   padding-top: 0.8rem;
+}
+
+/* capscreen: annotated screenshots */
+.chat-capscreen {
+  width: 2rem;
+  height: 2rem;
+  border-radius: 999px;
+  border: 1px solid #333;
+  background: #1a1a20;
+  color: #aaa;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.chat-capscreen.on {
+  color: #f33;
+  border-color: #f33;
+}
+.capscreen-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+.capscreen-canvas {
+  border: 1px solid #333;
+  border-radius: 4px;
+  cursor: crosshair;
+}
+.agent-images-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.82rem;
+  color: #bbb;
+  cursor: pointer;
+}
+.spin {
+  animation: capscreen-spin 1s linear infinite;
+}
+@keyframes capscreen-spin {
+  to { transform: rotate(360deg); }
+}
+.capscreen-canvas.drop {
+  outline: 2px dashed #f33;
+  outline-offset: 2px;
+}
+.chat-attach-chip {
+  position: relative;
+  display: inline-flex;
+  align-self: center;
+}
+.chat-attach-chip img {
+  height: 2rem;
+  max-width: 5rem;
+  object-fit: cover;
+  border-radius: 6px;
+  border: 1px solid #f33;
+}
+.chat-attach-chip button {
+  position: absolute;
+  top: -0.35rem;
+  right: -0.35rem;
+  width: 1rem;
+  height: 1rem;
+  border-radius: 999px;
+  border: 1px solid #444;
+  background: #1a1a20;
+  color: #ccc;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.bubble-image {
+  display: block;
+  max-width: min(20rem, 100%);
+  max-height: 14rem;
+  border-radius: 8px;
+  border: 1px solid #333;
+  margin-bottom: 0.35rem;
+  cursor: zoom-in;
 }

@@ -27,7 +27,7 @@ export default function Login() {
   }, []);
 
   if (get_token()) {
-    return <Navigate to="/chat" replace />;
+    return <Navigate to={`/chat${window.location.search}`} replace />;
   }
 
   async function submit(e: React.FormEvent) {
@@ -43,7 +43,7 @@ export default function Login() {
           setError("this account must set a new password first");
           return;
         }
-        nav("/chat");
+        nav(`/chat${window.location.search}`);
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
         setError(msg);
@@ -56,7 +56,7 @@ export default function Login() {
     if (mode === "change") {
       try {
         await change_password(password, newPassword);
-        nav("/chat");
+        nav(`/chat${window.location.search}`);
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
         setError(msg);
@@ -73,7 +73,7 @@ export default function Login() {
         setError("this account must set a new password first");
         return;
       }
-      nav("/chat");
+      nav(`/chat${window.location.search}`);
       return;
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);

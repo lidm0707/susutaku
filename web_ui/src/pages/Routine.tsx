@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Clock, Play, Timer, Trash2 } from "lucide-react";
+import { Clock, Pencil, Play, Timer, Trash2, Check, X } from "lucide-react";
 import {
   clear_token,
   connect_events,
   fetch_cards,
   fetch_cronjobs,
+  rename_card,
   run_card,
   set_card_schedule,
   type Card,
@@ -178,6 +179,9 @@ export default function Routine() {
   const [startTime, setStartTime] = useState(DEFAULT_TIME);
   const [showRaw, setShowRaw] = useState(false);
   const [rawCron, setRawCron] = useState("");
+  const [editing, setEditing] = useState(false);
+  const [renaming, setRenaming] = useState(false);
+  const [titleDraft, setTitleDraft] = useState("");
 
   const handle = useCallback(
     (err: unknown) => {
@@ -219,8 +223,7 @@ export default function Routine() {
   async function save_schedule(card_id: number, cron: string | null) {
     try {
       await set_card_schedule(card_id, cron);
-      setAdding(false);
-      setCardPick("");
+      close_form();
       if (cron === null) setSelected(null);
       refresh();
     } catch (err) {
@@ -237,8 +240,43 @@ export default function Routine() {
     }
   }
 
+  async function save_title(card: Card) {
+    const title = titleDraft.trim();
+    setRenaming(false);
+    if (!title || title === card.title) return;
+    try {
+      await rename_card(card, title);
+      refresh();
+    } catch (err) {
+      handle(err);
+    }
+  }
+
+  function open_edit(job: CronJob) {
+    setCardPick(String(job.card_id));
+    const preset = CRON_PRESETS.find((p) => p.expr === job.cron);
+    if (preset) {
+      setCronPick(preset.expr);
+    } else {
+      setCronPick(CUSTOM);
+      setShowRaw(true);
+      setRawCron(job.cron);
+    }
+    setEditing(true);
+  }
+
+  function close_form() {
+    setAdding(false);
+    setEditing(false);
+    setCardPick("");
+    setCronPick(DEFAULT_PRESET);
+    setShowRaw(false);
+    setRawCron("");
+  }
+
   const unscheduled = cards.filter((c) => !c.cron);
   const active = jobs.find((j) => j.card_id === selected) ?? null;
+  const active_card = cards.find((c) => c.id === selected) ?? null;
 
   const builtCron = build_cron(routineUnit, routineN, startTime);
   const customCron = showRaw ? rawCron.trim() : builtCron;
@@ -276,7 +314,49 @@ export default function Routine() {
         {active ? (
           <section className="agent-editor" aria-label={`schedule for ${active.title}`}>
             <header className="agent-editor-row">
-              <h2>{active.title}</h2>
+              {renaming ? (
+                <form
+                  className="agent-editor-row"
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    if (active_card) save_title(active_card);
+                  }}
+                >
+                  <input
+                    autoFocus
+                    value={titleDraft}
+                    onChange={(e) => setTitleDraft(e.target.value)}
+                    aria-label="routine name"
+                  />
+                  <Button variant="primary" type="submit" aria-label="save name">
+                    <Check size={14} />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    type="button"
+                    aria-label="cancel rename"
+                    onClick={() => setRenaming(false)}
+                  >
+                    <X size={14} />
+                  </Button>
+                </form>
+              ) : (
+                <>
+                  <h2>{active.title}</h2>
+                  <Button
+                    variant="ghost"
+                    type="button"
+                    aria-label="rename routine"
+                    disabled={!active_card}
+                    onClick={() => {
+                      setTitleDraft(active.title);
+                      setRenaming(true);
+                    }}
+                  >
+                    <Pencil size={14} /> rename
+                  </Button>
+                </>
+              )}
             </header>
             <div className="agent-editor-row">
               <div>
@@ -296,6 +376,9 @@ export default function Routine() {
             <footer className="agent-editor-foot">
               <Button variant="primary" type="button" onClick={() => run_now(active.card_id)}>
                 <Play size={14} /> run now
+              </Button>
+              <Button variant="ghost" type="button" onClick={() => open_edit(active)}>
+                <Pencil size={14} /> edit schedule
               </Button>
               <Button
                 variant="danger"
@@ -321,28 +404,32 @@ export default function Routine() {
         )}
       </div>
 
-      <Modal open={adding} title="new routine" on_close={() => setAdding(false)}>
+      <Modal open={adding || editing} title={editing ? "edit routine" : "new routine"} on_close={close_form}>
         <form
           className="modal-form"
           onSubmit={(e) => {
             e.preventDefault();
             if (!cardPick) return;
             const cron = cronPick === CUSTOM ? customCron : cronPick;
-            if (cron && (cronPick !== CUSTOM || customCronValid)) save_schedule(Number(cardPick), cron);
+            if (cron && (cronPick !== CUSTOM || customCronValid)) {
+              save_schedule(Number(cardPick), cron);
+            }
           }}
         >
-          <label className="modal-label">
-            card
-            <select value={cardPick} onChange={(e) => setCardPick(e.target.value)}>
-              <option value="">pick a card with a pipeline…</option>
-              {unscheduled.length === 0 && <option disabled>no cards yet</option>}
-              {unscheduled.map((c) => (
-                <option key={c.id} value={c.pipeline_id != null ? c.id : ""} disabled={c.pipeline_id == null}>
-                  {c.pipeline_id == null ? `${c.title} — no pipeline attached` : c.title}
-                </option>
-              ))}
-            </select>
-          </label>
+          {!editing && (
+            <label className="modal-label">
+              card
+              <select value={cardPick} onChange={(e) => setCardPick(e.target.value)}>
+                <option value="">pick a card with a pipeline…</option>
+                {unscheduled.length === 0 && <option disabled>no cards yet</option>}
+                {unscheduled.map((c) => (
+                  <option key={c.id} value={c.pipeline_id != null ? c.id : ""} disabled={c.pipeline_id == null}>
+                    {c.pipeline_id == null ? `${c.title} — no pipeline attached` : c.title}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           <label className="modal-label">
             schedule
             <select
@@ -411,7 +498,9 @@ export default function Routine() {
               </p>
             </div>
           )}
-          <button type="submit" disabled={cronPick === CUSTOM && !customCronValid}>schedule</button>
+          <button type="submit" disabled={cronPick === CUSTOM && !customCronValid}>
+            {editing ? "update schedule" : "schedule"}
+          </button>
         </form>
       </Modal>
     </main>

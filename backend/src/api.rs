@@ -171,7 +171,10 @@ pub fn router<T: ChatHandling + ModelSwitch + 'static>(
             "/api/settings/system-prompt",
             get(get_system_prompt).post(set_system_prompt),
         )
-        .route("/api/chat/zai", post(chat_zai))
+        .route(
+            "/api/chat/zai",
+            post(chat_zai).layer(DefaultBodyLimit::max(ATTACHMENT_MAX_BYTES)),
+        )
         .route(
             "/api/chat/threads",
             get(list_chat_threads).post(create_chat_thread),
@@ -675,6 +678,7 @@ async fn chat<T: ChatHandling>(
             think: req.think.unwrap_or(false),
             board_token,
             agent: req.agent.clone(),
+            image: None,
         })
         .await
         .map_err(ApiError::internal)?;
@@ -1276,6 +1280,33 @@ fn note_chat_reply(
     }
 }
 
+const IMAGE_DENIED_MSG: &str = "this agent does not accept images";
+
+/// Enforce the per-agent `receive_images` flag: images are rejected with 403
+/// for agents that must not receive them, otherwise passed to the model as a
+/// multimodal content part.
+async fn gate_image(
+    agents: Arc<dyn AgentConfigRepo>,
+    agent: Option<&str>,
+    image: Option<String>,
+) -> Result<Option<String>, ApiError> {
+    let Some(image) = image else {
+        return Ok(None);
+    };
+    let Some(name) = agent else {
+        return Err(ApiError::bad_request("image requires an agent"));
+    };
+    let cfg = agents
+        .by_name(name)
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .ok_or_else(|| ApiError::not_found("no such agent"))?;
+    if !cfg.receive_images {
+        return Err(ApiError::forbidden(IMAGE_DENIED_MSG));
+    }
+    Ok(Some(image))
+}
+
 #[utoipa::path(
     post,
     path = "/api/chat/zai",
@@ -1311,6 +1342,8 @@ async fn chat_zai(
         Some(sys) => format!("{}\n\n{}", sys.content, req.message),
         None => req.message.clone(),
     };
+    let gated_image =
+        gate_image(deps.agents.clone(), req.agent.as_deref(), req.image.clone()).await?;
     let outcome = zai
         .execute(ChatCmd {
             message,
@@ -1320,6 +1353,7 @@ async fn chat_zai(
             think: false,
             board_token,
             agent: req.agent.clone(),
+            image: gated_image,
         })
         .await
         .map_err(ApiError::internal)?;
@@ -2172,6 +2206,7 @@ async fn create_agent(
             prompt: req.prompt.unwrap_or_default(),
             output: req.output.unwrap_or_default(),
             allowed_tools,
+            receive_images: req.receive_images,
         })
         .await
         .map_err(cfg_err)?;
@@ -2204,6 +2239,7 @@ async fn update_agent_cfg(
                 prompt: req.prompt.unwrap_or_default(),
                 output: req.output.unwrap_or_default(),
                 allowed_tools,
+                receive_images: req.receive_images,
             },
         )
         .await
@@ -3540,6 +3576,10 @@ struct ZaiChatRequest {
     agent: Option<String>,
     /// Server-side thread id; when set, the turn is stored in Postgres.
     thread_id: Option<i64>,
+    /// Optional image as a data URL (`data:image/png;base64,…`). Gated by the
+    /// agent's `receive_images` flag.
+    #[serde(default)]
+    image: Option<String>,
 }
 
 #[derive(Deserialize, utoipa::ToSchema)]
@@ -3793,6 +3833,13 @@ struct AgentConfigRequest {
     /// Tool allow-list (search|fetch|shell|board); empty = all tools.
     #[serde(default)]
     allowed_tools: Vec<String>,
+    /// False = the agent must never receive images. Defaults to true.
+    #[serde(default = "default_true")]
+    receive_images: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Serialize, utoipa::ToSchema)]
@@ -3804,6 +3851,7 @@ struct AgentConfigDto {
     prompt: String,
     output: String,
     allowed_tools: Vec<String>,
+    receive_images: bool,
 }
 
 impl From<kanban_rs::AgentConfigRow> for AgentConfigDto {
@@ -3816,6 +3864,7 @@ impl From<kanban_rs::AgentConfigRow> for AgentConfigDto {
             prompt: r.prompt,
             output: r.output,
             allowed_tools: r.allowed_tools,
+            receive_images: r.receive_images,
         }
     }
 }
@@ -3975,6 +4024,10 @@ impl ApiError {
 
     fn not_found(msg: impl Into<String>) -> Self {
         Self(msg.into(), StatusCode::NOT_FOUND)
+    }
+
+    fn forbidden(msg: impl Into<String>) -> Self {
+        Self(msg.into(), StatusCode::FORBIDDEN)
     }
 }
 

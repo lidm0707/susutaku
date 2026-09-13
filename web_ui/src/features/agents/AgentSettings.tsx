@@ -59,7 +59,7 @@ const OUTPUT_TEMPLATES: Record<string, string> = {
 
 const OUTPUT_TYPES = Object.keys(OUTPUT_TEMPLATES);
 
-const EMPTY = { name: "", model: "", persona: "", prompt: "", output: "" };
+const EMPTY = { name: "", model: "", persona: "", prompt: "", output: "", receive_images: true };
 
 type Fields = typeof EMPTY;
 
@@ -133,7 +133,7 @@ export default function AgentSettings() {
     setError(err instanceof Error ? err.message : String(err));
   }
 
-  function set(k: keyof Fields, v: string) {
+  function set(k: keyof Fields, v: string | boolean) {
     setFields({ ...fields, [k]: v });
   }
 
@@ -235,6 +235,7 @@ export default function AgentSettings() {
       persona: a.persona || "",
       prompt: a.prompt || "",
       output: a.output || "",
+      receive_images: a.receive_images !== false,
     });
     if (typeof a.id === "number") load_agent_skills(a.id);
     else setAgentSkills([]);
@@ -311,6 +312,7 @@ export default function AgentSettings() {
       persona: fields.persona,
       prompt: fields.prompt,
       output: fields.output,
+      receive_images: fields.receive_images,
     };
     setError("");
     try {
@@ -514,6 +516,16 @@ export default function AgentSettings() {
                 spellCheck={false}
                 placeholder="what the output should look like…"
               />
+            </Field>
+            <Field label="images" icon={<Sparkles size={12} />}>
+              <label className="agent-images-toggle">
+                <input
+                  type="checkbox"
+                  checked={fields.receive_images}
+                  onChange={(e) => set("receive_images", e.target.checked)}
+                />
+                {" "}agent may receive images (screenshots)
+              </label>
             </Field>
             <Field label="skills" icon={<Sparkles size={12} />}>
               {typeof selected === "number" && (

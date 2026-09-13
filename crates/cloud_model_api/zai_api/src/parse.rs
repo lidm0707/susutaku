@@ -7,18 +7,30 @@ pub const ROLE_FIELD: &str = "role";
 pub const CONTENT_FIELD: &str = "content";
 pub const CHOICES_FIELD: &str = "choices";
 pub const MESSAGE_FIELD: &str = "message";
+pub const TYPE_FIELD: &str = "type";
+pub const TEXT_PART: &str = "text";
+pub const IMAGE_PART: &str = "image_url";
+pub const IMAGE_URL_FIELD: &str = "url";
 
-/// Serialize the conversation for the OpenAI-compatible chat body.
+/// Serialize the conversation for the OpenAI-compatible chat body. Messages
+/// carrying an image become multimodal content-part arrays.
 pub fn messages_value(request: &ChatRequest) -> Value {
     Value::Array(
         request
             .messages
             .iter()
-            .map(|m| {
-                json!({
+            .map(|m| match &m.image {
+                None => json!({
                     ROLE_FIELD: m.role.as_str(),
                     CONTENT_FIELD: m.content,
-                })
+                }),
+                Some(url) => json!({
+                    ROLE_FIELD: m.role.as_str(),
+                    CONTENT_FIELD: [
+                        { TYPE_FIELD: TEXT_PART, TEXT_PART: m.content },
+                        { TYPE_FIELD: IMAGE_PART, IMAGE_PART: { IMAGE_URL_FIELD: url } },
+                    ],
+                }),
             })
             .collect(),
     )

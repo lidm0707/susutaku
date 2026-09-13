@@ -128,6 +128,7 @@ async fn recalls_before_and_remembers_after() {
             think: false,
             board_token: None,
             agent: None,
+            image: None,
         })
         .await
         .expect("chat ok");
@@ -154,6 +155,7 @@ async fn works_without_memory() {
             think: false,
             board_token: None,
             agent: None,
+            image: None,
         })
         .await
         .expect("chat ok");

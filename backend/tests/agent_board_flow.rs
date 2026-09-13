@@ -123,6 +123,7 @@ async fn agent_creates_pipeline_with_spec_then_card() {
             think: false,
             board_token: Some("tok".to_string()),
             agent: None,
+            image: None,
         })
         .await
         .expect("chat must complete");

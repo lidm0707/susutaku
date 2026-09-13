@@ -16,6 +16,8 @@ pub struct AgentConfigRow {
     pub prompt: String,
     pub output: String,
     pub allowed_tools: Vec<String>,
+    /// False = the agent must never receive images (screenshots, attachments).
+    pub receive_images: bool,
 }
 
 pub struct AgentConfigUpdate<'a> {
@@ -26,13 +28,14 @@ pub struct AgentConfigUpdate<'a> {
     pub prompt: &'a str,
     pub output: &'a str,
     pub allowed_tools: &'a [String],
+    pub receive_images: bool,
 }
 
 impl Store {
     pub async fn list_agents(&self) -> Result<Vec<AgentConfigRow>, StoreError> {
         let rows = sqlx::query_as!(
             AgentConfigRow,
-            r#"SELECT id, name, model, persona, prompt, output, allowed_tools
+            r#"SELECT id, name, model, persona, prompt, output, allowed_tools, receive_images
                FROM agent_settings ORDER BY id"#
         )
         .fetch_all(&self.pool)
@@ -43,7 +46,7 @@ impl Store {
     pub async fn agent_by_name(&self, name: &str) -> Result<Option<AgentConfigRow>, StoreError> {
         let row = sqlx::query_as!(
             AgentConfigRow,
-            r#"SELECT id, name, model, persona, prompt, output, allowed_tools
+            r#"SELECT id, name, model, persona, prompt, output, allowed_tools, receive_images
                FROM agent_settings WHERE name = $1"#,
             name
         )
@@ -54,8 +57,8 @@ impl Store {
 
     pub async fn create_agent(&self, cfg: &AgentConfigRow) -> Result<i64, StoreError> {
         let row = sqlx::query!(
-            r#"INSERT INTO agent_settings (name, model, persona, prompt, output, allowed_tools)
-               VALUES ($1, $2, $3, $4, $5, $6)
+            r#"INSERT INTO agent_settings (name, model, persona, prompt, output, allowed_tools, receive_images)
+               VALUES ($1, $2, $3, $4, $5, $6, $7)
                RETURNING id AS "id: i64""#,
             cfg.name,
             cfg.model,
@@ -63,6 +66,7 @@ impl Store {
             cfg.prompt,
             cfg.output,
             &cfg.allowed_tools,
+            cfg.receive_images,
         )
         .fetch_one(&self.pool)
         .await
@@ -77,7 +81,7 @@ impl Store {
         let res = sqlx::query!(
             r#"UPDATE agent_settings
                SET name = $2, model = $3, persona = $4, prompt = $5, output = $6,
-                   allowed_tools = $7
+                   allowed_tools = $7, receive_images = $8
                WHERE id = $1"#,
             upd.id,
             upd.name,
@@ -86,6 +90,7 @@ impl Store {
             upd.prompt,
             upd.output,
             upd.allowed_tools,
+            upd.receive_images,
         )
         .execute(&self.pool)
         .await

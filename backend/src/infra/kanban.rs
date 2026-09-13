@@ -333,6 +333,7 @@ impl AgentConfigRepo for PgKanban {
             prompt: cfg.prompt,
             output: cfg.output,
             allowed_tools: cfg.allowed_tools,
+            receive_images: cfg.receive_images,
         };
         let id = self.store().create_agent(&row).await?;
         Ok(AgentConfigRow { id, ..row })
@@ -347,6 +348,7 @@ impl AgentConfigRepo for PgKanban {
             prompt: Box::leak(cfg.prompt.into_boxed_str()),
             output: Box::leak(cfg.output.into_boxed_str()),
             allowed_tools: Box::leak(cfg.allowed_tools.into_boxed_slice()),
+            receive_images: cfg.receive_images,
         };
         self.store().update_agent(upd).await
     }

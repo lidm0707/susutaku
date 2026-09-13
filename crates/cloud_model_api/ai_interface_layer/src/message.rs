@@ -27,6 +27,9 @@ impl fmt::Display for Role {
 pub struct Message {
     pub role: Role,
     pub content: String,
+    /// Optional image (data URL) — serialized as an `image_url` content part
+    /// by providers that support vision. None = plain text message.
+    pub image: Option<String>,
 }
 
 impl Message {
@@ -34,6 +37,7 @@ impl Message {
         Self {
             role,
             content: content.into(),
+            image: None,
         }
     }
 
@@ -43,6 +47,15 @@ impl Message {
 
     pub fn user(content: impl Into<String>) -> Self {
         Self::new(Role::User, content)
+    }
+
+    /// User message carrying an attached image (data URL).
+    pub fn user_with_image(content: impl Into<String>, image: impl Into<String>) -> Self {
+        Self {
+            role: Role::User,
+            content: content.into(),
+            image: Some(image.into()),
+        }
     }
 
     pub fn assistant(content: impl Into<String>) -> Self {

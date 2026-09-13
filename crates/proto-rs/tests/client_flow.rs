@@ -60,6 +60,7 @@ fn spawn_client_agents(
     tokio::spawn(async move { client::connect(&addr, test_meta(), on_command, on_agents).await })
 }
 
+#[tokio::test]
 async fn connect_fails_when_refused() {
     let (listener, addr) = bind_loopback().await;
     drop(listener);

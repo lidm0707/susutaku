@@ -17,6 +17,8 @@ pub struct ChatCmd {
     /// Chat agent name; when set, the agent's configured tool allow-list
     /// (`agent_settings.allowed_tools`) restricts which tools it may use.
     pub agent: Option<String>,
+    /// Optional attached image (data URL); sent on the first model call only.
+    pub image: Option<String>,
 }
 
 /// Driving-adapter response: one completed chat turn.

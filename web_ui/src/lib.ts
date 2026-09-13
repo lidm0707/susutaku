@@ -52,6 +52,8 @@ export interface Agent {
   persona: string;
   prompt: string;
   output: string;
+  /// false = the agent must never receive images (screenshots).
+  receive_images?: boolean;
 }
 
 export interface Workspace {
@@ -586,7 +588,8 @@ export async function chat_zai(
   model: string,
   system?: PromptSection[],
   agent?: string,
-  thread_id?: number
+  thread_id?: number,
+  image?: string
 ): Promise<ChatReply> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   const token = get_token();
@@ -594,7 +597,7 @@ export async function chat_zai(
   const res = await fetch(`${API_BASE}/api/chat/zai`, {
     method: "POST",
     headers,
-    body: JSON.stringify({ message, model: model || undefined, system, agent, thread_id }),
+    body: JSON.stringify({ message, model: model || undefined, system, agent, thread_id, image }),
   });
   if (!res.ok) throw new ApiError(res.status, await res.text());
   return res.json();
@@ -1074,6 +1077,23 @@ export async function set_card_pipeline(id: number, pipeline_id: number | null):
 export async function run_card(id: number): Promise<CardRun> {
   const res = await api(`/api/kanban/cards/${id}/run`, { method: "POST" });
   return res.json();
+}
+
+export async function rename_card(card: Card, title: string): Promise<Response> {
+  return api(`/api/kanban/cards/${card.id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      title,
+      description: card.description,
+      assignee: card.assignee ?? null,
+      priority: card.priority,
+      deadline: card.deadline ?? null,
+      labels: card.labels,
+      checklist: card.checklist,
+      estimate: card.estimate,
+    }),
+  });
 }
 
 export async function set_card_schedule(id: number, cron: string | null): Promise<Response> {

@@ -2,7 +2,7 @@ import React, { useEffect } from "react";
 import { useState } from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter, Navigate, Route, Routes, useNavigate } from "react-router-dom";
-import ChatModal, { use_chat_docked } from "./components/ChatModal.jsx";
+import ChatModal, { CHAT_PARAM, use_chat_docked } from "./components/ChatModal.jsx";
 import AgentSettings from "./features/agents/AgentSettings.jsx";
 import Kanban from "./pages/Kanban.jsx";
 import Login from "./pages/Login.jsx";
@@ -18,13 +18,15 @@ import { ProjectProvider } from "./components/ProjectContext.tsx";
 import "./styles.css";
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
-  if (!get_token()) return <Navigate to="/" replace />;
+  if (!get_token()) return <Navigate to={`/${window.location.search}`} replace />;
   return <>{children}</>;
 }
 
 function App() {
   const nav = useNavigate();
-  const [chat_open, set_chat_open] = useState(false);
+  const [chat_open, set_chat_open] = useState(
+    () => new URLSearchParams(window.location.search).has(CHAT_PARAM),
+  );
   const docked = use_chat_docked();
   useEffect(() => {
     const onUnauthorized = () => {
@@ -41,7 +43,7 @@ function App() {
         <Routes>
         <Route path="/" element={<Login />} />
         <Route path="/login" element={<Navigate to="/" replace />} />
-        <Route path="/chat" element={<Navigate to="/kanban" replace />} />
+        <Route path="/chat" element={<Navigate to={`/kanban${window.location.search}`} replace />} />
         <Route path="/models" element={<Navigate to="/kanban" replace />} />
         <Route path="/kanban" element={<RequireAuth><Kanban /></RequireAuth>} />
         <Route path="/pipelines" element={<RequireAuth><Pipelines /></RequireAuth>} />

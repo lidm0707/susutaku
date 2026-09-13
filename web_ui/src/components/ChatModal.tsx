@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
-import { Bot, Brain, Check, Copy, MessageSquarePlus, PanelRight, Send, Wrench, X } from "lucide-react";
+import { Bot, Brain, Camera, Check, Copy, Link2, MessageSquarePlus, PanelRight, Send, Wrench, X } from "lucide-react";
 import {
   API_BASE,
   chat_codex,
@@ -11,6 +11,7 @@ import {
   fetch_agents,
   fetch_chat_messages,
   fetch_chat_threads,
+  fetch_cards,
   fetch_codex_models,
   fetch_cronjobs,
   fetch_models,
@@ -26,6 +27,8 @@ import {
   type PromptSection,
 } from "../lib.js";
 import { Modal } from "../ui/Overlay.js";
+import CapscreenModal from "./CapscreenModal.js";
+import { image_file_to_canvas } from "../features/capscreen.js";
 
 const MAX_TOKENS = 512;
 
@@ -36,7 +39,13 @@ const TOAST_MS = 4000;
 
 const THREAD_TITLE_LEN = 24;
 
+const CARD_MIME = "application/x-susutaku-card";
+const CARD_MENTION_RE = /#card:(\d+)/g;
+
 const DOCK_KEY = "chat_dock";
+
+// url query param that opens the chat docked on a shared thread (?chat=<server id>)
+export const CHAT_PARAM = "chat";
 const DOCK_RIGHT = "right";
 const DOCK_W_KEY = "chat_dock_w_v2";
 const DOCK_W_MIN = 320;
@@ -204,6 +213,8 @@ interface Msg {
   model?: string;
   prompt_tps?: number;
   tps?: number;
+  /// annotated screenshot attached to this message
+  image?: string;
   tools?: ChatToolUse[];
   memories?: string[];
 }
@@ -229,14 +240,21 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
   const [agents, setAgents] = useState<Agent[]>([]);
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [sysPrompt, setSysPrompt] = useState("");
-  const [searchMode, setSearchMode] = useState<"off" | "auto" | "on">("off");
+  const [searchMode, setSearchMode] = useState<"off" | "auto" | "on">("auto");
   const [pickerOpen, setPickerOpen] = useState(false);
   const [docked, setDocked] = useState(read_dock);
   const dock_w = useRef(read_dock_w());
   const [error, setError] = useState("");
   const [toast, setToast] = useState("");
+  // server thread id taken from a shared ?chat= link, resolved once threads load
+  const [sharedId, setSharedId] = useState(
+    () => Number(new URLSearchParams(window.location.search).get(CHAT_PARAM)) || 0,
+  );
   // agent name -> machine it currently runs on ("" = not running anywhere).
   const [machineByAgent, setMachineByAgent] = useState<Record<string, string>>({});
+  const [capscreenOpen, setCapscreenOpen] = useState(false);
+  const [pendingImage, setPendingImage] = useState<string | null>(null);
+  const [capscreenInit, setCapscreenInit] = useState<HTMLCanvasElement | null>(null);
   const nextId = useRef(1);
   const nextThreadId = useRef(1);
   const loadingThreads = useRef(new Set<number>());
@@ -328,6 +346,16 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
     });
   }, [open, agents]);
 
+  // once threads are loaded, jump to the thread named by a shared ?chat= link
+  useEffect(() => {
+    if (!sharedId) return;
+    const t = threads.find((x) => x.server_id === sharedId);
+    if (!t) return;
+    setActiveId(t.id);
+    setSharedId(0);
+    window.history.replaceState(null, "", window.location.pathname);
+  }, [sharedId, threads]);
+
   function toggle_dock() {
     setDocked((d) => {
       if (d) localStorage.removeItem(DOCK_KEY);
@@ -394,6 +422,22 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
     setError("");
   }
 
+  function share_url(t: Thread): string | null {
+    if (t.server_id === null) return null;
+    return `${window.location.origin}${window.location.pathname}?${CHAT_PARAM}=${t.server_id}`;
+  }
+
+  async function copy_share(t: Thread) {
+    const url = share_url(t);
+    if (!url) return;
+    try {
+      await navigator.clipboard.writeText(url);
+      setToast("link copied — anyone with an account can open this chat");
+    } catch {
+      setError("could not copy link");
+    }
+  }
+
   function close_thread(id: number) {
     const gone = threads.find((t) => t.id === id);
     if (gone?.server_id !== null && gone?.server_id !== undefined) {
@@ -423,6 +467,22 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
     );
   }
 
+  function card_mentions(text: string): number[] {
+    const ids = new Set<number>();
+    for (const m of text.matchAll(CARD_MENTION_RE)) ids.add(Number(m[1]));
+    return [...ids];
+  }
+
+  async function card_context(text: string): Promise<string> {
+    const ids = card_mentions(text);
+    if (!ids.length) return "";
+    const cards = await fetch_cards(null).catch(() => []);
+    const lines = cards
+      .filter((c) => ids.includes(c.id))
+      .map((c) => `card #${c.id}: ${c.title}${c.description ? ` — ${c.description}` : ""}`);
+    return lines.length ? `mentioned cards:\n${lines.join("\n")}` : "";
+  }
+
   function agent_sections(a: Agent): PromptSection[] {
     const instructions = [a.persona, a.prompt].filter((s) => s.trim()).join("\n\n");
     return [
@@ -431,7 +491,12 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
     ].filter((s) => s.body.trim());
   }
 
-  async function send_agent(a: Agent, text: string, thread_id: number | null): Promise<ChatReply> {
+  async function send_agent(
+    a: Agent,
+    text: string,
+    thread_id: number | null,
+    image?: string
+  ): Promise<ChatReply> {
     let codex = codexModels;
     if (!codex.length) {
       codex = await fetch_codex_models().catch(() => []);
@@ -448,7 +513,10 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
       });
       return res.json();
     }
-    return chat_zai(text, a.model, agent_sections(a), a.name, thread_id ?? undefined);
+    // agents flagged receive_images=false get text only — the backend rejects
+    // images for them with 403
+    const img = a.receive_images === false ? undefined : image;
+    return chat_zai(text, a.model, agent_sections(a), a.name, thread_id ?? undefined, img);
   }
 
   async function send(e: React.FormEvent) {
@@ -467,9 +535,11 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
     set_title_from(tid, text);
     const userId = nextId.current++;
     const replyIds = selected.map(() => nextId.current++);
+    const attachedImage = pendingImage;
+    setPendingImage(null);
     patch_thread(tid, (m) => [
       ...m,
-      { id: userId, role: "user", text },
+      { id: userId, role: "user", text, image: attachedImage ?? undefined },
       ...selected.map((a, i) => ({
         id: replyIds[i],
         role: "assistant" as const,
@@ -481,8 +551,10 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
     ]);
     const page = page_label(pathname);
     const data = await page_data(pathname);
+    const cards = await card_context(text);
+    const image = attachedImage;
     const contexted =
-      `[context: user is currently on the ${page} page${data ? `\n${data}` : ""}]\n\n${text}`;
+      `[context: user is currently on the ${page} page${data ? `\n${data}` : ""}${cards ? `\n${cards}` : ""}]${image ? "\n[a screenshot is attached]" : ""}\n\n${text}`;
     let serverThreadId = thread?.server_id ?? null;
     if (serverThreadId === null) {
       try {
@@ -495,7 +567,7 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
       }
     }
     const outcomes = await Promise.allSettled(
-      selected.map((a) => send_agent(a, contexted, serverThreadId))
+      selected.map((a) => send_agent(a, contexted, serverThreadId, image ?? undefined))
     );
     let failures = 0;
     outcomes.forEach((out, i) => {
@@ -613,6 +685,14 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
                     </ul>
                   </details>
                 )}
+                {m.image && (
+                  <img
+                    className="bubble-image"
+                    src={m.image}
+                    alt="attached screenshot"
+                    onClick={() => window.open(m.image, "_blank")}
+                  />
+                )}
                 {m.pending ? (
                   <span className="run-dots" role="status" aria-label="agent is running">
                     <span /><span /><span />
@@ -680,15 +760,73 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
                 </div>
               )}
             </div>
+            {pendingImage && (
+              <span className="chat-attach-chip">
+                <img src={pendingImage} alt="attached screenshot preview" />
+                <button
+                  type="button"
+                  onClick={() => setPendingImage(null)}
+                  title="remove attachment"
+                  aria-label="remove attachment"
+                >
+                  <X size={12} />
+                </button>
+              </span>
+            )}
             <input
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder={busy ? "generating…" : "type a message"}
+              onDragOver={(e: React.DragEvent<HTMLInputElement>) => {
+                if (e.dataTransfer.types.includes(CARD_MIME) || e.dataTransfer.types.includes("Files"))
+                  e.preventDefault();
+              }}
+              onDrop={(e: React.DragEvent<HTMLInputElement>) => {
+                const id = e.dataTransfer.getData(CARD_MIME);
+                if (id) {
+                  e.preventDefault();
+                  setInput((cur) => `${cur}${cur && !cur.endsWith(" ") ? " " : ""}#card:${id} `);
+                  return;
+                }
+                // image file dragged from the desktop → open the annotator with it
+                const file = e.dataTransfer.files?.[0];
+                if (file && file.type.startsWith("image/")) {
+                  e.preventDefault();
+                  image_file_to_canvas(file)
+                    .then((canvas) => {
+                      setCapscreenInit(canvas);
+                      setCapscreenOpen(true);
+                    })
+                    .catch(() => setError("could not load dropped image"));
+                }
+              }}
+              placeholder={busy ? "generating…" : "type a message or drop a card"}
             />
+            <button
+              type="button"
+              className={pendingImage ? "chat-capscreen on" : "chat-capscreen"}
+              onClick={() => setCapscreenOpen(true)}
+              title="attach annotated screenshot"
+              aria-label="attach annotated screenshot"
+            >
+              <Camera size={16} />
+            </button>
             <button type="submit" disabled={busy || !selected.length}>
               <Send size={16} />
             </button>
           </form>
+          <CapscreenModal
+            open={capscreenOpen}
+            initial_image={capscreenInit}
+            on_close={() => {
+              setCapscreenOpen(false);
+              setCapscreenInit(null);
+            }}
+            on_send={async (image, note) => {
+              setPendingImage(image);
+              if (note) setInput((cur) => `${cur}${cur && !cur.endsWith(" ") ? " " : ""}${note} `);
+              setToast("screenshot attached — it goes out with your next message");
+            }}
+          />
         </div>
         <aside className="chat-threads" aria-label="chat threads">
           <div className="chat-threads-head">
@@ -712,6 +850,17 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
               >
                 {t.title}
               </button>
+              {t.server_id !== null && (
+                <button
+                  type="button"
+                  className="chat-thread-share"
+                  onClick={() => copy_share(t)}
+                  title="copy share link"
+                  aria-label={`share ${t.title}`}
+                >
+                  <Link2 size={12} />
+                </button>
+              )}
               <button
                 type="button"
                 className="chat-thread-close"

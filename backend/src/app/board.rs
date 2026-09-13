@@ -46,7 +46,9 @@ impl BoardOps for BoardService {
         self.editor(&req.token).await?;
         match req.op {
             BoardOp::CreatePipeline { name, spec } => {
-                let spec = spec.unwrap_or_else(|| EMPTY_SPEC.to_owned());
+                let spec = spec
+                    .filter(|s| !s.trim().is_empty())
+                    .unwrap_or_else(|| EMPTY_SPEC.to_owned());
                 let id = self
                     .store
                     .create_pipeline(&name, &spec)

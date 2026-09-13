@@ -45,6 +45,17 @@ impl Inference for ZaiEngine {
     fn submit(
         &self,
         prompt: String,
+        max_tokens: usize,
+        tok: TokKind,
+        think: bool,
+    ) -> Result<ReplyRx, String> {
+        self.submit_with_image(prompt, None, max_tokens, tok, think)
+    }
+
+    fn submit_with_image(
+        &self,
+        prompt: String,
+        image: Option<String>,
         _max_tokens: usize,
         _tok: TokKind,
         _think: bool,
@@ -53,7 +64,11 @@ impl Inference for ZaiEngine {
         let model = self.name();
         let (tx, rx) = tokio::sync::oneshot::channel();
         tokio::task::spawn_blocking(move || {
-            let req = ChatRequest::new(String::new(), vec![Message::user(prompt)]);
+            let message = match image {
+                Some(url) => Message::user_with_image(prompt, url),
+                None => Message::user(prompt),
+            };
+            let req = ChatRequest::new(String::new(), vec![message]);
             let reply = ChatProvider::complete(&client, &req).map(|r| GenReply {
                 model,
                 text: r.content,
