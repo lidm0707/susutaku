@@ -7,6 +7,7 @@ mod chat_memory;
 mod inference;
 mod kanban;
 mod model;
+mod project_git;
 mod runner;
 mod search;
 
@@ -21,5 +22,6 @@ pub use kanban::{
     ResourceRepo, SkillRepo, WorkspaceRepo,
 };
 pub use model::{ModelEndpoint, ModelSwitch};
+pub use project_git::ProjectGit;
 pub use runner::Runner;
 pub use search::{Fetcher, Searcher};

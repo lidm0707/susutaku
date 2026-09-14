@@ -3,7 +3,11 @@
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GitOp {
-    Clone { url: String, token: Option<String> },
+    /// `None` url means "the repo bound to this chat's project".
+    Clone {
+        url: Option<String>,
+        token: Option<String>,
+    },
     Status,
     Diff,
 }

@@ -1,6 +1,7 @@
 //! Value objects: immutable domain data with no identity.
 
 pub mod board;
+pub mod bound_repo;
 pub mod chat;
 pub mod gen_reply;
 pub mod git_op;
@@ -11,6 +12,7 @@ pub mod tool_set;
 pub mod tool_use;
 
 pub use board::{BoardOp, BoardRequest, BoardResult};
+pub use bound_repo::BoundRepo;
 pub use chat::{ChatCmd, ChatOutcome};
 pub use gen_reply::{GenReply, ReplyRx};
 pub use git_op::GitOp;

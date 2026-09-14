@@ -84,7 +84,7 @@ impl Runner for AgentSandbox {
     fn git(&self, op: &GitOp) -> Result<String, String> {
         let tool = match op {
             GitOp::Clone { url, token } => proto_rs::GitTool::Clone {
-                url: url.clone(),
+                url: url.clone().ok_or_else(|| "clone needs a url".to_string())?,
                 token: token.clone(),
             },
             GitOp::Status => proto_rs::GitTool::Status,

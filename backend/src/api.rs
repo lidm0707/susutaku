@@ -35,7 +35,7 @@ use crate::infra::zai::settings::{SettingsState, ZaiSettings};
 use crate::port::inbound::ChatHandling;
 use crate::port::outbound::{
     AgentConfigRepo, AgentGit, BoardOps, ChatMemory, Fetcher, Inference, ModelEndpoint,
-    ModelSwitch, Runner, Searcher,
+    ModelSwitch, ProjectGit, Runner, Searcher,
 };
 use prompt_sys::{MAX_PROMPT_CHARS, PromptBuilder, Role as PromptRole};
 use proto_rs::AgentBrief;
@@ -58,6 +58,7 @@ struct ZaiChatDeps {
     settings: Arc<SettingsState>,
     store: std::sync::Arc<kanban_rs::Store>,
     agent_git: Arc<dyn AgentGit>,
+    project_git: Arc<dyn ProjectGit>,
 }
 
 fn zai_chat_deps<T: ModelSwitch + 'static>(
@@ -78,6 +79,9 @@ fn zai_chat_deps<T: ModelSwitch + 'static>(
             kanban_store.clone(),
         )),
         settings,
+        project_git: Arc::new(crate::infra::project_git::SettingsProjectGit::new(
+            kanban_store.clone(),
+        )),
         store: kanban_store,
         agent_git: Arc::new(crate::infra::manager_git::ManagerGit::new(manager)),
     })
@@ -1592,7 +1596,8 @@ async fn chat_zai(
         deps.board.clone(),
         deps.agents.clone(),
     )
-    .with_agent_git(zai_deps_.agent_git.clone());
+    .with_agent_git(zai_deps_.agent_git.clone())
+    .with_project_git(zai_deps_.project_git.clone());
     let message = match build_system_message(&req.system)? {
         Some(sys) => format!("{}\n\n{}", sys.content, req.message),
         None => req.message.clone(),

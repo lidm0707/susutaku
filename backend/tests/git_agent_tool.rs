@@ -5,7 +5,7 @@ fn parses_git_tool_lines() {
     assert_eq!(
         ToolCall::parse("TOOL: GIT CLONE https://github.com/lidm0707/susutaku"),
         Some(ToolCall::Git(GitOp::Clone {
-            url: "https://github.com/lidm0707/susutaku".into(),
+            url: Some("https://github.com/lidm0707/susutaku".into()),
             token: None,
         }))
     );
@@ -18,7 +18,13 @@ fn parses_git_tool_lines() {
         Some(ToolCall::Git(GitOp::Diff))
     );
     assert_eq!(ToolCall::parse("TOOL: GIT"), None);
-    assert_eq!(ToolCall::parse("TOOL: GIT CLONE"), None);
+    assert_eq!(
+        ToolCall::parse("TOOL: GIT CLONE"),
+        Some(ToolCall::Git(GitOp::Clone {
+            url: None,
+            token: None,
+        }))
+    );
 }
 
 #[test]
@@ -28,7 +34,7 @@ fn parses_git_xml_invoke() {
             r#"<invoke name="git"><parameter name="op">clone</parameter><parameter name="url">https://example.com/r.git</parameter></invoke>"#
         ),
         Some(ToolCall::Git(GitOp::Clone {
-            url: "https://example.com/r.git".into(),
+            url: Some("https://example.com/r.git".into()),
             token: None,
         }))
     );

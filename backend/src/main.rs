@@ -104,7 +104,10 @@ async fn main() {
             board,
             agents,
         )
-        .with_agent_git(Arc::new(ManagerGit::new(manager.clone()))),
+        .with_agent_git(Arc::new(ManagerGit::new(manager.clone())))
+        .with_project_git(Arc::new(
+            backend::infra::project_git::SettingsProjectGit::new(kanban_store.clone()),
+        )),
     );
 
     let usage_store = Arc::new(codex_usage::connect().await);

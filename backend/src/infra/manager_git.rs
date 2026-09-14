@@ -15,20 +15,20 @@ impl ManagerGit {
         Self { manager }
     }
 
-    fn to_proto(op: &GitOp) -> proto_rs::GitTool {
+    fn to_proto(op: &GitOp) -> Result<proto_rs::GitTool, String> {
         match op {
-            GitOp::Clone { url, token } => proto_rs::GitTool::Clone {
-                url: url.clone(),
+            GitOp::Clone { url, token } => Ok(proto_rs::GitTool::Clone {
+                url: url.clone().ok_or_else(|| "clone needs a url".to_string())?,
                 token: token.clone(),
-            },
-            GitOp::Status => proto_rs::GitTool::Status,
-            GitOp::Diff => proto_rs::GitTool::Diff,
+            }),
+            GitOp::Status => Ok(proto_rs::GitTool::Status),
+            GitOp::Diff => Ok(proto_rs::GitTool::Diff),
         }
     }
 }
 
 impl AgentGit for ManagerGit {
     fn git_for(&self, agent: &str, op: &GitOp) -> Result<String, String> {
-        self.manager.git_tool(agent, &Self::to_proto(op))
+        self.manager.git_tool(agent, &Self::to_proto(op)?)
     }
 }

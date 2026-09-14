@@ -4,14 +4,14 @@
 use std::sync::Arc;
 
 use crate::domain::{
-    BoardOp, BoardRequest, ChatCmd, ChatOutcome, GenReply, GitOp, Prompt, SearchMode, SearchResult,
-    TOOL_DENIED, TOOL_RESULT_HEADER, TOOL_ROUNDS_MAX, TOOL_SUMMARY_MAX, ToolCall, ToolKind,
-    ToolSet, ToolUse,
+    BoardOp, BoardRequest, BoundRepo, ChatCmd, ChatOutcome, GenReply, GitOp, Prompt, SearchMode,
+    SearchResult, TOOL_DENIED, TOOL_RESULT_HEADER, TOOL_ROUNDS_MAX, TOOL_SUMMARY_MAX, ToolCall,
+    ToolKind, ToolSet, ToolUse,
 };
 use crate::port::inbound::ChatHandling;
 use crate::port::outbound::{
-    AgentConfigRepo, AgentGit, BoardOps, ChatMemory, Fetcher, Inference, ModelSwitch, Runner,
-    Searcher,
+    AgentConfigRepo, AgentGit, BoardOps, ChatMemory, Fetcher, Inference, ModelSwitch, ProjectGit,
+    Runner, Searcher,
 };
 use susutaku_mlx::stats::GenStats;
 use susutaku_mlx::tok::TokKind;
@@ -33,6 +33,9 @@ pub struct ChatUseCase {
     agents: Arc<dyn AgentConfigRepo>,
     /// Per-agent git host; `None` degrades git ops to the shared work tree.
     agent_git: Option<Arc<dyn AgentGit>>,
+    /// Resolves the repo bound to the chat's project; `None` disables
+    /// url-less GIT CLONE.
+    project_git: Option<Arc<dyn ProjectGit>>,
 }
 
 impl ChatUseCase {
@@ -57,6 +60,7 @@ impl ChatUseCase {
             board,
             agents,
             agent_git: None,
+            project_git: None,
         }
     }
 
@@ -64,6 +68,13 @@ impl ChatUseCase {
     /// manager); chats without an agent keep using the shared work tree.
     pub fn with_agent_git(mut self, agent_git: Arc<dyn AgentGit>) -> Self {
         self.agent_git = Some(agent_git);
+        self
+    }
+
+    /// Lets a url-less GIT CLONE resolve the repo bound to the chat's
+    /// project (thread → project → repo setting).
+    pub fn with_project_git(mut self, project_git: Arc<dyn ProjectGit>) -> Self {
+        self.project_git = Some(project_git);
         self
     }
 
@@ -145,6 +156,38 @@ impl ChatUseCase {
             tools,
             memories,
             stats,
+        }
+    }
+
+    /// Fills a url-less CLONE with the repo bound to the chat's project;
+    /// returns the executable op plus the trace label (credential-free url).
+    fn resolve_git_op(op: GitOp, bound: Option<&BoundRepo>) -> Result<(GitOp, String), String> {
+        match op {
+            GitOp::Clone {
+                url: Some(url),
+                token,
+            } => Ok((
+                GitOp::Clone {
+                    url: Some(url.clone()),
+                    token,
+                },
+                url,
+            )),
+            GitOp::Clone { token, .. } => match bound {
+                Some(repo) => Ok((
+                    GitOp::Clone {
+                        url: Some(repo.url.clone()),
+                        token: token.or_else(|| repo.secret.clone()),
+                    },
+                    repo.display_url.clone(),
+                )),
+                None => Err(
+                    "no git repo is bound to this chat's project (bind one in settings → git repos)"
+                        .to_string(),
+                ),
+            },
+            GitOp::Status => Ok((GitOp::Status, "status".to_string())),
+            GitOp::Diff => Ok((GitOp::Diff, "diff".to_string())),
         }
     }
 
@@ -237,6 +280,18 @@ impl ChatHandling for ChatUseCase {
                 }
             }
         }
+        let bound = match (self.project_git.as_ref(), cmd.thread_id.as_deref()) {
+            (Some(git), Some(thread)) if tools.allows(ToolKind::Git) => {
+                git.bound_repo(thread).await
+            }
+            _ => None,
+        };
+        if let Some(repo) = &bound {
+            context.push_str(&format!(
+                "PROJECT GIT REPO: {} is bound to this project; TOOL: GIT CLONE without a url clones it.\n",
+                repo.display_url
+            ));
+        }
         let mut trace: Vec<ToolUse> = Vec::new();
         let mut searched = false;
         if cmd.mode == SearchMode::Force {
@@ -320,26 +375,27 @@ impl ChatHandling for ChatUseCase {
                     context.push_str(&out);
                 }
                 ToolCall::Git(op) if tools.allows(ToolKind::Git) => {
-                    let input = match &op {
-                        GitOp::Clone { url, .. } => url.clone(),
-                        GitOp::Status => "status".to_string(),
-                        GitOp::Diff => "diff".to_string(),
-                    };
                     let agent = cmd.agent.as_deref().unwrap_or("").trim().to_string();
-                    let result = match (self.agent_git.as_ref(), !agent.is_empty()) {
-                        (Some(git), true) => {
-                            let git = Arc::clone(git);
-                            tokio::task::spawn_blocking(move || git.git_for(&agent, &op))
-                                .await
-                                .map_err(|_| "git task panicked".to_string())
-                                .and_then(|inner| inner)
-                        }
-                        _ => {
-                            let runner = Arc::clone(&self.runner);
-                            tokio::task::spawn_blocking(move || runner.git(&op))
-                                .await
-                                .map_err(|_| "git task panicked".to_string())
-                                .and_then(|inner| inner)
+                    let (input, result) = match Self::resolve_git_op(op, bound.as_ref()) {
+                        Err(e) => ("clone".to_string(), Err(e)),
+                        Ok((op, input)) => {
+                            let result = match (self.agent_git.as_ref(), !agent.is_empty()) {
+                                (Some(git), true) => {
+                                    let git = Arc::clone(git);
+                                    tokio::task::spawn_blocking(move || git.git_for(&agent, &op))
+                                        .await
+                                        .map_err(|_| "git task panicked".to_string())
+                                        .and_then(|inner| inner)
+                                }
+                                _ => {
+                                    let runner = Arc::clone(&self.runner);
+                                    tokio::task::spawn_blocking(move || runner.git(&op))
+                                        .await
+                                        .map_err(|_| "git task panicked".to_string())
+                                        .and_then(|inner| inner)
+                                }
+                            };
+                            (input, result)
                         }
                     };
                     trace.push(ToolUse::new(ToolKind::Git, &input, &result));

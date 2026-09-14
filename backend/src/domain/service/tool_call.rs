@@ -192,13 +192,10 @@ impl ToolCall {
 
     fn parse_git_op(op: Option<&str>, url: Option<&str>) -> Option<Self> {
         match op?.to_uppercase().as_str() {
-            GIT_OP_CLONE => {
-                let url = url.filter(|u| !u.is_empty())?;
-                Some(Self::Git(GitOp::Clone {
-                    url: url.to_string(),
-                    token: None,
-                }))
-            }
+            GIT_OP_CLONE => Some(Self::Git(GitOp::Clone {
+                url: url.filter(|u| !u.is_empty()).map(str::to_owned),
+                token: None,
+            })),
             GIT_OP_STATUS if url.is_none() => Some(Self::Git(GitOp::Status)),
             GIT_OP_DIFF if url.is_none() => Some(Self::Git(GitOp::Diff)),
             _ => None,

@@ -46,6 +46,20 @@ impl crate::store::Store {
         Ok(row)
     }
 
+    pub async fn chat_thread(&self, id: i64) -> Result<Option<ChatThreadRow>, StoreError> {
+        sqlx::query_as!(
+            ChatThreadRow,
+            r#"SELECT id, agent, title, project_id, created_at,
+                      created_at AS "updated_at!"
+               FROM chat_threads
+               WHERE id = $1"#,
+            id
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(StoreError::from)
+    }
+
     /// Threads scoped to one project; `None` lists project-less threads.
     pub async fn list_chat_threads(
         &self,
