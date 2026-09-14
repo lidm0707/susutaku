@@ -42,7 +42,13 @@ export async function load_plotter_ctor(): Promise<PlotterCtor | null> {
 
 export async function make_plotter(target: HTMLCanvasElement): Promise<Plotter> {
   const Ctor = await load_plotter_ctor();
-  if (Ctor) return new Ctor(target);
+  if (Ctor) {
+    try {
+      return await new Ctor(target);
+    } catch {
+      // GPU adapter/device unavailable (e.g. no WebGPU on macOS Firefox)
+    }
+  }
   return make_fallback_plotter(target);
 }
 
@@ -263,13 +269,28 @@ function parse(tokens: Tok[]): (x: number) => number {
   return fn;
 }
 
-export function eval_expr(src: string, x: number): number {
-  return parse(tokenize(src))(x);
+/// Rewrite an equation "lhs = rhs" into an expression "rhs - lhs" (y isolated
+/// on the lhs, substituted with 0); returns null when there is no "=" or y
+/// appears outside the lhs.
+function equation_to_expr(src: string): string | null {
+  const eq = src.indexOf("=");
+  if (eq === -1) return null;
+  const lhs = src.slice(0, eq);
+  const rhs = src.slice(eq + 1);
+  if (/\by\b/i.test(rhs)) return null;
+  if (!/\by\b/i.test(lhs)) return null;
+  const lhs0 = lhs.replace(/\by\b/gi, "0");
+  return `(${rhs}) - (${lhs0})`;
 }
 
-/// Sample an expression over [x0, x1] into flat [x, y, …] pairs.
+export function eval_expr(src: string, x: number): number {
+  return parse(tokenize(equation_to_expr(src) ?? src))(x);
+}
+
+/// Sample an expression (or equation solvable for y) over [x0, x1] into flat
+/// [x, y, …] pairs.
 export function sample_expr(src: string, x0: number, x1: number): number[] {
-  const fn = parse(tokenize(src));
+  const fn = parse(tokenize(equation_to_expr(src) ?? src));
   const pts: number[] = [];
   const dx = (x1 - x0) / SAMPLE_COUNT;
   for (let i = 0; i <= SAMPLE_COUNT; i++) {
@@ -306,6 +327,12 @@ export function parse_plot_spec(body: string): PlotSpec | null {
     try {
       const raw = JSON.parse(text) as Partial<PlotSpec>;
       if (Array.isArray(raw.exprs) && raw.exprs.length > 0 && Array.isArray(raw.x) && raw.x.length === 2) {
+        const exprs = raw.exprs.map(String);
+        try {
+          for (const e of exprs) parse(tokenize(equation_to_expr(e) ?? e));
+        } catch {
+          return null;
+        }
         return {
           exprs: raw.exprs.map(String),
           x: [Number(raw.x[0]), Number(raw.x[1])],
@@ -322,5 +349,10 @@ export function parse_plot_spec(body: string): PlotSpec | null {
     .map((line) => line.replace(/#.*$/, "").trim())
     .filter((line) => line.length > 0);
   if (exprs.length === 0) return null;
+  try {
+    for (const e of exprs) parse(tokenize(equation_to_expr(e) ?? e));
+  } catch {
+    return null;
+  }
   return { exprs, x: [-10, 10] };
 }
