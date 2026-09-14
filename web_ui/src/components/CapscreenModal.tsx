@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { Camera, Circle, ImagePlus, Loader2, Minus, Send, Trash2, Undo2 } from "lucide-react";
 import { Modal } from "../ui/Overlay.js";
 import {
@@ -17,15 +17,12 @@ interface Props {
   open: boolean;
   on_close: () => void;
   on_send: (image_data_url: string, note: string) => Promise<void>;
-  /// Canvas prefilled by a drag-and-drop into the chat input; loaded once
-  /// when the modal opens, then consumed.
-  initial_image?: HTMLCanvasElement | null;
 }
 
 /// Annotate an image — captured screen, uploaded file, or dropped file — with
 /// lines and circles (GPU via wgpu wasm when built, 2D-canvas fallback
 /// otherwise), then hand the PNG to the caller.
-export default function CapscreenModal({ open, on_close, on_send, initial_image }: Props) {
+export default function CapscreenModal({ open, on_close, on_send }: Props) {
   const [shot, setShot] = useState<HTMLCanvasElement | null>(null);
   const [annotator, setAnnotator] = useState<ScreenAnnotator | null>(null);
   const [tool, setTool] = useState<Tool>("line");
@@ -75,14 +72,6 @@ export default function CapscreenModal({ open, on_close, on_send, initial_image 
       setError(err instanceof Error ? err.message : "could not load image");
     }
   }
-
-  // consume a canvas dropped into the chat input
-  useEffect(() => {
-    if (open && initial_image) {
-      load_canvas(initial_image);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
 
   function pos(e: React.PointerEvent<HTMLCanvasElement>): [number, number] {
     const rect = e.currentTarget.getBoundingClientRect();

@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
-import { Bot, Brain, Camera, Check, ChevronDown, Code2, Copy, Crosshair, ExternalLink, Eye, Link2, MessageSquarePlus, PanelRight, Pencil, Send, Wrench, X } from "lucide-react";
+import { Bot, Brain, Camera, Check, ChevronDown, Code2, Copy, Crosshair, ExternalLink, Eye, Link2, ListEnd, MessageSquarePlus, PanelRight, Pencil, Send, Square, Wrench, X } from "lucide-react";
 import {
   API_BASE,
+  cancel_chat_run,
   chat_codex,
   chat_zai,
   chat_zai_stream,
@@ -36,7 +37,7 @@ import { use_projects } from "./ProjectContext.js";
 import GraphView from "./GraphView.tsx";
 import { parse_plot_spec } from "../features/graph.js";
 import CapscreenModal from "./CapscreenModal.js";
-import { image_file_to_canvas } from "../features/capscreen.js";
+import { image_files_to_data_urls } from "../features/capscreen.js";
 import { use_card_created, type CardEvent } from "../features/card_bus.js";
 
 const MAX_TOKENS = 512;
@@ -331,6 +332,8 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
   // runs are isolated per thread: several threads can generate at once
   const [busyTids, setBusyTids] = useState<number[]>([]);
   const busyTidsRef = useRef<number[]>([]);
+  // thread id -> backend run ids of its in-flight streamed runs (for cancel)
+  const runIdsRef = useRef<Record<number, string[]>>({});
   const threadBusy = busyTids.includes(activeId);
   function set_thread_busy(tid: number, on: boolean) {
     busyTidsRef.current = on
@@ -359,7 +362,7 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
   const [machineByAgent, setMachineByAgent] = useState<Record<string, string>>({});
   const [capscreenOpen, setCapscreenOpen] = useState(false);
   const [pendingImages, setPendingImages] = useState<string[]>([]);
-  const [capscreenInit, setCapscreenInit] = useState<HTMLCanvasElement | null>(null);
+  const [inputDrag, setInputDrag] = useState(false);
   const [queued, setQueued] = useState<QueuedMsg[]>([]);
   const queueRef = useRef<QueuedMsg[]>([]);
   const [queueOpen, setQueueOpen] = useState(true);
@@ -421,7 +424,9 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
     if (!item) return;
     if (busyTidsRef.current.includes(item.tid)) {
       bump_queue(id);
-      setToast("moved to front — sends after this thread's current reply");
+      // steer: interrupt the current reply, the queue drain sends this next
+      await stop_thread(item.tid);
+      setToast("interrupting current reply — sends next");
       return;
     }
     drop_queue(id);
@@ -757,7 +762,8 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
     text: string,
     thread_id: number | null,
     image?: string,
-    on_event?: (ev: ChatStreamEvent) => void
+    on_event?: (ev: ChatStreamEvent) => void,
+    run_id?: string
   ): Promise<ChatReply> {
     let codex = codexModels;
     if (!codex.length) {
@@ -798,7 +804,8 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
         a.name,
         thread_id ?? undefined,
         img,
-        on_event
+        on_event,
+        run_id
       );
     }
     return chat_zai(text, a.model, agent_sections(a), a.name, thread_id ?? undefined, img);
@@ -824,7 +831,9 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
       items.forEach(push_queue);
       setInput("");
       setPendingImages([]);
-      setToast("queued — sends after this thread's current reply finishes");
+      // steer: interrupt the current reply, the queue drain sends this next
+      await stop_thread(activeId);
+      setToast("interrupting current reply — your message sends next");
       return;
     }
     const [head, ...rest] = items;
@@ -839,6 +848,7 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
     const thread = threads.find((t) => t.id === tid);
     setError("");
     set_thread_busy(tid, true);
+    runIdsRef.current[tid] = [];
     stickBottom.current = true;
     set_title_from(tid, text);
     const userId = nextId.current++;
@@ -882,6 +892,8 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
         // loop turn) resets it, the final done patch replaces it with the
         // thinking-split full reply
         let streamed = "";
+        const run_id = crypto.randomUUID();
+        runIdsRef.current[tid] = [...(runIdsRef.current[tid] ?? []), run_id];
         return send_agent(a, contexted, serverThreadId, image ?? undefined, (ev: ChatStreamEvent) => {
           if (ev.type === "turn") {
             streamed = "";
@@ -890,6 +902,12 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
             streamed += ev.text;
             patch_msg(replyIds[i], { text: streamed });
           }
+        }, run_id).catch((e) => {
+          // interrupted runs keep the partial text instead of a failed bubble
+          if (String(e?.message ?? e) !== "interrupted") throw e;
+          return {
+            reply: `${streamed}\n\n(interrupted)`.trim(),
+          } as ChatReply;
         });
       })
     );
@@ -931,7 +949,23 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
           : `${selected.length} agents finished`
       );
     }
+    delete runIdsRef.current[tid];
     set_thread_busy(tid, false);
+    // the thread just freed up: flush anything queued behind it
+    await drain_queue();
+  }
+
+  // stop the active run(s) on this thread: the server flags each run
+  // cancelled, the stream ends and the partial text stays in the bubble
+  async function stop_thread(tid: number) {
+    const ids = runIdsRef.current[tid] ?? [];
+    if (!ids.length) return;
+    await Promise.all(ids.map((run_id) => cancel_chat_run(run_id)));
+    setToast(
+      queueRef.current.some((q) => q.tid === tid)
+        ? "interrupting… the next queued message sends after"
+        : "interrupting…"
+    );
   }
 
   const activeIdRef = useRef(activeId);
@@ -1120,7 +1154,7 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
                         <button
                           type="button"
                           onClick={() => send_now(q.id)}
-                          title={busyTids.includes(q.tid) ? "move to front of queue" : "send now"}
+                          title={busyTids.includes(q.tid) ? "interrupt current reply and send now" : "send now"}
                           aria-label={`send now: ${q.text}`}
                         >
                           <Send size={12} /> Send Now
@@ -1203,7 +1237,7 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
               </span>
             ))}
             <textarea
-              className="chat-input"
+              className={`chat-input${inputDrag ? " drag" : ""}`}
               rows={1}
               value={input}
               onChange={(e) => setInput(e.target.value)}
@@ -1213,30 +1247,49 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
                   void send();
                 }
               }}
-              onDragOver={(e: React.DragEvent<HTMLTextAreaElement>) => {
-                if (e.dataTransfer.types.includes(CARD_MIME) || e.dataTransfer.types.includes("Files"))
-                  e.preventDefault();
+              onPaste={(e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+                const files = e.clipboardData?.files;
+                if (!files?.length) return;
+                e.preventDefault();
+                void image_files_to_data_urls(files)
+                  .then((urls) => {
+                    if (urls.length) {
+                      setPendingImages((cur) => [...cur, ...urls]);
+                      setToast("pasted image attached — it goes out with your next message");
+                    }
+                  })
+                  .catch(() => setError("could not load pasted image"));
               }}
+              onDragOver={(e: React.DragEvent<HTMLTextAreaElement>) => {
+                if (e.dataTransfer.types.includes(CARD_MIME) || e.dataTransfer.types.includes("Files")) {
+                  e.preventDefault();
+                  setInputDrag(true);
+                }
+              }}
+              onDragLeave={() => setInputDrag(false)}
               onDrop={(e: React.DragEvent<HTMLTextAreaElement>) => {
+                setInputDrag(false);
                 const id = e.dataTransfer.getData(CARD_MIME);
                 if (id) {
                   e.preventDefault();
                   setInput((cur) => `${cur}${cur && !cur.endsWith(" ") ? " " : ""}#card:${id} `);
                   return;
                 }
-                // image file dragged from the desktop → open the annotator with it
-                const file = e.dataTransfer.files?.[0];
-                if (file && file.type.startsWith("image/")) {
+                // image files dragged from the desktop attach straight to the
+                // next message; annotate via the camera button if needed
+                const files = e.dataTransfer.files;
+                if (files?.length) {
                   e.preventDefault();
-                  image_file_to_canvas(file)
-                    .then((canvas) => {
-                      setCapscreenInit(canvas);
-                      setCapscreenOpen(true);
+                  void image_files_to_data_urls(files)
+                    .then((urls) => {
+                      if (!urls.length) return;
+                      setPendingImages((cur) => [...cur, ...urls]);
+                      setToast("image attached — it goes out with your next message");
                     })
                     .catch(() => setError("could not load dropped image"));
                 }
               }}
-              placeholder={threadBusy ? "generating…" : "type a message or drop a card"}
+              placeholder={threadBusy ? "generating…" : "type a message — drop or paste an image, or drop a card"}
             />
             <button
               type="button"
@@ -1258,20 +1311,32 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
               <Camera size={16} />
             </button>
             <button
-              type="submit"
-              disabled={!selected.length || (!input.trim() && !pendingImages.length)}
-              title={threadBusy ? "queue this message" : "send"}
+              type="button"
+              className="chat-capscreen on"
+              onClick={() => stop_thread(activeId)}
+              disabled={!threadBusy}
+              title="interrupt this run"
+              aria-label="interrupt this run"
             >
-              <Send size={16} />
+              <Square size={16} />
+            </button>
+            <button
+              type="submit"
+              className={threadBusy ? "chat-send queue" : "chat-send"}
+              disabled={!selected.length || (!input.trim() && !pendingImages.length)}
+              title={
+                threadBusy
+                  ? "queue this message — it sends when the current reply finishes"
+                  : "send"
+              }
+              aria-label={threadBusy ? "queue this message" : "send message"}
+            >
+              {threadBusy ? <ListEnd size={16} /> : <Send size={16} />}
             </button>
           </form>
           <CapscreenModal
             open={capscreenOpen}
-            initial_image={capscreenInit}
-            on_close={() => {
-              setCapscreenOpen(false);
-              setCapscreenInit(null);
-            }}
+            on_close={() => setCapscreenOpen(false)}
             on_send={async (image, note) => {
               setPendingImages((cur) => [...cur, image]);
               if (note) setInput((cur) => `${cur}${cur && !cur.endsWith(" ") ? " " : ""}${note} `);

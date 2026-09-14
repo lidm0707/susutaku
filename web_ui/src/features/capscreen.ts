@@ -204,3 +204,20 @@ export async function image_file_to_canvas(file: File): Promise<HTMLCanvasElemen
   bitmap.close();
   return canvas;
 }
+
+const MAX_DROP_FILES = 8;
+
+/// Encode image files (dropped or pasted) straight to PNG data URLs for chat
+/// attachments; non-image entries are skipped, results keep file order.
+export async function image_files_to_data_urls(
+  files: Iterable<File>
+): Promise<string[]> {
+  const images = [...files]
+    .filter((f) => f.type.startsWith("image/"))
+    .slice(0, MAX_DROP_FILES);
+  const urls: string[] = [];
+  for (const file of images) {
+    urls.push(await canvas_png_data_url(await image_file_to_canvas(file)));
+  }
+  return urls;
+}

@@ -4933,13 +4933,74 @@ select.agent-multi {
   padding-top: 0.8rem;
 }
 
-/* capscreen: annotated screenshots */
+/* composer bar: one rounded pill holding mode select, agent picker,
+   input and action buttons */
+.chat-modal-body form {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.35rem;
+  padding: 0.35rem 0.5rem;
+  background: #16161c;
+  border: 1px solid #2a2a33;
+  border-radius: 1.35rem;
+  transition: border-color 0.15s;
+}
+.chat-modal-body form:focus-within {
+  border-color: #3b6fd4;
+}
+
 .chat-modal-body form textarea.chat-input {
   flex: 1;
   resize: none;
   max-height: 10rem;
   overflow-y: auto;
   align-self: center;
+  background: transparent;
+  border: none;
+  color: #e6e6ea;
+  padding: 0.3rem 0.2rem;
+}
+.chat-modal-body form textarea.chat-input:focus {
+  outline: none;
+}
+
+.chat-modal-body form textarea.chat-input.drag {
+  outline: 2px dashed #f33;
+  outline-offset: -2px;
+}
+
+/* send button: two states — send (idle) / queue (thread busy) */
+.overlay-box button.chat-send,
+.chat-send {
+  flex-shrink: 0;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 999px;
+  border: 1px solid #3b6fd4;
+  background: #2b4a7a;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, opacity 0.15s;
+}
+.overlay-box button.chat-send:hover:not(:disabled),
+.chat-send:hover:not(:disabled) {
+  background: #35578c;
+}
+.chat-send:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.chat-send.queue {
+  border-color: #7a5cd4;
+  background: #33265c;
+}
+.overlay-box button.chat-send.queue:hover:not(:disabled),
+.chat-send.queue:hover:not(:disabled) {
+  background: #403070;
 }
 
 /* button.chat-capscreen specificity must beat .overlay-box button[type="button"] (0,2,1) */
