@@ -20,4 +20,4 @@ pub use memory_hit::MemoryHit;
 pub use search_mode::SearchMode;
 pub use search_result::SearchResult;
 pub use tool_set::{TOOL_KIND_NAMES, ToolKind, ToolSet};
-pub use tool_use::{TOOL_SUMMARY_MAX, ToolUse};
+pub use tool_use::{Artifact, ArtifactKind, TOOL_SUMMARY_MAX, ToolUse};

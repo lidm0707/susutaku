@@ -15,7 +15,7 @@ use git_rs::GitRepo;
 use proto_rs::GitTool;
 use serde::Serialize;
 
-use crate::git_tool;
+use crate::git_state;
 
 /// Root directory holding every agent work tree.
 pub const AGENTS_ROOT: &str = "work/agents";
@@ -151,9 +151,10 @@ impl Manager {
         Ok(())
     }
 
-    /// Runs a git toolcall in `agent`'s mounted workspace (spawning the
-    /// agent on demand). Host-side execution: the sandbox has no network,
-    /// so clone/status/diff run here, where credentials live.
+    /// Runs a git toolcall for `agent` (spawning the agent on demand).
+    /// Clone/status/diff run host-side in the work tree; branch/commit/push/
+    /// pr run inside the agent's own container with network + run-scoped
+    /// token env.
     pub fn git_tool(&self, agent: &str, tool: &GitTool) -> Result<String, String> {
         let slot = self
             .agents
@@ -171,7 +172,17 @@ impl Manager {
                     .cloned()
                     .ok_or_else(|| format!("agent {agent} failed to spawn"))
             })?;
-        git_tool::apply(&slot.sandbox.root(), tool)
+        match tool {
+            GitTool::Branch { .. }
+            | GitTool::Commit { .. }
+            | GitTool::Push { .. }
+            | GitTool::PullRequest { .. } => {
+                core_agent::toolcall::git_in_sandbox::apply(&slot.sandbox, tool)
+            }
+            GitTool::Clone { .. } | GitTool::Status | GitTool::Diff => {
+                git_state::apply(&slot.sandbox.root(), tool)
+            }
+        }
     }
 
     /// Finishes the agent's task: captures the task patch (committing pending

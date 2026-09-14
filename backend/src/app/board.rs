@@ -57,12 +57,17 @@ impl BoardOps for BoardService {
                 crate::app::events::publish(crate::app::events::EventKind::Pipeline);
                 Ok(format!("pipeline {id} created: {name}"))
             }
-            BoardOp::CreateCard { project_id, title } => {
+            BoardOp::CreateCard {
+                project_id,
+                title,
+                description,
+            } => {
+                let description = description.unwrap_or_default();
                 let card = kanban_rs::AddCard {
                     project_id: Some(project_id),
                     column_id: kanban_rs::DEFAULT_COLUMNS[0].0,
                     title: &title,
-                    description: "",
+                    description: &description,
                     priority: kanban_rs::PRIORITY_NORMAL,
                     labels: None,
                     checklist: None,

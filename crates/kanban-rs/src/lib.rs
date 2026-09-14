@@ -1,6 +1,7 @@
 //! Kanban board: columns, cards, id-based moves. Pure data + ops, no I/O.
 
 pub mod agent_cfg;
+pub mod agent_token;
 pub mod board;
 pub mod card;
 pub mod chat;
@@ -12,6 +13,10 @@ pub mod user;
 pub mod workspace;
 
 pub use agent_cfg::{AgentConfigRow, AgentConfigUpdate};
+pub use agent_token::{
+    ActiveAgentRun, AgentRunTokenRow, IssuedAgentToken, NewAgentRunToken, TOKEN_PREFIX,
+    TOKEN_TTL_SECS,
+};
 pub use board::{Board, BoardError, Column};
 pub use card::{
     Card, CardId, PRIORITY_CRITICAL, PRIORITY_HIGH, PRIORITY_LOW, PRIORITY_NORMAL, Priority,

@@ -19,3 +19,4 @@ design/
 dist/
 crates/manager-rs/work/
 check_pipe/
+.e2e-hash

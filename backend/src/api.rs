@@ -19,7 +19,7 @@ use crate::app::kanban::{CardView, KanbanApp};
 use crate::app::{BoardService, ChatUseCase};
 use crate::domain::{
     AgentConfigDraft, CardMove, CardPatch, ChatCmd, NewCard, NewPipeline, NewProject, NewWorkspace,
-    SearchMode, TOOL_KIND_NAMES, ToolSet, ToolUse,
+    ResourceService, SearchMode, TOOL_KIND_NAMES, ToolSet, ToolUse,
 };
 use crate::infra::claude::auth::{ClaudeAuth, LoginStatus as ClaudeLoginStatus};
 use crate::infra::claude::chat as claude_chat;
@@ -59,6 +59,8 @@ struct ZaiChatDeps {
     store: std::sync::Arc<kanban_rs::Store>,
     agent_git: Arc<dyn AgentGit>,
     project_git: Arc<dyn ProjectGit>,
+    /// Persists tool artifacts onto the turn's target card.
+    resources: Arc<ResourceService>,
 }
 
 fn zai_chat_deps<T: ModelSwitch + 'static>(
@@ -68,6 +70,7 @@ fn zai_chat_deps<T: ModelSwitch + 'static>(
     settings: Arc<SettingsState>,
     manager: Arc<manager_rs::manager::Manager>,
 ) -> Arc<ZaiChatDeps> {
+    let kanban_store_for_resources = kanban_store.clone();
     Arc::new(ZaiChatDeps {
         searcher: Arc::new(DuckDuckGo),
         fetcher: Arc::new(PageFetcher),
@@ -84,6 +87,9 @@ fn zai_chat_deps<T: ModelSwitch + 'static>(
         )),
         store: kanban_store,
         agent_git: Arc::new(crate::infra::manager_git::ManagerGit::new(manager)),
+        resources: Arc::new(ResourceService::new(Arc::new(
+            crate::infra::postgres::kanban::PgKanban::new(kanban_store_for_resources),
+        ))),
     })
 }
 
@@ -121,6 +127,10 @@ pub fn router<T: ChatHandling + ModelSwitch + 'static>(
         .route("/api/manager/agents/{agent}/git", post(run_agent_git))
         .route("/api/manager/agents/{agent}/logs", get(agent_logs))
         .route("/api/manager/agents/{agent}/finish", post(finish_agent))
+        .route(
+            "/api/manager/agents/{agent}/token",
+            post(issue_agent_run_token),
+        )
         .with_state(ManagerState {
             manager: manager.clone(),
             store: kanban_store.clone(),
@@ -257,6 +267,8 @@ fn kanban_router(state: KanbanStore) -> Router {
             get(list_projects).post(create_project),
         )
         .route("/api/projects/{id}", delete(delete_project))
+        .route("/api/projects/{id}/agents", get(project_agents))
+        .route("/api/agent-results", post(agent_results))
         .route("/api/kanban/cards", get(list_cards).post(create_card))
         .route(
             "/api/kanban/cards/{id}",
@@ -668,6 +680,33 @@ fn require_edit(user: &AuthUser) -> Result<(), ApiError> {
         .ok_or_else(|| ApiError(FORBIDDEN_MSG.to_string(), StatusCode::FORBIDDEN))
 }
 
+/// Bearer-token auth extractor for agents: resolves a run ticket.
+struct AuthAgent(kanban_rs::AgentRunTokenRow);
+
+impl FromRequestParts<KanbanStore> for AuthAgent {
+    type Rejection = Response;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        store: &KanbanStore,
+    ) -> Result<Self, Self::Rejection> {
+        let token = parts
+            .headers
+            .get(http::header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.strip_prefix(BEARER_PREFIX))
+            .filter(|t| t.starts_with(kanban_rs::TOKEN_PREFIX))
+            .ok_or_else(|| (StatusCode::UNAUTHORIZED, UNAUTHORIZED_MSG).into_response())?;
+        let row = store
+            .store
+            .resolve_agent_token(token)
+            .await
+            .map_err(|e| ApiError::internal(e.to_string()).into_response())?
+            .ok_or_else(|| (StatusCode::UNAUTHORIZED, UNAUTHORIZED_MSG).into_response())?;
+        Ok(AuthAgent(row))
+    }
+}
+
 /// Validates the per-agent tool allow-list (search|fetch|shell|board).
 fn valid_tools(names: &[String]) -> Result<Vec<String>, ApiError> {
     ToolSet::from_names(names)
@@ -936,6 +975,7 @@ async fn chat<T: ChatHandling>(
             agent: req.agent.clone(),
             image: None,
             thread_id: req.thread_id.map(|id| id.to_string()),
+            card_id: req.card_id,
         })
         .await
         .map_err(ApiError::internal)?;
@@ -1597,7 +1637,8 @@ async fn chat_zai(
         deps.agents.clone(),
     )
     .with_agent_git(zai_deps_.agent_git.clone())
-    .with_project_git(zai_deps_.project_git.clone());
+    .with_project_git(zai_deps_.project_git.clone())
+    .with_resources(deps.resources.clone());
     let message = match build_system_message(&req.system)? {
         Some(sys) => format!("{}\n\n{}", sys.content, req.message),
         None => req.message.clone(),
@@ -1618,6 +1659,7 @@ async fn chat_zai(
             agent: req.agent.clone(),
             image: gated_image,
             thread_id: req.thread_id.map(|id| id.to_string()),
+            card_id: req.card_id,
         })
         .await
         .map_err(ApiError::internal)?;
@@ -3265,6 +3307,12 @@ struct MachineAgentGitRequest {
     op: String,
     url: Option<String>,
     token: Option<String>,
+    name: Option<String>,
+    message: Option<String>,
+    branch: Option<String>,
+    title: Option<String>,
+    head: Option<String>,
+    base: Option<String>,
 }
 
 #[utoipa::path(
@@ -3281,6 +3329,12 @@ async fn run_machine_git(
         op: req.op,
         url: req.url,
         token: req.token,
+        name: req.name,
+        message: req.message,
+        branch: req.branch,
+        title: req.title,
+        head: req.head,
+        base: req.base,
     }
     .tool()?;
     if agent.is_empty() {
@@ -3426,12 +3480,220 @@ async fn run_agent_command(
 }
 
 #[derive(Deserialize, utoipa::ToSchema)]
+struct AgentTokenRequest {
+    project_id: Option<i64>,
+    card_id: Option<i64>,
+    thread_id: Option<i64>,
+}
+
+#[derive(Serialize, utoipa::ToSchema)]
+struct AgentTokenReply {
+    token: String,
+    agent: String,
+    project_id: Option<i64>,
+    card_id: Option<i64>,
+    thread_id: Option<i64>,
+    expires_at: String,
+}
+
+/// Issue a one-shot run ticket so an agent can post results back without a
+/// human session. The plaintext token is shown once; only its SHA-256 hash is
+/// stored, and it expires after `TOKEN_TTL_SECS`.
+async fn issue_agent_run_token(
+    State(state): State<ManagerState>,
+    headers: http::HeaderMap,
+    Path(agent): Path<String>,
+    Json(req): Json<AgentTokenRequest>,
+) -> Result<Json<AgentTokenReply>, ApiError> {
+    let user = auth_user_from_store(&state.store, &headers).await?;
+    require_edit(&AuthUser(user))?;
+    let issued = state
+        .store
+        .issue_agent_token(&kanban_rs::NewAgentRunToken {
+            agent: &agent,
+            project_id: req.project_id,
+            card_id: req.card_id,
+            thread_id: req.thread_id,
+            machine: &host_spec::host_spec().hostname,
+        })
+        .await
+        .map_err(|e| ApiError::bad_request(e.to_string()))?;
+    Ok(Json(AgentTokenReply {
+        token: issued.token,
+        agent: issued.row.agent,
+        project_id: issued.row.project_id,
+        card_id: issued.row.card_id,
+        thread_id: issued.row.thread_id,
+        expires_at: issued.row.expires_at.to_rfc3339(),
+    }))
+}
+
+async fn auth_user_from_store(
+    store: &std::sync::Arc<kanban_rs::Store>,
+    headers: &http::HeaderMap,
+) -> Result<kanban_rs::UserRow, ApiError> {
+    let token = headers
+        .get(http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix(BEARER_PREFIX))
+        .filter(|t| !t.starts_with(kanban_rs::TOKEN_PREFIX))
+        .ok_or_else(|| ApiError(UNAUTHORIZED_MSG.to_string(), StatusCode::UNAUTHORIZED))?;
+    store
+        .auth(token)
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .ok_or_else(|| ApiError(UNAUTHORIZED_MSG.to_string(), StatusCode::UNAUTHORIZED))
+}
+
+#[derive(Deserialize, utoipa::ToSchema)]
+struct AgentResultRequest {
+    result: String,
+}
+
+#[derive(Serialize, utoipa::ToSchema)]
+struct AgentResultReply {
+    card_comment: bool,
+    thread_message: bool,
+}
+
+/// Agent callback authenticated by a run ticket: routes the result to the
+/// card and/or thread bound to the ticket, then consumes the ticket.
+async fn agent_results(
+    State(state): State<KanbanStore>,
+    AuthAgent(ticket): AuthAgent,
+    Json(req): Json<AgentResultRequest>,
+) -> Result<Json<AgentResultReply>, ApiError> {
+    let mut card_comment = false;
+    let mut thread_message = false;
+    if let Some(card_id) = ticket.card_id {
+        state
+            .store
+            .add_comment(card_id, &ticket.agent, &req.result)
+            .await
+            .map_err(|e| ApiError::bad_request(e.to_string()))?;
+        card_comment = true;
+    }
+    if let Some(thread_id) = ticket.thread_id {
+        state
+            .store
+            .add_chat_message(thread_id, kanban_rs::ROLE_ASSISTANT, &req.result)
+            .await
+            .map_err(|e| ApiError::bad_request(e.to_string()))?;
+        thread_message = true;
+    }
+    state
+        .store
+        .consume_agent_token(&ticket.token_hash)
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    Ok(Json(AgentResultReply {
+        card_comment,
+        thread_message,
+    }))
+}
+
+#[derive(Serialize, utoipa::ToSchema)]
+struct ProjectAgentDto {
+    name: String,
+    card_ids: Vec<i64>,
+    threads: i64,
+    running: bool,
+    machine: Option<String>,
+}
+
+#[derive(Serialize, utoipa::ToSchema)]
+struct ProjectAgentsReply {
+    agents: Vec<ProjectAgentDto>,
+}
+
+/// Who works in this project: agents attached to cards, agents owning chat
+/// threads, and agents currently holding a live run ticket.
+async fn project_agents(
+    State(state): State<KanbanStore>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+    _user: AuthUser,
+) -> Result<Json<ProjectAgentsReply>, ApiError> {
+    let cards = state
+        .store
+        .list(Some(id))
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let threads = state
+        .store
+        .list_chat_threads(Some(id))
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let runs = state
+        .store
+        .list_active_agent_tokens()
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let mut merged: std::collections::BTreeMap<String, ProjectAgentDto> =
+        std::collections::BTreeMap::new();
+    for card in &cards {
+        let Some(name) = card.agent_name.as_deref() else {
+            continue;
+        };
+        let entry = merged
+            .entry(name.to_owned())
+            .or_insert_with(|| ProjectAgentDto {
+                name: name.to_owned(),
+                card_ids: Vec::new(),
+                threads: 0,
+                running: false,
+                machine: None,
+            });
+        entry.card_ids.push(card.id);
+    }
+    for thread in &threads {
+        let entry = merged
+            .entry(thread.agent.clone())
+            .or_insert_with(|| ProjectAgentDto {
+                name: thread.agent.clone(),
+                card_ids: Vec::new(),
+                threads: 0,
+                running: false,
+                machine: None,
+            });
+        entry.threads += 1;
+    }
+    for run in &runs {
+        if run.project_id != Some(id) {
+            continue;
+        }
+        let entry = merged
+            .entry(run.agent.clone())
+            .or_insert_with(|| ProjectAgentDto {
+                name: run.agent.clone(),
+                card_ids: Vec::new(),
+                threads: 0,
+                running: false,
+                machine: None,
+            });
+        entry.running = true;
+        if !run.machine.is_empty() {
+            entry.machine = Some(run.machine.clone());
+        }
+    }
+    Ok(Json(ProjectAgentsReply {
+        agents: merged.into_values().collect(),
+    }))
+}
+
+#[derive(Deserialize, utoipa::ToSchema)]
 struct AgentGitRequest {
-    /// `clone` needs `url` (and optional `token`); `status` and `diff` take
-    /// no arguments.
+    /// `clone` needs `url`; `branch` needs `name`; `commit` needs `message`;
+    /// `push` takes `branch`; `pr` takes `title`/`head`/`base`; `status` and
+    /// `diff` take no arguments.
     op: String,
     url: Option<String>,
     token: Option<String>,
+    name: Option<String>,
+    message: Option<String>,
+    branch: Option<String>,
+    title: Option<String>,
+    head: Option<String>,
+    base: Option<String>,
 }
 
 impl AgentGitRequest {
@@ -3446,14 +3708,49 @@ impl AgentGitRequest {
             }),
             "status" => Ok(GitTool::Status),
             "diff" => Ok(GitTool::Diff),
+            "branch" => Ok(GitTool::Branch {
+                name: self
+                    .name
+                    .clone()
+                    .filter(|n| !n.is_empty())
+                    .ok_or_else(|| ApiError::bad_request("branch needs name"))?,
+            }),
+            "commit" => Ok(GitTool::Commit {
+                message: self
+                    .message
+                    .clone()
+                    .filter(|m| !m.is_empty())
+                    .ok_or_else(|| ApiError::bad_request("commit needs message"))?,
+            }),
+            "push" => Ok(GitTool::Push {
+                branch: self
+                    .branch
+                    .clone()
+                    .filter(|b| !b.is_empty())
+                    .ok_or_else(|| ApiError::bad_request("push needs branch"))?,
+                url: self.url.clone(),
+                token: self.token.clone(),
+            }),
+            "pr" => Ok(GitTool::PullRequest {
+                title: self
+                    .title
+                    .clone()
+                    .filter(|t| !t.is_empty())
+                    .ok_or_else(|| ApiError::bad_request("pr needs title"))?,
+                head: self.head.clone().unwrap_or_default(),
+                base: self.base.clone().unwrap_or_default(),
+                url: self.url.clone(),
+                token: self.token.clone(),
+            }),
             other => Err(ApiError::bad_request(format!(
-                "unknown git op {other} (clone | status | diff)"
+                "unknown git op {other} (clone | status | diff | branch | commit | push | pr)"
             ))),
         }
     }
 }
 
-/// Host-side git toolcall (clone/status/diff) in a local agent's work tree.
+/// Host-side doc note: clone/status/diff run in the work tree on the host;
+/// branch/commit/push/pr run inside the named agent's own container.
 async fn run_agent_git(
     State(state): State<ManagerState>,
     Path(agent): Path<String>,
@@ -3720,6 +4017,7 @@ async fn install_script(
         CodexStatusReply,
         CodexModelInfo,
         CodexChatRequest,
+        ArtifactDto,
         ClaudeCodeRequest,
         ClaudeChatRequest,
         ZaiSettingsReply,
@@ -3791,8 +4089,11 @@ struct ChatRequest {
     agent: Option<String>,
     /// Chat thread id; scopes long-term memory recall/remember to the thread.
     thread_id: Option<i64>,
+    /// Target kanban card: tool artifacts produced this turn (written files,
+    /// images, text output) are attached to it as card resources.
+    #[serde(default)]
+    card_id: Option<i64>,
 }
-
 /// One tool call the agent made, for display in the chat UI.
 #[derive(Serialize, utoipa::ToSchema)]
 struct ToolUseDto {
@@ -3800,6 +4101,8 @@ struct ToolUseDto {
     input: String,
     ok: bool,
     summary: String,
+    /// Files the call produced (also attached to the turn's target card).
+    artifacts: Vec<ArtifactDto>,
 }
 
 impl ToolUseDto {
@@ -3813,8 +4116,25 @@ impl ToolUseDto {
             input: u.input.clone(),
             ok: u.ok,
             summary: u.summary.clone(),
+            artifacts: u
+                .artifacts
+                .iter()
+                .map(|a| ArtifactDto {
+                    kind: a.kind.as_str().to_string(),
+                    path: a.path.clone(),
+                })
+                .collect(),
         }
     }
+}
+
+/// One file a tool call produced; also attached to the turn's target card.
+#[derive(Serialize, utoipa::ToSchema)]
+struct ArtifactDto {
+    /// "image" | "text" | "file"
+    kind: String,
+    /// Workspace-relative path.
+    path: String,
 }
 
 #[derive(Serialize, utoipa::ToSchema)]
@@ -3979,6 +4299,10 @@ struct ZaiChatRequest {
     /// agent's `receive_images` flag.
     #[serde(default)]
     image: Option<String>,
+    /// Target kanban card: tool artifacts produced this turn are attached to
+    /// it as card resources.
+    #[serde(default)]
+    card_id: Option<i64>,
 }
 
 #[derive(Deserialize, utoipa::ToSchema)]

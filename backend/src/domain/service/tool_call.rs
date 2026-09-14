@@ -3,22 +3,83 @@
 
 use crate::domain::GitOp;
 
+/// Language-server query the LSP tool performs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LspOp {
+    Definition,
+    References,
+    Hover,
+}
+
+impl LspOp {
+    const DEFINITION: &str = "DEFINITION";
+    const REFERENCES: &str = "REFERENCES";
+    const HOVER: &str = "HOVER";
+
+    fn parse(s: &str) -> Option<Self> {
+        match s.to_uppercase().as_str() {
+            Self::DEFINITION => Some(Self::Definition),
+            Self::REFERENCES => Some(Self::References),
+            Self::HOVER => Some(Self::Hover),
+            _ => None,
+        }
+    }
+
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Definition => Self::DEFINITION,
+            Self::References => Self::REFERENCES,
+            Self::Hover => Self::HOVER,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ToolCall {
     Search(String),
     Fetch(String),
     Shell(String),
-    Coding { path: String, code: String },
-    CardCreate { project_id: i64, title: String },
-    CardSchedule { card_id: i64, cron: String },
-    CardLink { card_id: i64, pipeline_id: i64 },
-    PipelineCreate { name: String, spec: Option<String> },
+    Coding {
+        path: String,
+        code: String,
+    },
+    CardCreate {
+        project_id: i64,
+        title: String,
+        description: Option<String>,
+    },
+    CardSchedule {
+        card_id: i64,
+        cron: String,
+    },
+    CardLink {
+        card_id: i64,
+        pipeline_id: i64,
+    },
+    PipelineCreate {
+        name: String,
+        spec: Option<String>,
+    },
     BoardList,
     Math(String),
-    Git(GitOp),
+    Git {
+        op: GitOp,
+        /// Agent whose sandbox runs the op (`@agent` suffix / `agent` param).
+        agent: Option<String>,
+    },
+    Lsp {
+        op: LspOp,
+        /// Workspace-relative file path.
+        path: String,
+        /// 0-based line of the symbol position.
+        line: u32,
+        /// 0-based UTF-8 column of the symbol position.
+        col: usize,
+    },
 }
 
 const TOOL_PREFIX: &str = "TOOL:";
+const DESC_SEP: &str = " | ";
 const INVOKE_OPEN: &str = "<invoke";
 const NAME_ATTR: &str = "name=";
 const PARAM_TITLE: &str = "title";
@@ -38,6 +99,7 @@ const XML_BOARD_LIST: &str = "board_list";
 const XML_MATH: &str = "math";
 const XML_MATH_ALIAS: &str = "geomath";
 const XML_GIT: &str = "git";
+const XML_LSP: &str = "lsp";
 const TOOL_SEARCH: &str = "SEARCH";
 const TOOL_FETCH: &str = "FETCH";
 const TOOL_SHELL: &str = "SHELL";
@@ -49,9 +111,17 @@ const TOOL_BOARD_LIST: &str = "BOARD_LIST";
 const TOOL_MATH: &str = "MATH";
 const TOOL_MATH_ALIAS: &str = "GEOMATH";
 const TOOL_GIT: &str = "GIT";
+const TOOL_LSP: &str = "LSP";
+const LSP_ARGS: usize = 4;
 const GIT_OP_CLONE: &str = "CLONE";
+const AGENT_PREFIX: &str = "@";
 const GIT_OP_STATUS: &str = "STATUS";
 const GIT_OP_DIFF: &str = "DIFF";
+const GIT_OP_BRANCH: &str = "BRANCH";
+const GIT_OP_COMMIT: &str = "COMMIT";
+const GIT_OP_PUSH: &str = "PUSH";
+const GIT_OP_PR: &str = "PR";
+const PR_ARG_SEP: char = '|';
 
 impl ToolCall {
     /// First TOOL: line after the </think> block, if any. The argument may be
@@ -78,10 +148,18 @@ impl ToolCall {
             TOOL_FETCH => Some(Self::Fetch(arg.to_string())),
             TOOL_SHELL => Some(Self::Shell(arg.to_string())),
             TOOL_CARD_CREATE => {
-                let (project_id, title) = arg.split_once(' ')?;
+                let (project_id, rest) = arg.split_once(' ')?;
+                let (title, description) = match rest.split_once(DESC_SEP) {
+                    Some((t, d)) => (t.trim(), Some(d.trim().to_string())),
+                    None => (rest, None),
+                };
+                if title.is_empty() {
+                    return None;
+                }
                 Some(Self::CardCreate {
                     project_id: project_id.parse().ok()?,
                     title: title.to_string(),
+                    description,
                 })
             }
             TOOL_CARD_ROUTINE => {
@@ -115,6 +193,7 @@ impl ToolCall {
             TOOL_BOARD_LIST => Some(Self::BoardList),
             TOOL_MATH | TOOL_MATH_ALIAS if !arg.is_empty() => Some(Self::Math(arg.to_string())),
             TOOL_GIT => Self::parse_git(arg),
+            TOOL_LSP => Self::parse_lsp(arg),
             _ => None,
         }
     }
@@ -144,6 +223,7 @@ impl ToolCall {
             XML_CARD_CREATE | XML_CARD_CREATE_ALIAS => Some(Self::CardCreate {
                 project_id: p("project_id")?.trim().parse().ok()?,
                 title: p(PARAM_TITLE).or_else(|| p(PARAM_TITLE_ALIAS))?.to_string(),
+                description: p("description").map(str::to_string),
             }),
             XML_CARD_ROUTINE => Some(Self::CardSchedule {
                 card_id: p("card_id")?.trim().parse().ok()?,
@@ -174,30 +254,153 @@ impl ToolCall {
                 }
                 Some(Self::Math(expr))
             }
+            XML_LSP => Some(Self::Lsp {
+                op: LspOp::parse(p("op")?)?,
+                path: p("path")?.trim().to_string(),
+                line: p("line")?.trim().parse().ok()?,
+                col: p("col")?.trim().parse().ok()?,
+            }),
             XML_GIT => {
+                let op = p("op").map(str::trim);
                 let url = p("url").map(|u| u.trim().to_string());
-                Self::parse_git_op(p("op").map(str::trim), url.as_deref())
+                let agent = p("agent")
+                    .map(|a| a.trim().to_string())
+                    .filter(|a| !a.is_empty());
+                let call = match op {
+                    Some(o) if o.eq_ignore_ascii_case(GIT_OP_COMMIT) => {
+                        Self::parse_git(&format!("{GIT_OP_COMMIT} {}", p("message")?))
+                    }
+                    Some(o) if o.eq_ignore_ascii_case(GIT_OP_BRANCH) => {
+                        Self::parse_git(&format!("{GIT_OP_BRANCH} {}", p("name")?))
+                    }
+                    Some(o) if o.eq_ignore_ascii_case(GIT_OP_PUSH) => {
+                        Self::parse_git(&format!("{GIT_OP_PUSH} {}", p("branch")?.trim()))
+                    }
+                    Some(o) if o.eq_ignore_ascii_case(GIT_OP_PR) => Self::parse_git(&format!(
+                        "{GIT_OP_PR} {} {PR_ARG_SEP} {}",
+                        p(PARAM_TITLE)?,
+                        p("base").unwrap_or("")
+                    )),
+                    _ => Self::parse_git_op(op, url.as_deref()),
+                }?;
+                match call {
+                    Self::Git { op, .. } => Some(Self::Git { op, agent }),
+                    other => Some(other),
+                }
             }
             _ => None,
         }
     }
 
+    /// `LSP <op> <path> <line> <col>` — the path must not contain spaces.
+    fn parse_lsp(arg: &str) -> Option<Self> {
+        let parts: Vec<&str> = arg.split_whitespace().collect();
+        if parts.len() != LSP_ARGS {
+            return None;
+        }
+        Some(Self::Lsp {
+            op: LspOp::parse(parts[0])?,
+            path: parts[1].to_string(),
+            line: parts[2].parse().ok()?,
+            col: parts[3].parse().ok()?,
+        })
+    }
+
+    /// Splits a trailing `@name` token off a sandbox git op's args.
+    fn split_agent(arg: &str) -> (&str, Option<String>) {
+        match arg.rsplit_once(' ') {
+            Some((rest, token)) if token.starts_with(AGENT_PREFIX) && token.len() > 1 => (
+                rest.trim_end(),
+                Some(token[AGENT_PREFIX.len()..].to_string()),
+            ),
+            _ => (arg, None),
+        }
+    }
+
     fn parse_git(arg: &str) -> Option<Self> {
-        let (op, url) = match arg.split_once(' ') {
-            Some((op, url)) => (op, Some(url.trim())),
+        let (op, tail) = match arg.split_once(' ') {
+            Some((op, tail)) => (op, Some(tail.trim())),
             None => (arg, None),
         };
-        Self::parse_git_op(Some(op), url)
+        let op_upper = op.to_uppercase();
+        match op_upper.as_str() {
+            GIT_OP_BRANCH => {
+                let (name, agent) = Self::split_agent(tail.filter(|s| !s.is_empty())?);
+                if name.is_empty() {
+                    return None;
+                }
+                Some(Self::Git {
+                    op: GitOp::Branch {
+                        name: name.to_string(),
+                    },
+                    agent,
+                })
+            }
+            GIT_OP_COMMIT => {
+                let (message, agent) = Self::split_agent(tail.filter(|s| !s.is_empty())?);
+                if message.is_empty() {
+                    return None;
+                }
+                Some(Self::Git {
+                    op: GitOp::Commit {
+                        message: message.to_string(),
+                    },
+                    agent,
+                })
+            }
+            GIT_OP_PUSH => {
+                let (branch, agent) = Self::split_agent(tail.unwrap_or(""));
+                Some(Self::Git {
+                    op: GitOp::Push {
+                        branch: branch.to_string(),
+                        url: None,
+                        token: None,
+                    },
+                    agent,
+                })
+            }
+            GIT_OP_PR => {
+                let arg = tail?;
+                let (arg, agent) = Self::split_agent(arg);
+                let (title, base) = match arg.split_once(PR_ARG_SEP) {
+                    Some((title, base)) => (title.trim(), base.trim()),
+                    None => (arg, ""),
+                };
+                if title.is_empty() {
+                    return None;
+                }
+                Some(Self::Git {
+                    op: GitOp::PullRequest {
+                        title: title.to_string(),
+                        head: String::new(),
+                        base: base.to_string(),
+                        url: None,
+                        token: None,
+                    },
+                    agent,
+                })
+            }
+            _ => Self::parse_git_op(Some(op), tail),
+        }
     }
 
     fn parse_git_op(op: Option<&str>, url: Option<&str>) -> Option<Self> {
         match op?.to_uppercase().as_str() {
-            GIT_OP_CLONE => Some(Self::Git(GitOp::Clone {
-                url: url.filter(|u| !u.is_empty()).map(str::to_owned),
-                token: None,
-            })),
-            GIT_OP_STATUS if url.is_none() => Some(Self::Git(GitOp::Status)),
-            GIT_OP_DIFF if url.is_none() => Some(Self::Git(GitOp::Diff)),
+            GIT_OP_CLONE => Some(Self::Git {
+                op: GitOp::Clone {
+                    url: url.filter(|u| !u.is_empty()).map(str::to_owned),
+                    token: None,
+                },
+                agent: None,
+            }),
+            GIT_OP_STATUS if url.is_none() => Some(Self::Git {
+                op: GitOp::Status,
+                agent: None,
+            }),
+            GIT_OP_DIFF if url.is_none() => Some(Self::Git {
+                op: GitOp::Diff,
+                agent: None,
+            }),
             _ => None,
         }
     }

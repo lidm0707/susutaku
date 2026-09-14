@@ -1,6 +1,32 @@
 use async_trait::async_trait;
-use backend::domain::{BoardOp, BoardRequest, BoardResult, ToolCall};
+use backend::domain::{BoardOp, BoardRequest, BoardResult, ToolCall, ToolKind, ToolSet};
 use backend::port::outbound::BoardOps;
+
+#[test]
+fn board_tool_permissions_are_per_kind() {
+    // each board-family name grants only its own kind
+    let set = ToolSet::from_names(&["board".to_string()]).unwrap();
+    assert!(set.allows(ToolKind::Board));
+    assert!(!set.allows(ToolKind::Card));
+    assert!(!set.allows(ToolKind::Pipeline));
+    assert!(!set.allows(ToolKind::Routine));
+
+    let set = ToolSet::from_names(&[
+        "card".to_string(),
+        "pipeline".to_string(),
+        "routine".to_string(),
+    ])
+    .unwrap();
+    assert!(!set.allows(ToolKind::Board));
+    assert!(set.allows(ToolKind::Card));
+    assert!(set.allows(ToolKind::Pipeline));
+    assert!(set.allows(ToolKind::Routine));
+    assert!(set.any_board());
+
+    let set = ToolSet::from_names(&["search".to_string()]).unwrap();
+    assert!(!set.any_board());
+    assert!(ToolSet::from_names(&["kanban".to_string()]).is_err());
+}
 
 #[test]
 fn parses_board_tool_calls() {
@@ -48,7 +74,18 @@ fn parses_board_tool_calls() {
         ToolCall::parse("TOOL: CARD_CREATE 3 run backups"),
         Some(ToolCall::CardCreate {
             project_id: 3,
-            title: "run backups".into()
+            title: "run backups".into(),
+            description: None
+        })
+    );
+    assert_eq!(
+        ToolCall::parse(
+            "TOOL: CARD_CREATE 3 quota research | YouTube: 10k units/day; TikTok ~1k/day"
+        ),
+        Some(ToolCall::CardCreate {
+            project_id: 3,
+            title: "quota research".into(),
+            description: Some("YouTube: 10k units/day; TikTok ~1k/day".into())
         })
     );
     assert_eq!(
@@ -70,6 +107,8 @@ fn parses_board_tool_calls() {
 #[test]
 fn malformed_board_tool_call_is_none() {
     assert_eq!(ToolCall::parse("TOOL: CARD_CREATE oops no number"), None);
+    assert_eq!(ToolCall::parse("TOOL: CARD_CREATE 3"), None);
+    assert_eq!(ToolCall::parse("TOOL: CARD_CREATE 3  | desc"), None);
     assert_eq!(ToolCall::parse("TOOL: CARD_ROUTINE 7"), None);
 }
 
@@ -108,7 +147,8 @@ fn parses_xml_invoke_fallback() {
         ),
         Some(ToolCall::CardCreate {
             project_id: 1,
-            title: "dancing with my code new content".into()
+            title: "dancing with my code new content".into(),
+            description: None
         })
     );
     assert_eq!(

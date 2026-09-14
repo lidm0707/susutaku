@@ -7,19 +7,27 @@ pub enum ToolKind {
     Fetch,
     Shell,
     Board,
+    Card,
+    Pipeline,
+    Routine,
     Coding,
     Math,
     Git,
+    Lsp,
 }
 
-pub const TOOL_KIND_NAMES: [(&str, ToolKind); 7] = [
+pub const TOOL_KIND_NAMES: [(&str, ToolKind); 11] = [
     ("search", ToolKind::Search),
     ("fetch", ToolKind::Fetch),
     ("shell", ToolKind::Shell),
     ("board", ToolKind::Board),
+    ("card", ToolKind::Card),
+    ("pipeline", ToolKind::Pipeline),
+    ("routine", ToolKind::Routine),
     ("coding", ToolKind::Coding),
     ("math", ToolKind::Math),
     ("git", ToolKind::Git),
+    ("lsp", ToolKind::Lsp),
 ];
 
 /// Allow-list of tools for one agent. An empty allow-list means every tool
@@ -30,9 +38,13 @@ pub struct ToolSet {
     pub fetch: bool,
     pub shell: bool,
     pub board: bool,
+    pub card: bool,
+    pub pipeline: bool,
+    pub routine: bool,
     pub coding: bool,
     pub math: bool,
     pub git: bool,
+    pub lsp: bool,
 }
 
 impl ToolSet {
@@ -43,9 +55,13 @@ impl ToolSet {
             fetch: true,
             shell: true,
             board: true,
+            card: true,
+            pipeline: true,
+            routine: true,
             coding: true,
             math: true,
             git: true,
+            lsp: true,
         }
     }
 
@@ -62,16 +78,22 @@ impl ToolSet {
                 .iter()
                 .find(|(n, _)| *n == name)
                 .ok_or_else(|| {
-                    format!("unknown tool {name:?} (use search|fetch|shell|board|coding|math|git)")
+                    format!(
+                        "unknown tool {name:?} (use search|fetch|shell|board|card|pipeline|routine|coding|math|git|lsp)"
+                    )
                 })?;
             match kind {
                 ToolKind::Search => set.search = true,
                 ToolKind::Fetch => set.fetch = true,
                 ToolKind::Shell => set.shell = true,
                 ToolKind::Board => set.board = true,
+                ToolKind::Card => set.card = true,
+                ToolKind::Pipeline => set.pipeline = true,
+                ToolKind::Routine => set.routine = true,
                 ToolKind::Coding => set.coding = true,
                 ToolKind::Math => set.math = true,
                 ToolKind::Git => set.git = true,
+                ToolKind::Lsp => set.lsp = true,
             }
         }
         Ok(set)
@@ -83,10 +105,19 @@ impl ToolSet {
             ToolKind::Fetch => self.fetch,
             ToolKind::Shell => self.shell,
             ToolKind::Board => self.board,
+            ToolKind::Card => self.card,
+            ToolKind::Pipeline => self.pipeline,
+            ToolKind::Routine => self.routine,
             ToolKind::Coding => self.coding,
             ToolKind::Math => self.math,
             ToolKind::Git => self.git,
+            ToolKind::Lsp => self.lsp,
         }
+    }
+
+    /// Any kanban-family permission (board, card, pipeline, routine).
+    pub const fn any_board(&self) -> bool {
+        self.board || self.card || self.pipeline || self.routine
     }
 
     /// Copy without the coding tool (used when the work tree has no git

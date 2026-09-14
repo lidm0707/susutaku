@@ -14,6 +14,12 @@ pub struct AgentSandbox {
 }
 
 impl AgentSandbox {
+    /// Normalize + join a workspace-relative path, rejecting escapes.
+    fn work_tree_path(&self, path: &str) -> Result<PathBuf, String> {
+        let rel = workspace_rel_path(path)?;
+        Ok(self.inner.root().join(rel))
+    }
+
     /// Restore a saved sandbox, or create a fresh one on first boot (a new
     /// instance never has saved state — e.g. a freshly started container).
     pub fn restore() -> Result<Self, String> {
@@ -69,12 +75,20 @@ impl Runner for AgentSandbox {
     }
 
     fn write_file(&self, path: &str, content: &str) -> Result<(), String> {
-        let rel = workspace_rel_path(path)?;
-        let target = self.inner.root().join(&rel);
+        let target = self.work_tree_path(path)?;
         if let Some(parent) = target.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
         std::fs::write(&target, content).map_err(|e| e.to_string())
+    }
+
+    fn read_file(&self, path: &str) -> Result<String, String> {
+        let target = self.work_tree_path(path)?;
+        std::fs::read_to_string(&target).map_err(|e| e.to_string())
+    }
+
+    fn workspace_root(&self) -> std::path::PathBuf {
+        self.inner.root()
     }
 
     fn has_git_repo(&self) -> bool {
@@ -82,6 +96,12 @@ impl Runner for AgentSandbox {
     }
 
     fn git(&self, op: &GitOp) -> Result<String, String> {
+        if op.sandbox_only() {
+            return Err(
+                "branch/commit/push/pr run inside a named agent's own container — spawn an agent first"
+                    .to_string(),
+            );
+        }
         let tool = match op {
             GitOp::Clone { url, token } => proto_rs::GitTool::Clone {
                 url: url.clone().ok_or_else(|| "clone needs a url".to_string())?,
@@ -89,8 +109,12 @@ impl Runner for AgentSandbox {
             },
             GitOp::Status => proto_rs::GitTool::Status,
             GitOp::Diff => proto_rs::GitTool::Diff,
+            GitOp::Branch { .. }
+            | GitOp::Commit { .. }
+            | GitOp::Push { .. }
+            | GitOp::PullRequest { .. } => unreachable!("excluded by sandbox_only"),
         };
-        manager_rs::git_tool::apply(&self.inner.root(), &tool)
+        manager_rs::git_state::apply(&self.inner.root(), &tool)
     }
 }
 

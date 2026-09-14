@@ -4,6 +4,7 @@ export const API_BASE = import.meta.env.VITE_API_BASE || "";
 
 export const PARAM_CARD = "card";
 export const PARAM_PIPELINE = "pipeline";
+export const PARAM_PROJECT = "project";
 
 export function set_query_param(key: string, value: string | null) {
   const url = new URL(window.location.href);
@@ -57,6 +58,15 @@ export interface ChatToolUse {
   input?: string;
   ok?: boolean;
   summary?: string;
+  /// Files the call produced (also attached to the turn's target card).
+  artifacts?: ChatArtifact[];
+}
+
+export interface ChatArtifact {
+  /// "image" | "text" | "file"
+  kind: string;
+  /// Workspace-relative path.
+  path: string;
 }
 
 export interface Agent {
@@ -888,7 +898,8 @@ export async function add_comment(card_id: number, body: string): Promise<Commen
 const CHAT_MAX_TOKENS = 1024;
 
 /// Ask the agent engine a question (same backend as the Chat page).
-export async function chat(message: string): Promise<ChatReply> {
+/// `card_id` targets a kanban card: tool artifacts attach to it as resources.
+export async function chat(message: string, card_id?: number): Promise<ChatReply> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
   };
@@ -897,7 +908,7 @@ export async function chat(message: string): Promise<ChatReply> {
   const res = await fetch(`${API_BASE}/api/chat`, {
     method: "POST",
     headers,
-    body: JSON.stringify({ message, max_tokens: CHAT_MAX_TOKENS, search: "auto" }),
+    body: JSON.stringify({ message, max_tokens: CHAT_MAX_TOKENS, search: "auto", card_id }),
   });
   if (!res.ok) throw new ApiError(res.status, await res.text());
   return res.json();
@@ -1061,6 +1072,32 @@ export interface AgentOutput {
 export async function fetch_agent_outputs(status?: string): Promise<AgentOutput[]> {
   const query = status ? `?status=${encodeURIComponent(status)}` : "";
   return (await api(`/api/agent-outputs${query}`)).json();
+}
+
+export interface ManagerAgent {
+  agent: string;
+  work_tree: string;
+  runs: number;
+  last_cmd: string | null;
+}
+
+export async function fetch_manager_agents(): Promise<ManagerAgent[]> {
+  const body = (await api("/api/manager/agents").then((r) => r.json())) as { agents: ManagerAgent[] };
+  return body.agents ?? [];
+}
+
+export interface StoredOutcome {
+  agent: string;
+  result: string | null;
+  patch: string;
+  commit: string | null;
+  output_id: number;
+}
+
+export async function finish_manager_agent(agent: string): Promise<StoredOutcome> {
+  return (
+    await api(`/api/manager/agents/${encodeURIComponent(agent)}/finish`, { method: "POST" })
+  ).json();
 }
 
 export async function set_agent_output_status(id: number, status: AgentOutput["status"]): Promise<void> {

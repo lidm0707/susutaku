@@ -1,7 +1,7 @@
 //! Domain service: chat prompt assembly and context formatting.
 
 use crate::domain::valueobject::search_result::SearchResult;
-use crate::domain::valueobject::tool_set::{ToolKind, ToolSet};
+use crate::domain::valueobject::tool_set::{TOOL_KIND_NAMES, ToolKind, ToolSet};
 
 /// Hard cap on search results fed into a prompt.
 pub const CONTEXT_RESULTS_MAX: usize = 5;
@@ -17,13 +17,16 @@ pub const TOOL_SHELL_INSTRUCTION: &str =
 pub const TOOL_CODING_INSTRUCTION: &str = "You HAVE a coding tool for writing project code. To create or overwrite a file in the project work tree, reply with ONLY this block (the only case where XML is allowed; all other tools use TOOL: lines):\n<invoke name=\"coding\"><parameter name=\"path\">relative/path/to/file.ext</parameter><parameter name=\"code\">the complete file content</parameter></invoke>\n";
 pub const PLOT_INSTRUCTION: &str = "When the user asks to plot, graph or visualize a function or equation, reply with a ```plot fenced block instead of ASCII art or matplotlib code. The block body is either JSON: {\"exprs\":[\"2/3*x - 1/3\"],\"x\":[-6,6],\"y\":[-4,4]} (y optional), or one expression per line (e.g. sin(x)). Use * for multiplication, ^ for power; the browser renders the graph for you — never draw graphs as text. Always solve for y first: an expression must not contain '=' (write 3 - x, never x+y=3).\n";
 pub const TOOL_MATH_INSTRUCTION: &str = "You HAVE a geometry math tool (exact computation, no estimation):\n- TOOL: MATH distance x1 y1 x2 y2 (or: distance x1,y1 x2,y2) - euclidean distance\n- TOOL: MATH triangle base height - triangle area\n- TOOL: MATH heron a b c - triangle area from three sides\n- TOOL: MATH circle radius - area and circumference\n- TOOL: MATH polygon x1,y1 x2,y2 ... - polygon area (shoelace, 3+ points)\n- TOOL: MATH pythag a b - hypotenuse\n- TOOL: MATH haversine lat1 lon1 lat2 lon2 - great-circle distance in km\n";
-pub const TOOL_GIT_INSTRUCTION: &str = "You HAVE a git tool for version control. It runs on the HOST (has network access), unlike SHELL:\n- TOOL: GIT CLONE [url] - clone a repo into the agent work tree (only a fresh, empty work tree); with no url, the repo bound to this chat's project is used\n- TOOL: GIT STATUS - HEAD + dirty/clean of the work tree\n- TOOL: GIT DIFF - patch of the work tree changes\n";
+pub const TOOL_GIT_INSTRUCTION: &str = "You HAVE a git tool for version control. CLONE/STATUS/DIFF run on the HOST; BRANCH/COMMIT/PUSH/PR run INSIDE your own sandbox container (they need a named agent session and a repo bound in settings → git repos):\n- TOOL: GIT CLONE [url] - clone a repo into the agent work tree (only a fresh, empty work tree); with no url, the repo bound to this chat's project is used\n- TOOL: GIT STATUS - HEAD + dirty/clean of the work tree\n- TOOL: GIT DIFF - patch of the work tree changes\n- TOOL: GIT BRANCH <name> - create and switch to a new branch\n- TOOL: GIT COMMIT <message> - stage all changes and commit them\n- TOOL: GIT PUSH <branch> - push the current work to <branch> on the bound remote\n- TOOL: GIT PR <title>[ | <base>] - open a pull request from the current branch (base defaults to main)\nBRANCH/COMMIT/PUSH/PR select the agent container by naming it LAST on the line: TOOL: GIT COMMIT my message @<agent>. Without @<agent> they run only when the chat itself is bound to an agent.\n";
+pub const TOOL_LSP_INSTRUCTION: &str = "You HAVE a language-server tool (rust-analyzer) for exact code navigation in the project work tree. line and col are 0-based; path is workspace-relative and must not contain spaces:\n- TOOL: LSP DEFINITION <path> <line> <col> - where the symbol at that position is defined\n- TOOL: LSP REFERENCES <path> <line> <col> - every use of that symbol\n- TOOL: LSP HOVER <path> <line> <col> - type and docs at that position\nPrefer these over grepping when you need to locate or understand a symbol.\n";
 pub const TOOL_RULES: &str = "If a tool would help, reply with ONLY one tool line (like: TOOL: SEARCH apple mlx). The system runs it and gives you results. Never say you cannot access the web. Otherwise answer directly. NEVER use XML, JSON or function-call syntax for tools (no <invoke>, no <tool_call>) — only plain TOOL: lines are understood.\n\n";
-pub const BOARD_TOOL_INSTRUCTION: &str = "You ALSO have kanban board tools for setting up routines (recurring work; survives sandbox shutdown because the backend scheduler runs it on the host):\n- TOOL: BOARD_LIST - list projects, pipelines and cards with their ids\n- TOOL: PIPELINE_CREATE <name> [spec-json] - create a pipeline; spec is optional JSON: {\"nodes\":[{\"id\":\"a\",\"stage\":\"fetch\",\"params\":{\"url\":\"https://...\"}},...],\"links\":[{\"from\":\"a\",\"to\":\"b\"}]} - every node needs id, stage and ALL required params of its stage; without spec an empty pipeline is created (add nodes later)\n- TOOL: CARD_CREATE <project_id> <title> - create a kanban card\n- TOOL: CARD_LINK <card_id> <pipeline_id> - attach a pipeline to a card\n- TOOL: CARD_ROUTINE <card_id> <cron> - give a card a routine: a 5-field UTC cron (e.g. 0 */5 * * * runs every 5 hours); the backend scheduler runs the card's pipeline when due. There is no standalone \"routine\" object — routines are card schedules.\nMODIFYING an existing card (user names a card, or asks to change/clear a routine): do NOT create anything. First call BOARD_LIST to find the card id by its title, then call CARD_ROUTINE with that id and the requested cron; create/attach a pipeline ONLY if the card has none and the user asked for new recurring work.\nFor brand-new recurring work: create the pipeline (with a valid spec), create the card, link them, then set the routine. Reply with ONLY one tool line per turn.\n\n";
+pub const BOARD_TOOL_INSTRUCTION: &str = "You ALSO have kanban board tools for setting up routines (recurring work; survives sandbox shutdown because the backend scheduler runs it on the host):\n- TOOL: BOARD_LIST - list projects, pipelines and cards with their ids\n- TOOL: PIPELINE_CREATE <name> [spec-json] - create a pipeline; spec is optional JSON: {\"nodes\":[{\"id\":\"a\",\"stage\":\"fetch\",\"params\":{\"url\":\"https://...\"}},...],\"links\":[{\"from\":\"a\",\"to\":\"b\"}]} - every node needs id, stage and ALL required params of its stage; without spec an empty pipeline is created (add nodes later)\n- TOOL: CARD_CREATE <project_id> <title> [| <description>] - create a kanban card. The title is a SHORT summary (max ~6 words); after ` | ` put a description that captures the data/content the card is about (research findings, key facts, links). When the user asks to create/save a card — or writes out card content — you MUST create it with CARD_CREATE; NEVER paste card content into your reply as markdown instead of creating the card.\n- TOOL: CARD_LINK <card_id> <pipeline_id> - attach a pipeline to a card\n- TOOL: CARD_ROUTINE <card_id> <cron> - give a card a routine: a 5-field UTC cron (e.g. 0 */5 * * * runs every 5 hours); the backend scheduler runs the card's pipeline when due. There is no standalone \"routine\" object — routines are card schedules.\nMODIFYING an existing card (user names a card, or asks to change/clear a routine): do NOT create anything. First call BOARD_LIST to find the card id by its title, then call CARD_ROUTINE with that id and the requested cron; create/attach a pipeline ONLY if the card has none and the user asked for new recurring work.\nFor brand-new recurring work: create the pipeline (with a valid spec), create the card, link them, then set the routine. Reply with ONLY one tool line per turn.\n\n";
 pub const PIPELINE_SCHEMA_HEADER: &str =
     "Pipeline node stages (stage — what it does; params). Required params MUST be set:\n";
 pub const TOOL_RESULT_HEADER: &str = "\n\nTool results:\n";
 pub const TOOL_DENIED: &str = "tool denied: this agent is not permitted to use that tool";
+pub const SKILL_CONTEXT_OPEN: &str = "<context>\n";
+pub const SKILL_CONTEXT_CLOSE: &str = "\n</context>\n\n";
 
 /// Assemble the final model prompt: tool offer (optional), context (optional), question.
 pub struct Prompt;
@@ -38,10 +41,11 @@ enum Section {
     Board,
     Math,
     Git,
+    Lsp,
 }
 
 impl Section {
-    const ALL: [Self; 7] = [
+    const ALL: [Self; 8] = [
         Self::Web,
         Self::Shell,
         Self::Rules,
@@ -49,6 +53,7 @@ impl Section {
         Self::Board,
         Self::Math,
         Self::Git,
+        Self::Lsp,
     ];
 
     fn render(&self, tools: &ToolSet, offer_board: bool) -> Option<String> {
@@ -63,12 +68,13 @@ impl Section {
             Self::Coding if tools.allows(ToolKind::Coding) => {
                 Some(TOOL_CODING_INSTRUCTION.to_owned())
             }
-            Self::Board if offer_board && tools.allows(ToolKind::Board) => Some(format!(
+            Self::Board if offer_board && tools.any_board() => Some(format!(
                 "{BOARD_TOOL_INSTRUCTION}{}{PIPELINE_SCHEMA_HEADER}\n\n",
                 piplines::port::schema_text()
             )),
             Self::Math if tools.allows(ToolKind::Math) => Some(TOOL_MATH_INSTRUCTION.to_owned()),
             Self::Git if tools.allows(ToolKind::Git) => Some(TOOL_GIT_INSTRUCTION.to_owned()),
+            Self::Lsp if tools.allows(ToolKind::Lsp) => Some(TOOL_LSP_INSTRUCTION.to_owned()),
             _ => None,
         }
     }
@@ -82,6 +88,16 @@ impl Section {
 }
 
 impl Prompt {
+    /// Skill sheets for every enabled tool, in `TOOL_KIND_NAMES` order.
+    fn skills(tools: &ToolSet) -> String {
+        TOOL_KIND_NAMES
+            .iter()
+            .filter(|(_, kind)| tools.allows(*kind))
+            .filter_map(|(name, _)| core_agent::skills::skill(name))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     pub fn build(
         message: &str,
         context: &str,
@@ -91,6 +107,12 @@ impl Prompt {
     ) -> String {
         let mut body = String::from(PLOT_INSTRUCTION);
         if offer_tools {
+            let skills = Self::skills(tools);
+            if !skills.is_empty() {
+                body.push_str(SKILL_CONTEXT_OPEN);
+                body.push_str(&skills);
+                body.push_str(SKILL_CONTEXT_CLOSE);
+            }
             for section in Section::ALL {
                 if let Some(text) = section.render(tools, offer_board) {
                     body.push_str(&text);

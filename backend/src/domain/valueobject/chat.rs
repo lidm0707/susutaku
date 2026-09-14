@@ -22,6 +22,9 @@ pub struct ChatCmd {
     /// Memory scope: chat thread id. Memories are recalled/stored per thread;
     /// None disables memory entirely (no shared scope).
     pub thread_id: Option<String>,
+    /// Target kanban card: artifacts produced this turn (written files,
+    /// shell-created images/text) are attached to it as card resources.
+    pub card_id: Option<i64>,
 }
 
 /// Driving-adapter response: one completed chat turn.

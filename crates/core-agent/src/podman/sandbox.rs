@@ -207,6 +207,19 @@ impl Sandbox {
         limits: &SandboxLimits,
         network: NetworkPolicyChoice,
     ) -> Result<String, Error> {
+        self.run_with_env(cmd, limits, network, &[])
+    }
+
+    /// Like [`run_with`], but injects extra env vars into the container for
+    /// this run only (e.g. a git token for a push). Host env never leaks:
+    /// only these pairs plus the fixed allow-list are passed.
+    pub fn run_with_env(
+        &self,
+        cmd: &str,
+        limits: &SandboxLimits,
+        network: NetworkPolicyChoice,
+        extra_env: &[(String, String)],
+    ) -> Result<String, Error> {
         {
             let lc = self
                 .lifecycle
@@ -223,7 +236,7 @@ impl Sandbox {
         if let Ok(mut lc) = self.lifecycle.write() {
             *lc = Lifecycle::Running;
         }
-        let result = self.run_inner(cmd, limits, network);
+        let result = self.run_inner(cmd, limits, network, extra_env);
         let entry = HistoryEntry {
             role: Role::Tool,
             content: match &result {
@@ -249,6 +262,7 @@ impl Sandbox {
         cmd: &str,
         limits: &SandboxLimits,
         network: NetworkPolicyChoice,
+        extra_env: &[(String, String)],
     ) -> Result<String, Error> {
         let cwd_rel = self
             .state
@@ -273,7 +287,15 @@ impl Sandbox {
             image: &image,
             cache_tag: cache_tag.as_deref(),
         };
-        runner::run_container(&self.root(), &cwd_rel, cmd, limits, network, &spec)
+        runner::run_container(
+            &self.root(),
+            &cwd_rel,
+            cmd,
+            limits,
+            network,
+            &spec,
+            extra_env,
+        )
     }
 
     pub fn push_context(&self, role: Role, content: impl Into<String>) {

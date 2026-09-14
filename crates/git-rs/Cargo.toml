@@ -5,4 +5,9 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-git2 = { version = "0.20", default-features = false }
+# `https` + `vendored-openssl`: libgit2 needs a TLS backend or every https
+# clone/push fails with "there is no TLS stream available".
+git2 = { version = "0.20", default-features = false, features = [
+    "https",
+    "vendored-openssl",
+] }

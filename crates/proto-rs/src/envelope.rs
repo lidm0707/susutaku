@@ -45,15 +45,38 @@ impl ClientMeta {
     }
 }
 
-/// Host-side git toolcall against an agent's work tree. Runs on the machine
-/// that owns the agent — where network and credentials live — never inside
-/// the network-less sandbox.
+/// Git toolcall against an agent's workspace. Clone/status/diff run
+/// host-side (bootstrap + inspection); branch/commit/push/pr run INSIDE
+/// the agent's own podman container with network + a run-scoped token env,
+/// so the agent does its git work in its own environment.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "lowercase")]
 pub enum GitTool {
-    Clone { url: String, token: Option<String> },
+    Clone {
+        url: String,
+        token: Option<String>,
+    },
     Status,
     Diff,
+    Branch {
+        name: String,
+    },
+    Commit {
+        message: String,
+    },
+    Push {
+        branch: String,
+        url: Option<String>,
+        token: Option<String>,
+    },
+    PullRequest {
+        title: String,
+        /// Branch to open the PR from; empty = the container's current branch.
+        head: String,
+        base: String,
+        url: Option<String>,
+        token: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

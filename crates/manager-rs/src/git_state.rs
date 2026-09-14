@@ -19,6 +19,12 @@ pub fn apply(work_tree: &Path, tool: &GitTool) -> Result<String, String> {
         GitTool::Clone { url, token } => clone(work_tree, url, token.as_deref()),
         GitTool::Status => status(work_tree),
         GitTool::Diff => diff(work_tree),
+        GitTool::Branch { .. }
+        | GitTool::Commit { .. }
+        | GitTool::Push { .. }
+        | GitTool::PullRequest { .. } => {
+            Err("branch/commit/push/pr run inside the agent's own sandbox".to_string())
+        }
     }
 }
 

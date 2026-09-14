@@ -1,4 +1,5 @@
 pub mod fetch;
+pub mod git_in_sandbox;
 pub mod lsp;
 pub mod web_search;
 
@@ -52,7 +53,7 @@ impl Tool {
                 text,
                 line,
                 col,
-            } => lsp::definition(path, text, *line, *col),
+            } => lsp::definition(lsp::DEFAULT_ROOT, path, text, *line, *col),
         }
     }
 }

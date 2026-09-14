@@ -8,6 +8,7 @@ license.workspace = true
 serde = { workspace = true }
 serde_json = { workspace = true }
 argon2 = "0.5"
+sha2 = "0.10"
 sqlx = { version = "0.8", default-features = false, features = [
     "runtime-tokio",
     "tls-rustls",

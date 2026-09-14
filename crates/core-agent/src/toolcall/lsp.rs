@@ -11,8 +11,14 @@ fn server() -> Command {
     cmd
 }
 
-pub fn definition(path: &str, text: &str, line: u32, col: usize) -> Result<String, String> {
-    let locations = lsp_rs::goto_definition(&mut server(), DEFAULT_ROOT, path, text, line, col)?;
+pub fn definition(
+    root: &str,
+    path: &str,
+    text: &str,
+    line: u32,
+    col: usize,
+) -> Result<String, String> {
+    let locations = lsp_rs::goto_definition(&mut server(), root, path, text, line, col)?;
     Ok(locations
         .iter()
         .map(|l| l.render())
@@ -20,8 +26,14 @@ pub fn definition(path: &str, text: &str, line: u32, col: usize) -> Result<Strin
         .join("\n"))
 }
 
-pub fn references(path: &str, text: &str, line: u32, col: usize) -> Result<String, String> {
-    let locations = lsp_rs::references(&mut server(), DEFAULT_ROOT, path, text, line, col)?;
+pub fn references(
+    root: &str,
+    path: &str,
+    text: &str,
+    line: u32,
+    col: usize,
+) -> Result<String, String> {
+    let locations = lsp_rs::references(&mut server(), root, path, text, line, col)?;
     Ok(locations
         .iter()
         .map(|l| l.render())
@@ -29,6 +41,6 @@ pub fn references(path: &str, text: &str, line: u32, col: usize) -> Result<Strin
         .join("\n"))
 }
 
-pub fn hover(path: &str, text: &str, line: u32, col: usize) -> Result<String, String> {
-    Ok(lsp_rs::hover(&mut server(), DEFAULT_ROOT, path, text, line, col)?.unwrap_or_default())
+pub fn hover(root: &str, path: &str, text: &str, line: u32, col: usize) -> Result<String, String> {
+    Ok(lsp_rs::hover(&mut server(), root, path, text, line, col)?.unwrap_or_default())
 }

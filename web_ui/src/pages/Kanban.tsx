@@ -12,11 +12,13 @@ import {
   fetch_comments,
   fetch_cronjobs,
   fetch_pipelines,
+  fetch_projects,
   fetch_users,
   fetch_agent_machine,
   query_param,
   set_query_param,
   PARAM_CARD,
+  PARAM_PROJECT,
   move_card,
   remove_card,
   set_agent,
@@ -37,6 +39,8 @@ import {
 import { Modal, SlideOver } from "../ui/Overlay.js";
 import { toast } from "../ui/Toast.js";
 import { use_projects } from "../components/ProjectContext.tsx";
+import { emit_card_created } from "../features/card_bus.js";
+import { use_workspaces } from "../components/WorkspaceContext.tsx";
 
 const COLUMNS = [
   { id: "todo", title: "To Do" },
@@ -132,7 +136,8 @@ function fmt_date(deadline: string): string {
 
 export default function Kanban() {
   const nav = useNavigate();
-  const { project_id } = use_projects();
+  const { project_id, pick_project } = use_projects();
+  const { workspaces, pick: pick_ws } = use_workspaces();
   const [cards, setCards] = useState<Card[]>([]);
   const [, setError] = useState("");
   const [title, setTitle] = useState("");
@@ -159,6 +164,7 @@ export default function Kanban() {
   const [dCheckItem, setDCheckItem] = useState("");
   const [dEstimate, setDEstimate] = useState("");
   const [dThinking, setDThinking] = useState(false);
+  const [mentionQuery, setMentionQuery] = useState<string | null>(null);
   const commentsEnd = useRef<HTMLDivElement | null>(null);
   const [dragOver, setDragOver] = useState<ColumnId | null>(null);
   const [view, setView] = useState<ViewMode>(VIEW_BOARD);
@@ -194,7 +200,34 @@ export default function Kanban() {
     });
   }, [project_id]);
 
+  // Deep link ?project=<id>&card=<id>: switch to the card's project, then let
+  // the cards effect open the detail. The detail effect must not wipe the URL
+  // params before the cards load, hence the first-run skips below.
+  const deep_project = useRef(query_param(PARAM_PROJECT));
+  const deep_done = useRef(deep_project.current == null);
+  const detail_touched = useRef(false);
+
   useEffect(() => {
+    if (deep_done.current || workspaces.length === 0) return;
+    const want = Number(deep_project.current);
+    (async () => {
+      for (const ws of workspaces) {
+        const projects = await fetch_projects(ws.id).catch(() => []);
+        if (projects.some((p) => p.id === want)) {
+          pick_ws(ws.id);
+          pick_project(want);
+          break;
+        }
+      }
+      deep_done.current = true;
+    })();
+  }, [workspaces]);
+
+  useEffect(() => {
+    if (!detail_touched.current) {
+      detail_touched.current = true;
+      return;
+    }
     set_query_param(PARAM_CARD, detail ? String(detail.id) : null);
   }, [detail]);
 
@@ -204,7 +237,7 @@ export default function Kanban() {
     if (id == null) return;
     const card = cards.find((c) => String(c.id) === id);
     if (card) open_detail(card);
-    else set_query_param(PARAM_CARD, null);
+    else if (deep_done.current) set_query_param(PARAM_CARD, null);
   }, [cards]);
 
   async function refresh() {
@@ -220,7 +253,11 @@ export default function Kanban() {
     if (!title.trim() || project_id == null) return;
     setError("");
     try {
-      await create_card(project_id, COLUMNS[0].id, title.trim(), "", priority);
+      const res = await create_card(project_id, COLUMNS[0].id, title.trim(), "", priority);
+      if (res.ok) {
+        const card = (await res.json()) as { id: number; title: string; project_id: number | null };
+        emit_card_created({ id: card.id, title: card.title, project_id: card.project_id });
+      }
       setTitle("");
       setAddOpen(false);
       await refresh();
@@ -331,6 +368,19 @@ export default function Kanban() {
     const names = savedAgents.map((a) => a.name).filter(Boolean);
     if (detail?.agent_name) names.push(detail.agent_name);
     return [...new Set(names)];
+  }
+
+  /// Active @mention query derived from the comment body, or null when not mentioning.
+  const mention_matches =
+    mentionQuery == null
+      ? []
+      : mentionable_agents().filter((n) =>
+          n.toLowerCase().startsWith(mentionQuery.toLowerCase())
+        );
+
+  function pick_mention(name: string) {
+    setDCommentBody((b) => b.replace(/@([\w.-]*)$/, `@${name} `));
+    setMentionQuery(null);
   }
 
   function mentioned_agent(body: string): string | null {
@@ -983,9 +1033,25 @@ export default function Kanban() {
                 )}
                 <div ref={commentsEnd} />
                 <form className="kanban-add" onSubmit={comment}>
+                  {mention_matches.length > 0 && (
+                    <ul className="kanban-mention-list" role="listbox">
+                      {mention_matches.map((n) => (
+                        <li key={n} role="option" aria-selected={false}>
+                          <button type="button" onClick={() => pick_mention(n)}>
+                            @{n}
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                   <input
                     value={dCommentBody}
-                    onChange={(e) => setDCommentBody(e.target.value)}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setDCommentBody(v);
+                      const m = v.match(/@([\w.-]*)$/);
+                      setMentionQuery(m ? m[1] : null);
+                    }}
                     placeholder={`write a comment… (mention @${detail?.agent_name || "agent"} to chat)`}
                   />
                   <button type="submit" disabled={!dCommentBody.trim() || dThinking}>

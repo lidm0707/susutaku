@@ -195,7 +195,7 @@ export default function SideNav({ on_chat, shifted }: { on_chat: () => void; shi
           <button
             className={`dock-profile-btn ${outputs_open ? "open" : ""}`}
             onClick={() => set_outputs_open((v) => !v)}
-            title="agent outputs"
+            title="agents"
             aria-haspopup="dialog"
             aria-expanded={outputs_open}
           >

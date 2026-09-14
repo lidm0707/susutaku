@@ -34,7 +34,7 @@ export async function make_plotter(target: HTMLCanvasElement): Promise<Plotter> 
   const Ctor = await load_plotter_ctor();
   if (Ctor) {
     try {
-      return await new Ctor(target);
+      return await (Ctor as unknown as { new: (t: HTMLCanvasElement) => Promise<Plotter> }).new(target);
     } catch {
       // GPU adapter/device unavailable (e.g. no WebGPU on macOS Firefox)
     }

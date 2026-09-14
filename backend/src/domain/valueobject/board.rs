@@ -8,7 +8,11 @@ pub enum BoardOp {
     /// empty (valid) pipeline is created. Returns the new pipeline id.
     CreatePipeline { name: String, spec: Option<String> },
     /// Create a card in the default todo column; returns the new card id.
-    CreateCard { project_id: i64, title: String },
+    CreateCard {
+        project_id: i64,
+        title: String,
+        description: Option<String>,
+    },
     /// Attach a pipeline to a card.
     LinkPipeline { card_id: i64, pipeline_id: i64 },
     /// Set (or clear with None) a 5-field UTC cron on a card.

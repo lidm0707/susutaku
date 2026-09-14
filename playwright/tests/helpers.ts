@@ -8,6 +8,15 @@ export const E2E_PASSWORD = process.env.E2E_PASSWORD || "e2e-e2e-e2e";
 
 export async function seedUser() {
   const ctx = await pwRequest.newContext({ baseURL: API });
+  // Dev stacks already have the e2e user (or it was seeded by a past run):
+  // log in directly before going through bootstrap/admin seeding.
+  let direct = await ctx.post("/api/auth/login", {
+    data: { username: E2E_USER, password: E2E_PASSWORD },
+  });
+  if (direct.ok()) {
+    await ctx.dispose();
+    return;
+  }
   // Zero users -> unauthenticated bootstrap creates the owner.
   let res = await ctx.post("/api/auth/users", {
     data: { username: E2E_USER, password: E2E_PASSWORD, role: "owner" },

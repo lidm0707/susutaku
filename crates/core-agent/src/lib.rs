@@ -1,6 +1,7 @@
 pub mod agent_state;
 pub mod podman;
 pub mod sandbox_abstract_layer;
+pub mod skills;
 pub mod toolcall;
 
 pub use sandbox_abstract_layer::{Guarantee, SandboxLayer};

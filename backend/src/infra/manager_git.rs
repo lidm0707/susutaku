@@ -1,5 +1,6 @@
-//! Manager-backed git adapter: runs git toolcalls host-side in a named
-//! agent's own work tree (credentials live here; the sandbox has no network).
+//! Manager-backed git adapter: routes git toolcalls for a named agent.
+//! Clone/status/diff run host-side in its work tree; branch/commit/push/pr
+//! run inside the agent's own podman container (see manager-rs git_in_sandbox).
 
 use crate::domain::GitOp;
 use crate::port::outbound::AgentGit;
@@ -23,6 +24,28 @@ impl ManagerGit {
             }),
             GitOp::Status => Ok(proto_rs::GitTool::Status),
             GitOp::Diff => Ok(proto_rs::GitTool::Diff),
+            GitOp::Branch { name } => Ok(proto_rs::GitTool::Branch { name: name.clone() }),
+            GitOp::Commit { message } => Ok(proto_rs::GitTool::Commit {
+                message: message.clone(),
+            }),
+            GitOp::Push { branch, url, token } => Ok(proto_rs::GitTool::Push {
+                branch: branch.clone(),
+                url: url.clone(),
+                token: token.clone(),
+            }),
+            GitOp::PullRequest {
+                title,
+                head,
+                base,
+                url,
+                token,
+            } => Ok(proto_rs::GitTool::PullRequest {
+                title: title.clone(),
+                head: head.clone(),
+                base: base.clone(),
+                url: url.clone(),
+                token: token.clone(),
+            }),
         }
     }
 }

@@ -41,6 +41,12 @@ impl Runner for NoShell {
     fn write_file(&self, _path: &str, _content: &str) -> Result<(), String> {
         Err("no work tree in test".to_string())
     }
+    fn read_file(&self, _path: &str) -> Result<String, String> {
+        Err("no work tree in test".to_string())
+    }
+    fn workspace_root(&self) -> std::path::PathBuf {
+        std::path::PathBuf::new()
+    }
     fn has_git_repo(&self) -> bool {
         false
     }
@@ -147,6 +153,6 @@ async fn agent_creates_pipeline_with_spec_then_card() {
     ));
     assert!(matches!(
         &ops[1],
-        BoardOp::CreateCard { project_id: 1, title } if title == "trump-card"
+        BoardOp::CreateCard { project_id: 1, title, description: None } if title == "trump-card"
     ));
 }

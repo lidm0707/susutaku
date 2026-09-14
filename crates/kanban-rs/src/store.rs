@@ -349,6 +349,18 @@ CREATE INDEX IF NOT EXISTS chat_messages_thread_idx ON chat_messages (thread_id,
     r#"
 ALTER TABLE chat_threads ADD COLUMN IF NOT EXISTS project_id BIGINT REFERENCES projects(id) ON DELETE CASCADE;
 "#,
+    r#"
+CREATE TABLE IF NOT EXISTS agent_run_tokens (
+    token_hash TEXT PRIMARY KEY,
+    agent      TEXT NOT NULL,
+    project_id BIGINT REFERENCES projects(id) ON DELETE CASCADE,
+    card_id    BIGINT REFERENCES kanban_cards(id) ON DELETE CASCADE,
+    thread_id  BIGINT REFERENCES chat_threads(id) ON DELETE CASCADE,
+    machine    TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    expires_at TIMESTAMPTZ NOT NULL
+);
+"#,
 ];
 
 const JSON_ARRAY_ERR: &str = "must be a JSON array";

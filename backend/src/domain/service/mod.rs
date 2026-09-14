@@ -20,5 +20,5 @@ pub use pipeline::PipelineService;
 pub use project::ProjectService;
 pub use resource::ResourceService;
 pub use skill::SkillService;
-pub use tool_call::ToolCall;
+pub use tool_call::{LspOp, ToolCall};
 pub use workspace::WorkspaceService;

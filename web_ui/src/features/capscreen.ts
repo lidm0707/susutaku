@@ -14,9 +14,11 @@ export const WASM_BINARY_URL = new URL("../wasm/wgpu_rs/wgpu_rs_bg.wasm", import
 export async function load_wasm_module(): Promise<Record<string, unknown> | null> {
   try {
     const mod = await import(/* @vite-ignore */ WASM_MODULE_URL);
-    const init = (mod.default ?? mod.init) as ((u: string) => Promise<unknown>) | undefined;
+    const init = (mod.default ?? mod.init) as
+      | ((arg: { module_or_path: string }) => Promise<unknown>)
+      | undefined;
     if (typeof init !== "function") return null;
-    await init(WASM_BINARY_URL);
+    await init({ module_or_path: WASM_BINARY_URL });
     return mod as Record<string, unknown>;
   } catch {
     return null;
@@ -136,7 +138,13 @@ export async function make_annotator(
   target: HTMLCanvasElement
 ): Promise<ScreenAnnotator> {
   const Ctor = await load_annotator_ctor();
-  if (Ctor) return new Ctor(source, target);
+  if (Ctor) {
+    try {
+      return await (Ctor as unknown as { new: (s: HTMLCanvasElement, t: HTMLCanvasElement) => Promise<ScreenAnnotator> }).new(source, target);
+    } catch {
+      // GPU adapter/device unavailable
+    }
+  }
   return make_fallback_annotator(source, target);
 }
 

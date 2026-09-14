@@ -1,5 +1,6 @@
-//! A git operation the agent may request: clone/status/diff, always executed
-//! host-side against the agent work tree (the sandbox has no network).
+//! A git operation the agent may request. Clone/status/diff run host-side
+//! against the agent work tree; branch/commit/push/pr run inside the
+//! agent's own podman container (network + run-scoped token env).
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GitOp {
@@ -10,4 +11,37 @@ pub enum GitOp {
     },
     Status,
     Diff,
+    Branch {
+        name: String,
+    },
+    Commit {
+        message: String,
+    },
+    Push {
+        branch: String,
+        url: Option<String>,
+        token: Option<String>,
+    },
+    PullRequest {
+        title: String,
+        /// Empty = the container's current branch.
+        head: String,
+        base: String,
+        url: Option<String>,
+        token: Option<String>,
+    },
+}
+
+impl GitOp {
+    /// Ops that only make sense in a named agent's own sandbox — the host
+    /// no longer commits or pushes on the agent's behalf.
+    pub const fn sandbox_only(&self) -> bool {
+        matches!(
+            self,
+            GitOp::Branch { .. }
+                | GitOp::Commit { .. }
+                | GitOp::Push { .. }
+                | GitOp::PullRequest { .. }
+        )
+    }
 }

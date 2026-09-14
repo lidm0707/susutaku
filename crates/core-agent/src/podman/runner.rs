@@ -49,6 +49,7 @@ pub(crate) fn run_container(
     limits: &SandboxLimits,
     network: NetworkPolicyChoice,
     spec: &ContainerSpec<'_>,
+    extra_env: &[(String, String)],
 ) -> Result<String, Error> {
     super::install::ensure_podman()?;
     let workspace = std::fs::canonicalize(workspace)?;
@@ -73,6 +74,9 @@ pub(crate) fn run_container(
         .arg(format!("{}:{CONTAINER_WORKSPACE}", workspace.display()));
     command.arg("-w").arg(cwd_mount_path(cwd_rel));
     for (k, v) in SANDBOX_ENV {
+        command.arg("-e").arg(format!("{k}={v}"));
+    }
+    for (k, v) in extra_env {
         command.arg("-e").arg(format!("{k}={v}"));
     }
     command.arg(spec.image);

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
-import { Bot, Brain, Camera, Check, ChevronDown, Copy, Crosshair, Link2, MessageSquarePlus, PanelRight, Pencil, Send, Wrench, X } from "lucide-react";
+import { Bot, Brain, Camera, Check, ChevronDown, Code2, Copy, Crosshair, ExternalLink, Eye, Link2, MessageSquarePlus, PanelRight, Pencil, Send, Wrench, X } from "lucide-react";
 import {
   API_BASE,
   chat_codex,
@@ -18,6 +18,8 @@ import {
   fetch_system_prompt,
   pretty_name,
   select_model,
+  PARAM_CARD,
+  PARAM_PROJECT,
   type Agent,
   type ChatReply,
   type ChatToolUse,
@@ -32,6 +34,7 @@ import GraphView from "./GraphView.tsx";
 import { parse_plot_spec } from "../features/graph.js";
 import CapscreenModal from "./CapscreenModal.js";
 import { image_file_to_canvas } from "../features/capscreen.js";
+import { use_card_created, type CardEvent } from "../features/card_bus.js";
 
 const MAX_TOKENS = 512;
 
@@ -46,6 +49,10 @@ const SCROLL_STICK_PX = 48;
 
 const CARD_MIME = "application/x-susutaku-card";
 const CARD_MENTION_RE = /#card:(\d+)/g;
+// board tool summary the backend emits after an agent creates a card
+const CARD_CREATED_RE = /^card (\d+) created in project (\d+): (.+)$/;
+const HTML_LANG = "html";
+const HTML_FRAME_HEIGHT = "220px";
 
 const DOCK_KEY = "chat_dock";
 
@@ -209,6 +216,51 @@ function PlotFence({ body }: { body: string }) {
   );
 }
 
+function HtmlFence({ body }: { body: string }) {
+  const [raw, set_raw] = useState(false);
+  return (
+    <div className="msg-code msg-html">
+      <div className="msg-code-head">
+        <span>{HTML_LANG}</span>
+        <button
+          type="button"
+          onClick={() => set_raw((v) => !v)}
+          aria-pressed={raw}
+          title={raw ? "show live preview" : "show raw html"}
+        >
+          {raw ? <Eye size={12} /> : <Code2 size={12} />}
+          {raw ? "preview" : "raw html"}
+        </button>
+      </div>
+      {raw ? (
+        <pre><code>{body}</code></pre>
+      ) : (
+        <iframe
+          className="msg-html-frame"
+          sandbox=""
+          srcDoc={body}
+          title="html preview"
+          style={{ height: HTML_FRAME_HEIGHT }}
+        />
+      )}
+    </div>
+  );
+}
+
+function CardChip({ card }: { card: CardEvent }) {
+  const open = () =>
+    window.open(
+      `/kanban?${PARAM_PROJECT}=${card.project_id ?? ""}&${PARAM_CARD}=${card.id}`,
+      "_blank"
+    );
+  return (
+    <button type="button" className="card-chip" onClick={open} title="open card on the kanban board">
+      <ExternalLink size={12} />
+      card #{card.id} · {card.title}
+    </button>
+  );
+}
+
 function MessageText({ text }: { text: string }) {
   const segments = split_segments(text);
   return (
@@ -217,6 +269,8 @@ function MessageText({ text }: { text: string }) {
         s.kind === "code" ? (
           s.lang === PLOT_LANG ? (
             <PlotFence key={i} body={s.body} />
+          ) : s.lang === HTML_LANG ? (
+            <HtmlFence key={i} body={s.body} />
           ) : (
             <CodeBlock key={i} lang={s.lang} body={s.body} />
           )
@@ -241,6 +295,8 @@ interface Msg {
   tps?: number;
   /// annotated screenshot attached to this message
   image?: string;
+  /// kanban card created in this turn (agent tool call or board action)
+  card?: CardEvent;
   tools?: ChatToolUse[];
   memories?: string[];
 }
@@ -290,7 +346,7 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
   // agent name -> machine it currently runs on ("" = not running anywhere).
   const [machineByAgent, setMachineByAgent] = useState<Record<string, string>>({});
   const [capscreenOpen, setCapscreenOpen] = useState(false);
-  const [pendingImage, setPendingImage] = useState<string | null>(null);
+  const [pendingImages, setPendingImages] = useState<string[]>([]);
   const [capscreenInit, setCapscreenInit] = useState<HTMLCanvasElement | null>(null);
   const [queued, setQueued] = useState<QueuedMsg[]>([]);
   const queueRef = useRef<QueuedMsg[]>([]);
@@ -644,7 +700,15 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
       const res = await fetch(`${API_BASE}/api/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text, max_tokens: MAX_TOKENS, search: searchMode, agent: a.name, thread_id: thread_id ?? undefined }),
+        body: JSON.stringify({
+          message: text,
+          max_tokens: MAX_TOKENS,
+          search: searchMode,
+          agent: a.name,
+          thread_id: thread_id ?? undefined,
+          // first #card:N mention receives tool artifacts as card resources
+          card_id: card_mentions(text)[0],
+        }),
       });
       return res.json();
     }
@@ -657,22 +721,31 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
   async function send(e: React.FormEvent) {
     e.preventDefault();
     const text = input.trim();
-    if (!text) return;
+    if (!text && !pendingImages.length) return;
     if (!selected.length) {
       setError("no agent — pick one with the + button");
       return;
     }
+    // one image per message on the wire: the first image rides with the text,
+    // the rest go through the queue as image-only follow-ups
+    const items: Omit<QueuedMsg, "id">[] = pendingImages.map((img, i) => ({
+      tid: activeId,
+      text: i === 0 ? text : "",
+      image: img,
+    }));
+    if (!items.length) items.push({ tid: activeId, text, image: null });
     if (busy) {
-      push_queue({ tid: activeId, text, image: pendingImage });
+      items.forEach(push_queue);
       setInput("");
-      setPendingImage(null);
+      setPendingImages([]);
       setToast("queued — sends after the current reply finishes");
       return;
     }
-    const image = pendingImage;
+    const [head, ...rest] = items;
+    rest.forEach(push_queue);
     setInput("");
-    setPendingImage(null);
-    await run_send(text, image, activeId);
+    setPendingImages([]);
+    await run_send(head.text, head.image, head.tid);
     for (let item = take_queue(); item; item = take_queue()) {
       await run_send(item.text, item.image, item.tid);
     }
@@ -735,9 +808,15 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
       }
       const data = out.value;
       const { thinking, reply } = split_thinking(data.reply as string);
+      const created = data.tools
+        ?.map((t) => t.summary?.match(CARD_CREATED_RE))
+        .find((m) => m);
       patch({
         text: reply,
         thinking,
+        card: created
+          ? { id: Number(created[1]), project_id: Number(created[2]), title: created[3] }
+          : undefined,
         model: data.model,
         prompt_tps: data.prompt_tps,
         tps: data.decode_tps,
@@ -756,6 +835,16 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
     }
     setBusy(false);
   }
+
+  const activeIdRef = useRef(activeId);
+  activeIdRef.current = activeId;
+  use_card_created((card) => {
+    patch_thread(activeIdRef.current, (m) => [
+      ...m,
+      { id: nextId.current++, role: "assistant", text: "", card },
+    ]);
+    setToast(`card #${card.id} created — click it in chat to open`);
+  });
 
   const sub =
     selected.length === 0
@@ -828,6 +917,15 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
                         <li key={i}>
                           <code>{t.tool}</code>{t.input ? ` ${t.input}` : ""} {t.ok === false ? "✗" : "✓"}
                           {t.summary && <pre>{t.summary}</pre>}
+                          {t.artifacts && t.artifacts.length > 0 && (
+                            <div className="tool-artifacts">
+                              {t.artifacts.map((a) => (
+                                <code key={a.path} title={`${a.kind}: ${a.path}`}>
+                                  {a.kind}: {a.path}
+                                </code>
+                              ))}
+                            </div>
+                          )}
                         </li>
                       ))}
                     </ul>
@@ -858,7 +956,10 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
                 ) : m.failed ? (
                   <p className="error">run failed</p>
                 ) : (
-                  <MessageText text={m.text} />
+                  <>
+                    {m.text ? <MessageText text={m.text} /> : null}
+                    {m.card && <CardChip card={m.card} />}
+                  </>
                 )}
                 {!m.pending && !m.failed && !!m.tps && m.tps > 0 && (
                   <small>{m.model} · prompt {m.prompt_tps?.toFixed(1)} tok/s · decode {m.tps.toFixed(1)} tok/s</small>
@@ -990,19 +1091,19 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
                 </div>
               )}
             </div>
-            {pendingImage && (
-              <span className="chat-attach-chip">
-                <img src={pendingImage} alt="attached screenshot preview" />
+            {pendingImages.map((img, i) => (
+              <span className="chat-attach-chip" key={`${i}-${img.slice(-16)}`}>
+                <img src={img} alt="attached screenshot preview" />
                 <button
                   type="button"
-                  onClick={() => setPendingImage(null)}
+                  onClick={() => setPendingImages((cur) => cur.filter((_, j) => j !== i))}
                   title="remove attachment"
-                  aria-label="remove attachment"
+                  aria-label={`remove attachment ${i + 1}`}
                 >
                   <X size={12} />
                 </button>
               </span>
-            )}
+            ))}
             <input
               value={input}
               onChange={(e) => setInput(e.target.value)}
@@ -1043,7 +1144,7 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
             </button>
             <button
               type="button"
-              className={pendingImage ? "chat-capscreen on" : "chat-capscreen"}
+              className={pendingImages.length ? "chat-capscreen on" : "chat-capscreen"}
               onClick={() => setCapscreenOpen(true)}
               title="attach annotated screenshot"
               aria-label="attach annotated screenshot"
@@ -1052,7 +1153,7 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
             </button>
             <button
               type="submit"
-              disabled={!selected.length || (!input.trim() && !pendingImage)}
+              disabled={!selected.length || (!input.trim() && !pendingImages.length)}
               title={busy ? "queue this message" : "send"}
             >
               <Send size={16} />
@@ -1066,7 +1167,7 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
               setCapscreenInit(null);
             }}
             on_send={async (image, note) => {
-              setPendingImage(image);
+              setPendingImages((cur) => [...cur, image]);
               if (note) setInput((cur) => `${cur}${cur && !cur.endsWith(" ") ? " " : ""}${note} `);
               setToast("screenshot attached — it goes out with your next message");
             }}

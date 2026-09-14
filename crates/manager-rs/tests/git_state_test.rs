@@ -4,7 +4,7 @@
 use std::fs;
 
 use git_rs::GitRepo;
-use manager_rs::git_tool;
+use manager_rs::git_state;
 use proto_rs::GitTool;
 
 fn tmp_dir(label: &str) -> std::path::PathBuf {
@@ -33,7 +33,7 @@ fn git_tool_clone_status_diff() {
         url: src.display().to_string(),
         token: None,
     };
-    let out = git_tool::apply(&ws, &tool_clone).expect("clone");
+    let out = git_state::apply(&ws, &tool_clone).expect("clone");
     assert!(out.contains("cloned"), "unexpected clone output: {out}");
     assert!(
         ws.join("README.md").exists(),
@@ -41,16 +41,16 @@ fn git_tool_clone_status_diff() {
     );
 
     // Clone into a populated tree is refused.
-    assert!(git_tool::apply(&ws, &tool_clone).is_err());
+    assert!(git_state::apply(&ws, &tool_clone).is_err());
 
-    let out = git_tool::apply(&ws, &GitTool::Status).expect("status");
+    let out = git_state::apply(&ws, &GitTool::Status).expect("status");
     assert!(out.contains("clean"), "unexpected status: {out}");
     assert!(
         !out.contains("no commits"),
         "clone should carry the seed commit"
     );
 
-    let out = git_tool::apply(&ws, &GitTool::Diff).expect("diff");
+    let out = git_state::apply(&ws, &GitTool::Diff).expect("diff");
     assert_eq!(out, "(no changes)");
 
     let _ = fs::remove_dir_all(&src);

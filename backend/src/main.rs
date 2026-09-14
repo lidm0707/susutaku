@@ -93,6 +93,9 @@ async fn main() {
         backend::infra::postgres::kanban::PgKanban::new(kanban_store.clone()),
     );
     let manager = Manager::new();
+    let resources = std::sync::Arc::new(backend::domain::ResourceService::new(Arc::new(
+        backend::infra::postgres::kanban::PgKanban::new(kanban_store.clone()),
+    )));
     let use_case = Arc::new(
         ChatUseCase::new(
             Arc::new(DuckDuckGo),
@@ -104,6 +107,7 @@ async fn main() {
             board,
             agents,
         )
+        .with_resources(resources)
         .with_agent_git(Arc::new(ManagerGit::new(manager.clone())))
         .with_project_git(Arc::new(
             backend::infra::project_git::SettingsProjectGit::new(kanban_store.clone()),

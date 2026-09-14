@@ -45,7 +45,10 @@ export default function CapscreenModal({ open, on_close, on_send, initial_image 
       if (!target) return;
       target.width = source.width;
       target.height = source.height;
-      setAnnotator(await make_annotator(source, target));
+      const ann = await make_annotator(source, target);
+      setAnnotator(ann);
+      // the GPU annotator never paints until told — render the base image now
+      ann.render();
     } catch (err) {
       setError(err instanceof Error ? err.message : "load failed");
     }
@@ -135,6 +138,12 @@ export default function CapscreenModal({ open, on_close, on_send, initial_image 
     setBusy(true);
     setError("");
     try {
+      // webgpu presents on the next composited frame — read too early and the
+      // export comes out blank/transparent (a black rectangle in the chat)
+      annotator?.render();
+      await new Promise<void>((r) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => r()))
+      );
       const image = await canvas_png_data_url(draw_ref.current);
       await on_send(image, note.trim());
       annotator?.clear_lines();

@@ -28,6 +28,10 @@ pub const TIME_LEN: usize = 5;
 pub const MIN_SAY_HI_INTERVAL: u64 = 1;
 pub const MAX_SAY_HI_INTERVAL: u64 = 24 * 60;
 
+/// Prefilled global system prompt: used first whenever no custom prompt is
+/// set; the user can replace or clear it via the system-prompt settings API.
+pub const DEFAULT_SAFETY_SYSTEM_PROMPT: &str = "You are a helpful, safe assistant. Refuse requests for harm, illegal activity, malware, or personal data exfiltration. Never execute destructive commands without explicit confirmation. Protect user secrets and credentials; do not print or transmit them.";
+
 /// Validates `HH:MM` (24h). Returns hour/minute for scheduler use.
 pub fn parse_hhmm(value: &str) -> Result<(u32, u32), String> {
     const HOURS: u32 = 24;
@@ -464,12 +468,18 @@ fn read_file() -> Option<ZaiSettings> {
 }
 
 fn read_system_prompt() -> String {
-    read_doc()
+    // Only prefill the safety default when the user has never saved a prompt;
+    // an explicitly saved (possibly empty) value always wins so it can be
+    // edited or deleted later.
+    let doc = read_doc();
+    let saved = doc
         .get(SYSTEM_SECTION)
         .and_then(|s| s.get(FIELD_PROMPT))
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or_default()
-        .to_owned()
+        .and_then(serde_json::Value::as_str);
+    match saved {
+        Some(p) => p.to_owned(),
+        None => DEFAULT_SAFETY_SYSTEM_PROMPT.to_owned(),
+    }
 }
 
 fn write_file(zai: &ZaiSettings) -> Result<(), String> {
