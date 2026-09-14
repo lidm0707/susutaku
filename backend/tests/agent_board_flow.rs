@@ -140,6 +140,7 @@ async fn agent_creates_pipeline_with_spec_then_card() {
             agent: None,
             image: None,
             thread_id: None,
+            card_id: None,
         })
         .await
         .expect("chat must complete");
