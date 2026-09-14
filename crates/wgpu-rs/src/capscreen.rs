@@ -39,11 +39,10 @@ struct VOut {
 
 @vertex
 fn vs_base(@builtin(vertex_index) i: u32) -> VOut {
-    let x = f32(i32(i) - 1) * 0.5;
-    let y = 0.5 - f32(i32(i) & 1) * 0.5;
+    let xy = vec2<f32>(f32(i32(i) & 1) * 4.0 - 1.0, 1.0 - f32(i32(i) & 2) * 2.0);
     var o: VOut;
-    o.pos = vec4<f32>(x, y, 0.0, 1.0);
-    o.uv = vec2<f32>(f32(i32(i) & 1), 1.0 - f32(i32(i) & 2) * 0.5);
+    o.pos = vec4<f32>(xy, 0.0, 1.0);
+    o.uv = vec2<f32>((xy.x + 1.0) * 0.5, (1.0 - xy.y) * 0.5);
     return o;
 }
 
