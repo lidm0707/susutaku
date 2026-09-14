@@ -16,13 +16,40 @@ impl GitRepo {
             .workdir()
             .unwrap_or_else(|| inner.path())
             .to_path_buf();
+        // Discovery climbs parents; refuse a repo that encloses the target
+        // (e.g. the host checkout) — only a repo rooted at or below the
+        // given tree belongs to the agent. Compare canonicalized paths:
+        // discovery returns an absolute path, the caller may pass relative.
+        let target = work_tree
+            .canonicalize()
+            .unwrap_or_else(|_| work_tree.to_path_buf());
+        let root_canon = root.canonicalize().unwrap_or_else(|_| root.clone());
+        if !root_canon.starts_with(&target) {
+            return Err(GitError::Git(format!(
+                "{} is not a git work tree root",
+                work_tree.display()
+            )));
+        }
         Ok(Self { root, inner })
     }
 
     pub fn init(work_tree: &Path) -> Result<Self, GitError> {
-        let inner = git2::Repository::init(work_tree)?;
+        let mut opts = git2::RepositoryInitOptions::new();
+        opts.initial_head(crate::DEFAULT_BRANCH);
+        let inner = git2::Repository::init_opts(work_tree, &opts)?;
         let root = work_tree.to_path_buf();
         Ok(Self { root, inner })
+    }
+
+    /// Initializes a bare repository at `path` (test/seed helper).
+    pub fn init_bare(path: &Path) -> Result<Self, GitError> {
+        let mut opts = git2::RepositoryInitOptions::new();
+        opts.bare(true).initial_head(crate::DEFAULT_BRANCH);
+        let inner = git2::Repository::init_opts(path, &opts)?;
+        Ok(Self {
+            root: path.to_path_buf(),
+            inner,
+        })
     }
 
     pub fn open_or_init(work_tree: &Path) -> Result<Self, GitError> {

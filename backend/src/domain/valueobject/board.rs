@@ -17,6 +17,8 @@ pub enum BoardOp {
     LinkPipeline { card_id: i64, pipeline_id: i64 },
     /// Set (or clear with None) a 5-field UTC cron on a card.
     SetCron { card_id: i64, cron: Option<String> },
+    /// Run the card's attached pipeline once, right now.
+    RunCard { card_id: i64 },
     /// Projects/pipelines/cards summary with ids.
     Summary,
     /// Cards whose title or description contains the query (case-insensitive).

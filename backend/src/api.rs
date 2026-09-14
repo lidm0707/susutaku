@@ -23,8 +23,8 @@ use utoipa::OpenApi;
 use crate::app::kanban::{CardView, KanbanApp};
 use crate::app::{BoardService, ChatUseCase};
 use crate::domain::{
-    AgentConfigDraft, CardMove, CardPatch, ChatCmd, NewCard, NewPipeline, NewProject, NewWorkspace,
-    ResourceService, SearchMode, TOOL_KIND_NAMES, ToolSet, ToolUse,
+    AgentConfigDraft, CancelFlag, CardMove, CardPatch, ChatCmd, NewCard, NewPipeline, NewProject,
+    NewWorkspace, ResourceService, SearchMode, TOOL_KIND_NAMES, ToolEvent, ToolSet, ToolUse,
 };
 use crate::infra::claude::auth::{ClaudeAuth, LoginStatus as ClaudeLoginStatus};
 use crate::infra::claude::chat as claude_chat;
@@ -66,9 +66,72 @@ struct ZaiChatDeps {
     project_git: Arc<dyn ProjectGit>,
     /// Persists tool artifacts onto the turn's target card.
     resources: Arc<ResourceService>,
+    /// Live chat runs keyed by client run id, for cancellation.
+    cancels: CancelRegistry,
 }
 
-fn zai_chat_deps<T: ModelSwitch + 'static>(
+/// Registry of in-flight chat runs: run id → cancel flag.
+type CancelRegistry = Arc<std::sync::RwLock<std::collections::HashMap<String, CancelFlag>>>;
+
+/// Name of the auto-seeded project skill embedded into agent prompts.
+pub const PROJECT_SKILL_NAME: &str = "susutaku-project";
+const PROJECT_SKILL_MD: &str = include_str!("../../.agents/skills/susutaku-project/SKILL.md");
+
+/// Seeds (and refreshes) the project skill, then attaches it to every agent
+/// that does not have it yet, so every chat embeds the project skill sheet.
+pub async fn seed_project_skill(store: &kanban_rs::Store) {
+    let body = strip_frontmatter(PROJECT_SKILL_MD);
+    let skill_id = match store.list_skills().await {
+        Ok(rows) => match rows.iter().find(|s| s.name == PROJECT_SKILL_NAME) {
+            Some(row) => {
+                if row.body != body {
+                    let _ = store.update_skill(row.id, &body).await;
+                }
+                row.id
+            }
+            None => match store
+                .create_skill(kanban_rs::NewSkill {
+                    name: PROJECT_SKILL_NAME,
+                    body: &body,
+                })
+                .await
+            {
+                Ok(row) => row.id,
+                Err(e) => {
+                    tracing::warn!(error = %e, "project skill seed failed");
+                    return;
+                }
+            },
+        },
+        Err(e) => {
+            tracing::warn!(error = %e, "project skill seed failed");
+            return;
+        }
+    };
+    for agent in store.list_agents().await.into_iter().flatten() {
+        let has = store
+            .list_agent_skills(agent.id)
+            .await
+            .map(|rows| rows.iter().any(|s| s.id == skill_id))
+            .unwrap_or(true);
+        if !has {
+            let _ = store.attach_agent_skill(agent.id, skill_id).await;
+        }
+    }
+}
+
+/// Drops a leading YAML frontmatter block (`---\n...\n---`).
+fn strip_frontmatter(md: &str) -> String {
+    match md.strip_prefix("---\n") {
+        Some(rest) => match rest.split_once("\n---") {
+            Some((_, after)) => after.trim_start_matches('\n').trim_start().to_owned(),
+            None => md.to_owned(),
+        },
+        None => md.to_owned(),
+    }
+}
+
+fn zai_chat_deps<T: ChatHandling + ModelSwitch + 'static>(
     models: Arc<T>,
     runner: Arc<dyn Runner>,
     kanban_store: std::sync::Arc<kanban_rs::Store>,
@@ -76,13 +139,14 @@ fn zai_chat_deps<T: ModelSwitch + 'static>(
     manager: Arc<manager_rs::manager::Manager>,
 ) -> Arc<ZaiChatDeps> {
     let kanban_store_for_resources = kanban_store.clone();
+    let engine = models.inference();
     Arc::new(ZaiChatDeps {
         searcher: Arc::new(DuckDuckGo),
         fetcher: Arc::new(PageFetcher),
         runner,
         models: models as Arc<dyn ModelSwitch>,
         memory: crate::infra::chat_memory::from_env().map(|m| Arc::new(m) as Arc<dyn ChatMemory>),
-        board: Arc::new(BoardService::new(kanban_store.clone())),
+        board: Arc::new(BoardService::new(kanban_store.clone(), engine)),
         agents: Arc::new(crate::infra::postgres::kanban::PgKanban::new(
             kanban_store.clone(),
         )),
@@ -95,6 +159,7 @@ fn zai_chat_deps<T: ModelSwitch + 'static>(
         resources: Arc::new(ResourceService::new(Arc::new(
             crate::infra::postgres::kanban::PgKanban::new(kanban_store_for_resources),
         ))),
+        cancels: Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),
     })
 }
 
@@ -211,6 +276,7 @@ pub fn router<T: ChatHandling + ModelSwitch + 'static>(
             "/api/chat/zai/stream",
             post(chat_zai_stream).layer(DefaultBodyLimit::max(ATTACHMENT_MAX_BYTES)),
         )
+        .route("/api/chat/zai/cancel", post(chat_zai_cancel))
         .route(
             "/api/chat/threads",
             get(list_chat_threads).post(create_chat_thread),
@@ -1749,8 +1815,18 @@ async fn chat_zai_stream(
         .map(str::to_string);
     note_chat_agent(manager.clone(), req.agent.clone(), &req.message).await;
     let (event_tx, _) = tokio::sync::broadcast::channel::<StreamEvent>(STREAM_EVENT_CAPACITY);
-    let engine =
-        ZaiEngine::new(deps.settings.clone(), req.model.clone()).with_events(event_tx.clone());
+    let cancel = CancelFlag::new();
+    if let Some(run_id) = req.run_id.clone() {
+        deps.cancels
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(run_id, cancel.clone());
+    }
+    let engine = ZaiEngine::new(deps.settings.clone(), req.model.clone())
+        .with_events(event_tx.clone())
+        .with_cancel(cancel);
+    let (tool_tx, mut tool_rx) =
+        tokio::sync::broadcast::channel::<ToolEvent>(STREAM_EVENT_CAPACITY);
     let zai = ChatUseCase::new(
         deps.searcher.clone(),
         deps.fetcher.clone(),
@@ -1763,7 +1839,8 @@ async fn chat_zai_stream(
     )
     .with_agent_git(deps.agent_git.clone())
     .with_project_git(deps.project_git.clone())
-    .with_resources(deps.resources.clone());
+    .with_resources(deps.resources.clone())
+    .with_tool_events(tool_tx);
     let message = match build_system_message(&req.system)? {
         Some(sys) => format!("{}\n\n{}", sys.content, req.message),
         None => req.message.clone(),
@@ -1790,6 +1867,8 @@ async fn chat_zai_stream(
     let thread_id = req.thread_id;
     let user_text = req.message.clone();
     let agent = req.agent.clone();
+    let run_key = req.run_id;
+    let cancels = deps.cancels.clone();
     tokio::spawn(async move {
         let reply = match zai.execute(cmd).await {
             Ok(outcome) => {
@@ -1814,14 +1893,40 @@ async fn chat_zai_stream(
                 }
             }
             Err(e) => {
+                if let Some(run_key) = run_key {
+                    cancels
+                        .write()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .remove(&run_key);
+                }
                 let _ = done_tx.send(Err(e));
                 return;
             }
         };
+        if let Some(run_key) = run_key {
+            cancels
+                .write()
+                .unwrap_or_else(|e| e.into_inner())
+                .remove(&run_key);
+        }
         let _ = done_tx.send(Ok(reply));
     });
     let mut events = event_tx.subscribe();
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(SSE_CHANNEL_BUFFER);
+    // tool-progress forwarder: ends when the use case (and its sender) drops
+    let tool_sse_tx = tx.clone();
+    tokio::spawn(async move {
+        while let Ok(ev) = tool_rx.recv().await {
+            let payload = serde_json::to_string(&ev).unwrap_or_default();
+            if tool_sse_tx
+                .send(stream_event("tool", &payload))
+                .await
+                .is_err()
+            {
+                return;
+            }
+        }
+    });
     tokio::spawn(async move {
         // forward live deltas until the engine drops its sender, then relay
         // the final result
@@ -1854,6 +1959,33 @@ async fn chat_zai_stream(
         }
     });
     Ok(Sse::new(ReceiverStream::new(rx)))
+}
+
+#[derive(Deserialize, utoipa::ToSchema)]
+struct ZaiChatCancelRequest {
+    run_id: String,
+}
+
+/// Cancel an in-flight streamed chat run: sets its flag; the engine checks it
+/// per delta and before each tool round and bails.
+async fn chat_zai_cancel(
+    Extension(deps): Extension<Arc<ZaiChatDeps>>,
+    Json(req): Json<ZaiChatCancelRequest>,
+) -> StatusCode {
+    let cancelled = deps
+        .cancels
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&req.run_id)
+        .is_some_and(|flag| {
+            flag.cancel();
+            true
+        });
+    if cancelled {
+        StatusCode::OK
+    } else {
+        StatusCode::NOT_FOUND
+    }
 }
 
 async fn list_chat_threads(
@@ -4464,6 +4596,10 @@ struct ZaiChatRequest {
     /// it as card resources.
     #[serde(default)]
     card_id: Option<i64>,
+    /// Client-generated id for this run; when set, the run can be cancelled
+    /// via `/api/chat/zai/cancel`.
+    #[serde(default)]
+    run_id: Option<String>,
 }
 
 #[derive(Deserialize, utoipa::ToSchema)]

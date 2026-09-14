@@ -67,3 +67,32 @@ fn open_existing_work_tree() {
 
     fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn task_branch_create_checkout_is_idempotent_and_isolates_work() {
+    let dir = temp_tree("branch");
+    let repo = GitRepo::init(&dir).unwrap();
+    fs::write(dir.join("a.txt"), "one\n").unwrap();
+    let base = repo.commit_all("initial").unwrap();
+
+    repo.create_checkout_branch("task/42-demo").unwrap();
+    // second call on the existing branch must be a no-op, not an error
+    repo.create_checkout_branch("task/42-demo").unwrap();
+
+    fs::write(dir.join("b.txt"), "two\n").unwrap();
+    let on_branch = repo.commit_all("on branch").unwrap();
+    assert_ne!(base, on_branch);
+    assert!(dir.join("b.txt").exists());
+
+    // base commit's tree has no b.txt: the work landed only on the branch
+    let repo2 = GitRepo::open(&dir).unwrap();
+    let base_patch = repo2
+        .patch(git_rs::diff::PatchBase::Commit(&format!("{base}")))
+        .unwrap();
+    assert!(base_patch.contains("b.txt"));
+
+    // fresh checkout of the base branch ref still resolves
+    repo.checkout_branch("task/42-demo").unwrap();
+
+    fs::remove_dir_all(&dir).unwrap();
+}

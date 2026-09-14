@@ -112,6 +112,36 @@ fn parses_board_tool_calls() {
     );
     assert_eq!(ToolCall::parse("TOOL: CARD_FIND"), None);
     assert_eq!(
+        ToolCall::parse("TOOL: CARD_RUN 7"),
+        Some(ToolCall::CardRun { card_id: 7 })
+    );
+    assert_eq!(
+        ToolCall::parse("TOOL: CARD_ROUTINE_CLEAR 7"),
+        Some(ToolCall::CardRoutineClear { card_id: 7 })
+    );
+    assert_eq!(
+        ToolCall::parse("TOOL: CARD_ROUTINE 7 clear"),
+        Some(ToolCall::CardRoutineClear { card_id: 7 })
+    );
+    assert_eq!(
+        ToolCall::parse("TOOL: CARD_ROUTINE 7 CLEAR"),
+        Some(ToolCall::CardRoutineClear { card_id: 7 })
+    );
+    assert_eq!(ToolCall::parse("TOOL: CARD_RUN"), None);
+    assert_eq!(ToolCall::parse("TOOL: CARD_ROUTINE_CLEAR x"), None);
+    assert_eq!(
+        ToolCall::parse(
+            "<invoke name=\"card_run\"><parameter name=\"card_id\">6</parameter></invoke>"
+        ),
+        Some(ToolCall::CardRun { card_id: 6 })
+    );
+    assert_eq!(
+        ToolCall::parse(
+            "<invoke name=\"card_routine_clear\"><parameter name=\"card_id\">6</parameter></invoke>"
+        ),
+        Some(ToolCall::CardRoutineClear { card_id: 6 })
+    );
+    assert_eq!(
         ToolCall::parse(
             "<invoke name=\"find_card\"><parameter name=\"query\">quota</parameter></invoke>"
         ),

@@ -52,6 +52,12 @@ pub enum ToolCall {
         card_id: i64,
         cron: String,
     },
+    CardRoutineClear {
+        card_id: i64,
+    },
+    CardRun {
+        card_id: i64,
+    },
     CardLink {
         card_id: i64,
         pipeline_id: i64,
@@ -96,6 +102,8 @@ const XML_CODING_ALIAS: &str = "write_file";
 const XML_CARD_CREATE: &str = "card_create";
 const XML_CARD_CREATE_ALIAS: &str = "create_card";
 const XML_CARD_ROUTINE: &str = "card_routine";
+const XML_CARD_ROUTINE_CLEAR: &str = "card_routine_clear";
+const XML_CARD_RUN: &str = "card_run";
 const XML_CARD_LINK: &str = "card_link";
 const XML_PIPELINE_CREATE: &str = "pipeline_create";
 const XML_BOARD_LIST: &str = "board_list";
@@ -110,6 +118,8 @@ const TOOL_FETCH: &str = "FETCH";
 const TOOL_SHELL: &str = "SHELL";
 const TOOL_CARD_CREATE: &str = "CARD_CREATE";
 const TOOL_CARD_ROUTINE: &str = "CARD_ROUTINE";
+const TOOL_CARD_ROUTINE_CLEAR: &str = "CARD_ROUTINE_CLEAR";
+const TOOL_CARD_RUN: &str = "CARD_RUN";
 const TOOL_CARD_LINK: &str = "CARD_LINK";
 const TOOL_PIPELINE_CREATE: &str = "PIPELINE_CREATE";
 const TOOL_BOARD_LIST: &str = "BOARD_LIST";
@@ -121,6 +131,7 @@ const TOOL_LSP: &str = "LSP";
 const LSP_ARGS: usize = 4;
 const GIT_OP_CLONE: &str = "CLONE";
 const AGENT_PREFIX: &str = "@";
+const CRON_CLEAR: &str = "clear";
 const GIT_OP_STATUS: &str = "STATUS";
 const GIT_OP_DIFF: &str = "DIFF";
 const GIT_OP_BRANCH: &str = "BRANCH";
@@ -170,11 +181,22 @@ impl ToolCall {
             }
             TOOL_CARD_ROUTINE => {
                 let (card_id, cron) = arg.split_once(' ')?;
+                if cron.eq_ignore_ascii_case(CRON_CLEAR) {
+                    return Some(Self::CardRoutineClear {
+                        card_id: card_id.parse().ok()?,
+                    });
+                }
                 Some(Self::CardSchedule {
                     card_id: card_id.parse().ok()?,
                     cron: cron.to_string(),
                 })
             }
+            TOOL_CARD_ROUTINE_CLEAR => Some(Self::CardRoutineClear {
+                card_id: arg.parse().ok()?,
+            }),
+            TOOL_CARD_RUN => Some(Self::CardRun {
+                card_id: arg.parse().ok()?,
+            }),
             TOOL_CARD_LINK => {
                 let (card_id, pipeline_id) = arg.split_once(' ')?;
                 Some(Self::CardLink {
@@ -237,6 +259,12 @@ impl ToolCall {
             XML_CARD_ROUTINE => Some(Self::CardSchedule {
                 card_id: p("card_id")?.trim().parse().ok()?,
                 cron: p("cron")?.to_string(),
+            }),
+            XML_CARD_ROUTINE_CLEAR => Some(Self::CardRoutineClear {
+                card_id: p("card_id")?.trim().parse().ok()?,
+            }),
+            XML_CARD_RUN => Some(Self::CardRun {
+                card_id: p("card_id")?.trim().parse().ok()?,
             }),
             XML_CARD_LINK => Some(Self::CardLink {
                 card_id: p("card_id")?.trim().parse().ok()?,

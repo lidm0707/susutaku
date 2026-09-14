@@ -54,6 +54,26 @@ impl ArtifactKind {
     }
 }
 
+/// Live tool-progress event streamed to the UI while the agent loop runs.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ToolEvent {
+    pub kind: String,
+    pub input: String,
+    pub ok: bool,
+    pub summary: String,
+}
+
+impl From<&ToolUse> for ToolEvent {
+    fn from(u: &ToolUse) -> Self {
+        Self {
+            kind: format!("{:?}", u.kind).to_lowercase(),
+            input: u.input.clone(),
+            ok: u.ok,
+            summary: u.summary.clone(),
+        }
+    }
+}
+
 /// What the agent did with a tool: which one, with what input, and a short
 /// result summary. Shown to the user; never fed back to the model.
 #[derive(Debug, Clone, PartialEq, Eq)]

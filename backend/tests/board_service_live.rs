@@ -54,7 +54,7 @@ async fn board_service_pipeline_path_against_live_db() {
         .expect("login")
         .expect("token");
 
-    let board = BoardService::new(Arc::clone(&store));
+    let board = BoardService::new(Arc::clone(&store), None);
 
     // Invalid spec (agent node without required param) must be rejected.
     let bad = board

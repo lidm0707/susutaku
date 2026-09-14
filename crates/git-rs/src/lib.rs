@@ -1,6 +1,7 @@
 //! Git control over a work tree via git2: commit all changes, patch text,
 //! dirty state. Host-side only — the agent sandbox never talks to git remotes.
 
+pub mod branch;
 pub mod clone;
 pub mod commit;
 pub mod diff;
@@ -16,3 +17,4 @@ pub const AGENT_SIGNATURE_EMAIL: &str = "agent@susutaku.local";
 pub const STAGE_PATHSPEC: &str = "*";
 pub const DIFF_CONTEXT_LINES: u32 = 3;
 pub const TASK_COMMIT_PREFIX: &str = "agent task: ";
+pub const DEFAULT_BRANCH: &str = "main";

@@ -13,11 +13,11 @@ pub mod tool_use;
 
 pub use board::{BoardOp, BoardRequest, BoardResult};
 pub use bound_repo::BoundRepo;
-pub use chat::{ChatCmd, ChatOutcome};
+pub use chat::{CancelFlag, ChatCmd, ChatOutcome};
 pub use gen_reply::{GenReply, ReplyRx};
 pub use git_op::GitOp;
 pub use memory_hit::MemoryHit;
 pub use search_mode::SearchMode;
 pub use search_result::SearchResult;
 pub use tool_set::{TOOL_KIND_NAMES, ToolKind, ToolSet};
-pub use tool_use::{Artifact, ArtifactKind, TOOL_SUMMARY_MAX, ToolUse};
+pub use tool_use::{Artifact, ArtifactKind, TOOL_SUMMARY_MAX, ToolEvent, ToolUse};

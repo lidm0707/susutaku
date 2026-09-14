@@ -666,6 +666,7 @@ export async function chat_zai(
 export type ChatStreamEvent =
   | { type: "turn" }
   | { type: "delta"; text: string }
+  | { type: "tool"; tool: string; input: string; ok: boolean; summary: string }
   | { type: "done"; reply: ChatReply }
   | { type: "error"; error: string };
 
@@ -678,7 +679,8 @@ export async function chat_zai_stream(
   agent: string | undefined,
   thread_id: number | undefined,
   image: string | undefined,
-  on_event: (ev: ChatStreamEvent) => void
+  on_event: (ev: ChatStreamEvent) => void,
+  run_id?: string
 ): Promise<ChatReply> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   const token = get_token();
@@ -686,7 +688,7 @@ export async function chat_zai_stream(
   const res = await fetch(`${API_BASE}/api/chat/zai/stream`, {
     method: "POST",
     headers,
-    body: JSON.stringify({ message, model: model || undefined, system, agent, thread_id, image }),
+    body: JSON.stringify({ message, model: model || undefined, system, agent, thread_id, image, run_id }),
   });
   if (!res.ok || !res.body) throw new ApiError(res.status, await res.text());
   const reader = res.body.getReader();
@@ -716,6 +718,19 @@ export async function chat_zai_stream(
 const SSE_EVENT_LINE = /^event: (.*)$/;
 const SSE_DATA_PREFIX = "data: ";
 
+/// Ask the backend to abort a streamed chat run (engine checks the flag per
+/// delta and before each tool round).
+export async function cancel_chat_run(run_id: string): Promise<void> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const token = get_token();
+  if (token) headers.Authorization = `Bearer ${token}`;
+  await fetch(`${API_BASE}/api/chat/zai/cancel`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ run_id }),
+  }).catch(() => {});
+}
+
 function parse_sse_frame(frame: string): ChatStreamEvent | null {
   let event = "";
   let data = "";
@@ -732,6 +747,16 @@ function parse_sse_frame(frame: string): ChatStreamEvent | null {
       return { type: "turn" };
     case "delta":
       return { type: "delta", text: JSON.parse(data).text ?? "" };
+    case "tool": {
+      const d = JSON.parse(data);
+      return {
+        type: "tool",
+        tool: d.kind ?? "",
+        input: d.input ?? "",
+        ok: d.ok !== false,
+        summary: d.summary ?? "",
+      };
+    }
     case "done":
       return { type: "done", reply: JSON.parse(data) as ChatReply };
     case "error":

@@ -8,15 +8,18 @@ use async_trait::async_trait;
 use kanban_rs::Role;
 
 use crate::domain::{BoardOp, BoardRequest, BoardResult};
-use crate::port::outbound::BoardOps;
+use crate::port::outbound::{BoardOps, Inference};
 
 pub struct BoardService {
     store: Arc<kanban_rs::Store>,
+    app: super::kanban::KanbanApp,
+    engine: Option<Arc<dyn Inference>>,
 }
 
 impl BoardService {
-    pub fn new(store: Arc<kanban_rs::Store>) -> Self {
-        Self { store }
+    pub fn new(store: Arc<kanban_rs::Store>, engine: Option<Arc<dyn Inference>>) -> Self {
+        let app = super::kanban::build(store.clone());
+        Self { store, app, engine }
     }
 
     async fn editor(&self, token: &Option<String>) -> Result<Role, String> {
@@ -42,6 +45,9 @@ const EMPTY_SPEC: &str = r#"{"nodes":[],"links":[]}"#;
 const NO_CARDS_MATCH: &str = "no cards match ";
 const NO_PIPELINE: &str = "none";
 const NO_CRON: &str = "none";
+const FIND_HITS_MAX: usize = 8;
+const TITLE_WEIGHT: u32 = 3;
+const EXACT_SUBSTR_SCORE: u32 = 100;
 
 fn card_line(card: &kanban_rs::CardRow) -> String {
     let cron = card.cron.as_deref().unwrap_or(NO_CRON);
@@ -57,6 +63,53 @@ fn card_line(card: &kanban_rs::CardRow) -> String {
         "card {} `{}` (project {}, pipeline {}, cron {})",
         card.id, card.title, project, pipeline, cron
     )
+}
+
+fn run_summary(card_id: i64, r: &super::pipeline_run::RunRecord) -> String {
+    const OUTPUT_PREVIEW_MAX: usize = 400;
+    let status = match r.status {
+        super::pipeline_run::StageStatus::Ok => "ok",
+        super::pipeline_run::StageStatus::Failed => "failed",
+    };
+    let mut line = format!(
+        "card {card_id} ran pipeline {} `{}`: {status}",
+        r.pipeline_id, r.pipeline_name
+    );
+    if let Some(out) = &r.output {
+        let preview: String = out.chars().take(OUTPUT_PREVIEW_MAX).collect();
+        line.push_str("\noutput: ");
+        line.push_str(preview.trim());
+    }
+    line
+}
+
+/// Token-overlap relevance: exact substring wins, then weighted matches of
+/// each query token in the title (×3) and description (×1).
+fn find_score(card: &kanban_rs::CardRow, tokens: &[String]) -> u32 {
+    const MISS: u32 = 0;
+    let title = card.title.to_lowercase();
+    let desc = card.description.to_lowercase();
+    let joined = format!("{title} {desc}");
+    if tokens.iter().all(|t| joined.contains(t)) {
+        return EXACT_SUBSTR_SCORE;
+    }
+    let score = tokens
+        .iter()
+        .map(|t| {
+            if title.contains(t) {
+                TITLE_WEIGHT
+            } else if desc.contains(t) {
+                1
+            } else {
+                MISS
+            }
+        })
+        .sum::<u32>();
+    if tokens.iter().any(|t| joined.contains(t)) {
+        score
+    } else {
+        MISS
+    }
 }
 
 #[async_trait]
@@ -123,6 +176,20 @@ impl BoardOps for BoardService {
                     None => Ok(format!("card {card_id} routine cleared")),
                 }
             }
+            BoardOp::RunCard { card_id } => {
+                let record =
+                    super::pipeline_run::run_card_pipeline(&self.app, self.engine.clone(), card_id)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                if let Err(e) = self
+                    .store
+                    .record_activity("run", &format!("started pipeline run for task {card_id}"))
+                    .await
+                {
+                    tracing::warn!(error = %e, "activity log write failed");
+                }
+                Ok(run_summary(card_id, &record))
+            }
             BoardOp::Summary | BoardOp::FindCards { .. } => {
                 if let BoardOp::Summary = req.op {
                     return self.summary().await;
@@ -130,21 +197,29 @@ impl BoardOps for BoardService {
                 let BoardOp::FindCards { query } = &req.op else {
                     unreachable!("matched above")
                 };
-                let query = query.trim().to_lowercase();
+                let tokens: Vec<String> = query
+                    .trim()
+                    .to_lowercase()
+                    .split_whitespace()
+                    .map(str::to_owned)
+                    .collect();
+                if tokens.is_empty() {
+                    return Ok(format!("{NO_CARDS_MATCH}`{query}`"));
+                }
                 let cards = self.store.list(None).await.map_err(|e| e.to_string())?;
-                let hits: Vec<_> = cards
+                let mut hits: Vec<(u32, &kanban_rs::CardRow)> = cards
                     .iter()
-                    .filter(|c| {
-                        c.title.to_lowercase().contains(&query)
-                            || c.description.to_lowercase().contains(&query)
-                    })
+                    .map(|c| (find_score(c, &tokens), c))
+                    .filter(|(s, _)| *s > 0)
                     .collect();
                 if hits.is_empty() {
                     return Ok(format!("{NO_CARDS_MATCH}`{query}`"));
                 }
+                hits.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.id.cmp(&b.1.id)));
+                hits.truncate(FIND_HITS_MAX);
                 Ok(hits
                     .iter()
-                    .map(|c| card_line(c))
+                    .map(|(_, c)| card_line(c))
                     .collect::<Vec<_>>()
                     .join("\n"))
             }

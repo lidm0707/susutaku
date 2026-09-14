@@ -15,6 +15,8 @@ const GIT_TOKEN_ENV: &str = "GIT_TOKEN";
 const ASKPASS_PATH: &str = "/tmp/.git-askpass.sh";
 const PR_PAYLOAD_PATH: &str = "/tmp/.git-pr-payload.json";
 const GH_API_BASE: &str = "https://api.github.com";
+/// Overrides the GitHub API base (e.g. a local fake for e2e tests).
+const GH_API_BASE_ENV: &str = "SUSUTAKU_GH_API_BASE";
 const GH_API_HEADER: &str = "Accept: application/vnd.github+json";
 const GH_API_UA: &str = "susutaku-agent";
 /// PR base used when the caller does not name one.
@@ -96,11 +98,13 @@ pub fn script_for(tool: &GitTool) -> Result<(String, Option<String>), String> {
                 "{} && printf '%s' {} > {PR_PAYLOAD_PATH} && \
                  curl -s -w '\\nHTTP %{{http_code}}' -X POST \
                  -H \"Authorization: Bearer ${GIT_TOKEN_ENV}\" -H {accept} -H {ua} -H 'Content-Type: application/json' \
-                 -d @{PR_PAYLOAD_PATH} {GH_API_BASE}/repos/{slug}/pulls",
+                 -d @{PR_PAYLOAD_PATH} {api_base}/repos/{slug}/pulls",
                 work(&askpass_setup()),
                 shq(&payload),
                 accept = shq(GH_API_HEADER),
                 ua = shq(&format!("User-Agent: {GH_API_UA}")),
+                api_base =
+                    shq(&std::env::var(GH_API_BASE_ENV).unwrap_or_else(|_| GH_API_BASE.to_owned())),
             );
             Ok((script, Some(token)))
         }

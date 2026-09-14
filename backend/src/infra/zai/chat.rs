@@ -11,7 +11,7 @@ use susutaku_mlx::tok::TokKind;
 use tokio::sync::broadcast;
 use zai_api::client::DEFAULT_MODEL;
 
-use crate::domain::{GenReply, ReplyRx};
+use crate::domain::{CancelFlag, GenReply, ReplyRx};
 use crate::infra::zai::settings::SettingsState;
 use crate::port::outbound::Inference;
 
@@ -23,6 +23,9 @@ pub enum StreamEvent {
     Delta(String),
 }
 
+/// Error text returned when a run is cancelled via [`CancelFlag`].
+pub const CANCELLED: &str = "interrupted";
+
 /// Capacity of the per-request broadcast of [`StreamEvent`]s; a slow SSE
 /// client lags instead of blocking generation.
 pub const STREAM_EVENT_CAPACITY: usize = 256;
@@ -32,6 +35,7 @@ pub struct ZaiEngine {
     settings: Arc<SettingsState>,
     model: Option<String>,
     events: Option<broadcast::Sender<StreamEvent>>,
+    cancel: Option<CancelFlag>,
 }
 
 impl ZaiEngine {
@@ -40,7 +44,15 @@ impl ZaiEngine {
             settings,
             model,
             events: None,
+            cancel: None,
         }
+    }
+
+    /// Enable cooperative cancellation: checked per streamed delta and before
+    /// each submit.
+    pub fn with_cancel(mut self, cancel: CancelFlag) -> Self {
+        self.cancel = Some(cancel);
+        self
     }
 
     /// Enable streamed generation with progress published on `events`.
@@ -65,7 +77,14 @@ impl ZaiEngine {
             .unwrap_or_else(|| DEFAULT_MODEL.to_string())
     }
 
+    fn cancelled(&self) -> bool {
+        self.cancel.as_ref().is_some_and(|c| c.is_cancelled())
+    }
+
     fn complete_text(&self, message: Message, model: String) -> Result<GenReply, String> {
+        if self.cancelled() {
+            return Err(CANCELLED.to_string());
+        }
         let Some(events) = &self.events else {
             let client = self.client()?;
             let req = ChatRequest::new(String::new(), vec![message]);
@@ -84,6 +103,9 @@ impl ZaiEngine {
             Ok(stream) => {
                 let mut text = String::new();
                 for delta in stream {
+                    if self.cancelled() {
+                        return Err(CANCELLED.to_string());
+                    }
                     match delta {
                         Ok(d) => {
                             text.push_str(&d);
@@ -145,6 +167,9 @@ impl Inference for ZaiEngine {
         _tok: TokKind,
         _think: bool,
     ) -> Result<ReplyRx, String> {
+        if self.cancelled() {
+            return Err(CANCELLED.to_string());
+        }
         let model = self.name();
         let message = match image {
             Some(url) => Message::user_with_image(prompt, url),

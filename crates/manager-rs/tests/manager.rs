@@ -1,6 +1,6 @@
 use std::fs;
 
-use manager_rs::manager::{AGENTS_ROOT, Manager};
+use manager_rs::manager::{AGENTS_ROOT, Manager, RemoteRepo};
 
 #[test]
 fn stale_work_tree_is_reclaimed_on_spawn() {
@@ -110,5 +110,243 @@ fn finish_without_runs_returns_empty_transcript_and_no_result() {
     assert_eq!(outcome.result, None);
     assert!(outcome.state.history.is_empty());
     assert_eq!(outcome.state.cwd, ".");
+    assert_eq!(outcome.branch, None);
     assert!(manager.logs("quiet").is_err());
+}
+
+#[test]
+fn per_task_spawns_are_isolated_slots_of_one_agent() {
+    let manager = Manager::new();
+    let a = manager.spawn_task("par", "42").expect("spawn task 42");
+    let b = manager.spawn_task("par", "43").expect("spawn task 43");
+    assert_ne!(a, b, "each task gets its own work tree");
+    assert!(a.join("sandbox/workspace/.git").exists());
+    assert!(b.join("sandbox/workspace/.git").exists());
+
+    // re-spawn of the same (agent, task) pair reuses the slot
+    assert_eq!(manager.spawn_task("par", "42").expect("again"), a);
+
+    manager.run("par#42", "echo from-42").expect("run in 42");
+    manager.run("par#43", "echo from-43").expect("run in 43");
+
+    let agents = manager.snapshot();
+    assert_eq!(agents.len(), 2, "two concurrent task slots");
+
+    let out = manager.finish("par#42").expect("finish 42");
+    assert_eq!(out.result.as_deref(), Some("from-42\n"));
+    assert_eq!(out.branch, None, "empty tree has no commits -> no branch");
+    assert!(!a.join("sandbox").exists(), "sandbox purged on finish");
+    assert!(b.join("sandbox").exists(), "sibling task slot untouched");
+
+    manager.finish("par#43").expect("finish 43");
+    assert!(manager.snapshot().is_empty());
+}
+
+#[test]
+fn publish_flow_reaches_pr_step() {
+    // local file remote with one commit, so the spawn creates a task branch
+    let remote_dir = std::env::temp_dir().join(format!(
+        "manager-rs-remote-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.subsec_nanos())
+            .unwrap_or(0)
+    ));
+    let seed = remote_dir.join("seed");
+    let repo = git_rs::GitRepo::init(&seed).expect("init seed");
+    std::fs::write(seed.join("seed.txt"), "seed\n").expect("seed file");
+    repo.commit_all("seed").expect("seed commit");
+    drop(repo);
+    git_rs::GitRepo::init_bare(&remote_dir.join("origin.git")).expect("bare");
+    let remote_url = format!("file://{}", remote_dir.join("origin.git").display());
+    let seed_repo = git_rs::GitRepo::open(&seed).expect("open seed");
+    seed_repo
+        .push_branch(&remote_url, git_rs::DEFAULT_BRANCH, None)
+        .expect("push seed");
+
+    let manager = Manager::new();
+    manager
+        .spawn_task_with_repo(
+            "pub",
+            "9",
+            &RemoteRepo {
+                url: remote_url.clone(),
+                token: None,
+            },
+        )
+        .expect("spawn task with repo");
+
+    // the clone has commits, so spawn checked out the task branch
+    let head = std::fs::read_to_string(
+        std::path::Path::new(AGENTS_ROOT)
+            .join("pub_9")
+            .join("sandbox")
+            .join("workspace")
+            .join(".git")
+            .join("HEAD"),
+    )
+    .expect("read HEAD");
+    assert!(
+        head.contains("task/9-pub"),
+        "expected task branch checked out, HEAD: {head}"
+    );
+
+    // bare remote inside the workspace, so the in-container push can reach
+    // it at /workspace/remote.git
+    let ws = std::path::Path::new(AGENTS_ROOT)
+        .join("pub_9")
+        .join("sandbox")
+        .join("workspace");
+    git_rs::GitRepo::init_bare(&ws.join("remote.git")).expect("init bare remote");
+
+    // push to a remote visible inside the container (mounted at /workspace)
+    // succeeds without auth, then the PR step fails: the url is not a
+    // github.com repo, so the PR toolcall refuses before any API call
+    let container_remote = "/workspace/remote.git";
+    let err = manager
+        .publish("pub#9", Some(container_remote), "irrelevant", None, None)
+        .expect_err("pr against a non-github url");
+    assert!(
+        err.contains("github.com"),
+        "expected pr-step error, got: {err}"
+    );
+
+    // the branch actually reached the remote
+    let pushed = std::path::Path::new(AGENTS_ROOT)
+        .join("pub_9")
+        .join("sandbox")
+        .join("workspace")
+        .join("remote.git")
+        .join("refs")
+        .join("heads")
+        .join("task")
+        .join("9-pub")
+        .exists();
+    assert!(pushed, "task branch was pushed to the remote");
+
+    manager.finish("pub#9").expect("finish");
+    let _ = std::fs::remove_dir_all(&remote_dir);
+}
+
+/// Minimal fake GitHub pulls endpoint: answers one POST /repos/.../pulls
+/// with 201 + a pulls url, capturing the request body for assertions.
+fn spawn_fake_github() -> (u16, std::sync::Arc<std::sync::Mutex<String>>) {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind fake api");
+    let port = listener.local_addr().unwrap().port();
+    let body = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let captured = std::sync::Arc::clone(&body);
+    std::thread::spawn(move || {
+        if let Ok((mut sock, _)) = listener.accept() {
+            let mut buf = [0u8; 8192];
+            let n = sock.read(&mut buf).unwrap_or(0);
+            let req = String::from_utf8_lossy(&buf[..n]).into_owned();
+            let payload = req.split("\r\n\r\n").nth(1).unwrap_or_default().to_string();
+            *captured.lock().unwrap() = payload;
+            let resp = "HTTP/1.1 201 Created\r\nContent-Type: application/json\r\n".to_owned()
+                + "\r\n{\"html_url\":\"https://github.com/acme/widget/pull/1\"}";
+            let _ = sock.write_all(resp.as_bytes());
+            let _ = sock.flush();
+        }
+    });
+    (port, body)
+}
+
+#[test]
+fn publish_e2e_push_and_pr_succeed() {
+    // seed repo + remote, as the card runner would set up
+    let remote_dir = std::env::temp_dir().join(format!(
+        "manager-rs-e2e-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.subsec_nanos())
+            .unwrap_or(0)
+    ));
+    let seed = remote_dir.join("seed");
+    let repo = git_rs::GitRepo::init(&seed).expect("init seed");
+    std::fs::write(seed.join("seed.txt"), "seed\n").expect("seed file");
+    repo.commit_all("seed").expect("seed commit");
+    drop(repo);
+    git_rs::GitRepo::init_bare(&remote_dir.join("origin.git")).expect("bare");
+    let remote_url = format!("file://{}", remote_dir.join("origin.git").display());
+    let seed_repo = git_rs::GitRepo::open(&seed).expect("open seed");
+    seed_repo
+        .push_branch(&remote_url, git_rs::DEFAULT_BRANCH, None)
+        .expect("push seed");
+
+    // fake GitHub API for the PR step
+    let (api_port, captured) = spawn_fake_github();
+    // SAFETY: test-only process-global; publish is the only reader
+    unsafe {
+        std::env::set_var(
+            "SUSUTAKU_GH_API_BASE",
+            format!("http://host.containers.internal:{api_port}"),
+        );
+    }
+
+    let manager = Manager::new();
+    manager
+        .spawn_task_with_repo(
+            "e2e",
+            "7",
+            &RemoteRepo {
+                url: remote_url.clone(),
+                token: None,
+            },
+        )
+        .expect("spawn task with repo");
+
+    // the agent does real work in its own container
+    manager
+        .run("e2e#7", "echo e2e-proof > e2e-proof.txt")
+        .expect("agent work");
+
+    let ws = std::path::Path::new(AGENTS_ROOT)
+        .join("e2e_7")
+        .join("sandbox")
+        .join("workspace");
+    git_rs::GitRepo::init_bare(&ws.join("remote.git")).expect("init bare remote");
+
+    let info = manager
+        .publish(
+            "e2e#7",
+            Some("/workspace/remote.git"),
+            "e2e-token",
+            Some("main"),
+            Some("https://github.com/acme/widget"),
+        )
+        .expect("publish must succeed end to end");
+    assert_eq!(info.branch, "task/7-e2e");
+    assert!(info.pr.contains("201"), "PR answered 201: {}", info.pr);
+    assert!(info.pr.contains("pull/1"), "PR url returned: {}", info.pr);
+
+    // the fake API received the right PR request
+    let payload = captured.lock().unwrap().clone();
+    assert!(
+        payload.contains("task/7-e2e"),
+        "pr head in payload: {payload}"
+    );
+    assert!(
+        payload.contains("\"base\":\"main\""),
+        "pr base in payload: {payload}"
+    );
+
+    // the pushed remote carries the agent's commit
+    let pushed = ws
+        .join("remote.git")
+        .join("refs")
+        .join("heads")
+        .join("task")
+        .join("7-e2e")
+        .exists();
+    assert!(pushed, "task branch pushed to the remote");
+    let bare = git_rs::GitRepo::open(&ws.join("remote.git")).expect("open pushed remote");
+    assert!(bare.has_commits(), "pushed branch has the task commit");
+
+    let outcome = manager.finish("e2e#7").expect("finish");
+    assert_eq!(outcome.branch.as_deref(), Some("task/7-e2e"));
+    unsafe { std::env::remove_var("SUSUTAKU_GH_API_BASE") };
+    let _ = std::fs::remove_dir_all(&remote_dir);
 }

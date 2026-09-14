@@ -88,7 +88,11 @@ async fn main() {
     let sandbox = Arc::new(AgentSandbox::restore().expect("agent sandbox init"));
     spawn_client_node(sandbox.clone()).await;
     let codex_workspace = sandbox.root();
-    let board = Arc::new(BoardService::new(kanban_store.clone()));
+    let board = Arc::new(BoardService::new(kanban_store.clone(), Some(model.clone())));
+    api::seed_project_skill(&kanban_store).await;
+    let skills = Arc::new(backend::domain::SkillService::new(Arc::new(
+        backend::infra::postgres::kanban::PgKanban::new(kanban_store.clone()),
+    )));
     let agents: Arc<dyn backend::port::outbound::AgentConfigRepo> = Arc::new(
         backend::infra::postgres::kanban::PgKanban::new(kanban_store.clone()),
     );
@@ -111,7 +115,8 @@ async fn main() {
         .with_agent_git(Arc::new(ManagerGit::new(manager.clone())))
         .with_project_git(Arc::new(
             backend::infra::project_git::SettingsProjectGit::new(kanban_store.clone()),
-        )),
+        ))
+        .with_skills(skills),
     );
 
     let usage_store = Arc::new(codex_usage::connect().await);

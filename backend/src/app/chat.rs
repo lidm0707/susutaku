@@ -5,8 +5,9 @@ use std::sync::Arc;
 
 use crate::domain::{
     ArtifactKind, BoardOp, BoardRequest, BoundRepo, ChatCmd, ChatOutcome, GenReply, GitOp, LspOp,
-    Prompt, ResourceService, SearchMode, SearchResult, TOOL_DENIED, TOOL_RESULT_HEADER,
-    TOOL_ROUNDS_MAX, TOOL_SUMMARY_MAX, ToolCall, ToolKind, ToolSet, ToolUse,
+    Prompt, ResourceService, SearchMode, SearchResult, SkillService, TOOL_DENIED,
+    TOOL_RESULT_HEADER, TOOL_ROUNDS_MAX, TOOL_SUMMARY_MAX, ToolCall, ToolEvent, ToolKind, ToolSet,
+    ToolUse,
 };
 use crate::port::inbound::ChatHandling;
 use crate::port::outbound::{
@@ -19,6 +20,8 @@ use susutaku_mlx::tok::TokKind;
 
 const MEMORY_RECALL_TOP_K: usize = 5;
 const MEMORY_CONTEXT_HEADER: &str = "Earlier relevant conversation:\n";
+const PROJECT_SKILLS_HEADER: &str =
+    "PROJECT SKILLS (how to work in this project; follow when relevant):\n";
 const TOOL_ERROR: &str = "tool failed: ";
 const TOOL_FALLBACK_NOTE: &str = "(the model could not finish this run; try again)";
 const BOARD_ERROR_PREFIX: &str = "error:";
@@ -62,6 +65,10 @@ pub struct ChatUseCase {
     /// Resolves the repo bound to the chat's project; `None` disables
     /// url-less GIT CLONE.
     project_git: Option<Arc<dyn ProjectGit>>,
+    /// Per-agent skill sheets embedded into the prompt; `None` embeds none.
+    skills: Option<Arc<SkillService>>,
+    /// Live tool-progress sink for streamed turns; `None` emits nothing.
+    tools_tx: Option<tokio::sync::broadcast::Sender<ToolEvent>>,
 }
 
 impl ChatUseCase {
@@ -88,7 +95,15 @@ impl ChatUseCase {
             resources: None,
             agent_git: None,
             project_git: None,
+            skills: None,
+            tools_tx: None,
         }
+    }
+
+    /// Stream one event per completed tool call to the UI while the loop runs.
+    pub fn with_tool_events(mut self, tx: tokio::sync::broadcast::Sender<ToolEvent>) -> Self {
+        self.tools_tx = Some(tx);
+        self
     }
 
     /// Enable artifact persistence: tool-produced files land as resources on
@@ -110,6 +125,35 @@ impl ChatUseCase {
     pub fn with_project_git(mut self, project_git: Arc<dyn ProjectGit>) -> Self {
         self.project_git = Some(project_git);
         self
+    }
+
+    /// Embeds the skill sheets attached to the named agent into every prompt.
+    pub fn with_skills(mut self, skills: Arc<SkillService>) -> Self {
+        self.skills = Some(skills);
+        self
+    }
+
+    /// Skill sheets attached to the named agent, formatted for the prompt.
+    /// Unknown agent / no repo / store errors degrade to empty (fail open).
+    async fn agent_skills(&self, agent: Option<&str>) -> String {
+        let Some(skills) = self.skills.as_ref() else {
+            return String::new();
+        };
+        let named = agent.map(str::trim).filter(|n| !n.is_empty());
+        let agent = match named {
+            Some(name) => self.agents.by_name(name).await.ok().flatten(),
+            None => None,
+        };
+        let Some(cfg) = agent else {
+            return String::new();
+        };
+        match skills.list_for_agent(cfg.id).await {
+            Ok(rows) => rows
+                .iter()
+                .map(|s| format!("### {}\n{}\n", s.name, s.body))
+                .collect(),
+            Err(_) => String::new(),
+        }
     }
 
     /// Resolves the named agent's tool allow-list; unknown/unnamed agents get
@@ -427,6 +471,11 @@ impl ChatUseCase {
                 card_id: *card_id,
                 cron: Some(cron.clone()),
             }),
+            ToolCall::CardRoutineClear { card_id } => Some(BoardOp::SetCron {
+                card_id: *card_id,
+                cron: None,
+            }),
+            ToolCall::CardRun { card_id } => Some(BoardOp::RunCard { card_id: *card_id }),
             ToolCall::BoardList => Some(BoardOp::Summary),
             ToolCall::CardFind { query } => Some(BoardOp::FindCards {
                 query: query.clone(),
@@ -441,7 +490,10 @@ impl ChatUseCase {
             ToolCall::BoardList | ToolCall::CardFind { .. } => Some(ToolKind::Board),
             ToolCall::CardCreate { .. } | ToolCall::CardLink { .. } => Some(ToolKind::Card),
             ToolCall::PipelineCreate { .. } => Some(ToolKind::Pipeline),
-            ToolCall::CardSchedule { .. } => Some(ToolKind::Routine),
+            ToolCall::CardSchedule { .. } | ToolCall::CardRoutineClear { .. } => {
+                Some(ToolKind::Routine)
+            }
+            ToolCall::CardRun { .. } => Some(ToolKind::Card),
             _ => None,
         }
     }
@@ -521,7 +573,18 @@ impl ChatHandling for ChatUseCase {
                 repo.display_url
             ));
         }
+        let agent_skills = self.agent_skills(cmd.agent.as_deref()).await;
+        if !agent_skills.is_empty() {
+            context.push_str(PROJECT_SKILLS_HEADER);
+            context.push_str(&agent_skills);
+        }
         let mut trace: Vec<ToolUse> = Vec::new();
+        // stream every finished tool call to the UI as it happens
+        let emit_tool = |u: &ToolUse| {
+            if let Some(tx) = &self.tools_tx {
+                let _ = tx.send(ToolEvent::from(u));
+            }
+        };
         let mut searched = false;
         if cmd.mode == SearchMode::Force {
             let results = self.search_blocking(&cmd.message).await?;
@@ -531,6 +594,7 @@ impl ChatHandling for ChatUseCase {
                 &cmd.message,
                 &Ok(Prompt::format_results(&cmd.message, &results)),
             ));
+            emit_tool(trace.last().expect("just pushed"));
             context.push_str(&Prompt::format_results(&cmd.message, &results));
         }
 
@@ -563,6 +627,7 @@ impl ChatHandling for ChatUseCase {
                         .await
                         .map(|results| Prompt::format_results(&cmd.message, &results));
                     trace.push(ToolUse::new(ToolKind::Search, &query, &result));
+                    emit_tool(trace.last().expect("just pushed"));
                     let note = result.unwrap_or_else(|e| format!("{TOOL_ERROR}{e}"));
                     context.push_str(TOOL_RESULT_HEADER);
                     context.push_str(&note);
@@ -570,6 +635,7 @@ impl ChatHandling for ChatUseCase {
                 ToolCall::Fetch(url) if tools.allows(ToolKind::Fetch) => {
                     let result = self.fetch_blocking(&url).await;
                     trace.push(ToolUse::new(ToolKind::Fetch, &url, &result));
+                    emit_tool(trace.last().expect("just pushed"));
                     let page = result.unwrap_or_else(|e| format!("{TOOL_ERROR}{e}"));
                     context.push_str(TOOL_RESULT_HEADER);
                     context.push_str(&page);
@@ -583,6 +649,7 @@ impl ChatHandling for ChatUseCase {
                         }
                     }
                     trace.push(use_);
+                    emit_tool(trace.last().expect("just pushed"));
                     let out = result.unwrap_or_else(|e| format!("{TOOL_ERROR}{e}"));
                     context.push_str(TOOL_RESULT_HEADER);
                     context.push_str(&out);
@@ -603,6 +670,7 @@ impl ChatHandling for ChatUseCase {
                         use_ = use_.with_artifact(&label_path);
                     }
                     trace.push(use_);
+                    emit_tool(trace.last().expect("just pushed"));
                     let out = result.unwrap_or_else(|e| format!("{TOOL_ERROR}{e}"));
                     context.push_str(TOOL_RESULT_HEADER);
                     context.push_str(&out);
@@ -610,6 +678,7 @@ impl ChatHandling for ChatUseCase {
                 ToolCall::Math(expr) if tools.allows(ToolKind::Math) => {
                     let result = math::geomath::eval(&expr);
                     trace.push(ToolUse::new(ToolKind::Math, &expr, &result));
+                    emit_tool(trace.last().expect("just pushed"));
                     let out = result.unwrap_or_else(|e| format!("{TOOL_ERROR}{e}"));
                     context.push_str(TOOL_RESULT_HEADER);
                     context.push_str(&out);
@@ -651,6 +720,7 @@ impl ChatHandling for ChatUseCase {
                         }
                     };
                     trace.push(ToolUse::new(ToolKind::Git, &input, &result));
+                    emit_tool(trace.last().expect("just pushed"));
                     let out = result.unwrap_or_else(|e| format!("{TOOL_ERROR}{e}"));
                     context.push_str(TOOL_RESULT_HEADER);
                     context.push_str(&out);
@@ -664,6 +734,7 @@ impl ChatHandling for ChatUseCase {
                     let input = format!("{} {path}:{line}:{col}", op.as_str().to_lowercase());
                     let result = self.lsp_blocking(op, &path, line, col).await;
                     trace.push(ToolUse::new(ToolKind::Lsp, &input, &result));
+                    emit_tool(trace.last().expect("just pushed"));
                     let out = result.unwrap_or_else(|e| format!("{TOOL_ERROR}{e}"));
                     context.push_str(TOOL_RESULT_HEADER);
                     context.push_str(&out);
@@ -681,11 +752,13 @@ impl ChatHandling for ChatUseCase {
                         summary: out.chars().take(TOOL_SUMMARY_MAX).collect(),
                         artifacts: Vec::new(),
                     });
+                    emit_tool(trace.last().expect("just pushed"));
                     context.push_str(TOOL_RESULT_HEADER);
                     context.push_str(&out);
                 }
                 _ => {
                     trace.push(ToolUse::denied(ToolKind::Search, ""));
+                    emit_tool(trace.last().expect("just pushed"));
                     context.push_str(TOOL_RESULT_HEADER);
                     context.push_str(TOOL_DENIED);
                 }

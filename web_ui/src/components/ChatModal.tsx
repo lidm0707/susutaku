@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
-import { Bot, Brain, Camera, Check, ChevronDown, Code2, Copy, Crosshair, ExternalLink, Eye, Link2, ListEnd, MessageSquarePlus, PanelRight, Pencil, Send, Square, Wrench, X } from "lucide-react";
+import { Bot, Brain, Camera, Check, Code2, Copy, Crosshair, ExternalLink, Eye, Link2, MessageSquarePlus, PanelRight, Send, Square, Wrench, X } from "lucide-react";
 import {
   API_BASE,
   cancel_chat_run,
@@ -52,6 +52,13 @@ const THREAD_TITLE_LEN = 24;
 const SCROLL_STICK_PX = 48;
 
 const CARD_MIME = "application/x-susutaku-card";
+
+// crypto.randomUUID exists only in secure contexts; the UI is also served
+// over plain http on the docker network, so fall back to a random id
+function make_run_id(): string {
+  if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  return `run-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
 const CARD_MENTION_RE = /#card:(\d+)/g;
 // board tool summary the backend emits after an agent creates a card
 const CARD_CREATED_RE = /^card (\d+) created in project (\d+): (.+)$/;
@@ -314,13 +321,6 @@ interface Thread {
   updated_at: number;
 }
 
-interface QueuedMsg {
-  id: number;
-  tid: number;
-  text: string;
-  image: string | null;
-}
-
 export default function ChatModal({ open, on_close }: { open: boolean; on_close: () => void }) {
   const { pathname } = useLocation();
   const { project_id } = use_projects();
@@ -335,12 +335,6 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
   // thread id -> backend run ids of its in-flight streamed runs (for cancel)
   const runIdsRef = useRef<Record<number, string[]>>({});
   const threadBusy = busyTids.includes(activeId);
-  function set_thread_busy(tid: number, on: boolean) {
-    busyTidsRef.current = on
-      ? [...new Set([...busyTidsRef.current, tid])]
-      : busyTidsRef.current.filter((x) => x !== tid);
-    setBusyTids(busyTidsRef.current);
-  }
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [codexModels, setCodexModels] = useState<CodexModel[]>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -363,76 +357,19 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
   const [capscreenOpen, setCapscreenOpen] = useState(false);
   const [pendingImages, setPendingImages] = useState<string[]>([]);
   const [inputDrag, setInputDrag] = useState(false);
-  const [queued, setQueued] = useState<QueuedMsg[]>([]);
-  const queueRef = useRef<QueuedMsg[]>([]);
-  const [queueOpen, setQueueOpen] = useState(true);
-  const [editId, setEditId] = useState<number | null>(null);
-  const [editDraft, setEditDraft] = useState("");
   const nextId = useRef(1);
 
-  function push_queue(item: Omit<QueuedMsg, "id">) {
-    queueRef.current = [...queueRef.current, { ...item, id: nextId.current++ }];
-    setQueued(queueRef.current);
+  // per-thread in-flight run counter: runs can overlap when a send interrupts
+  // the current reply and starts a new one right away
+  const busyCount = useRef(new Map<number, number>());
+  function bump_busy(tid: number, d: number) {
+    const c = (busyCount.current.get(tid) ?? 0) + d;
+    if (c <= 0) busyCount.current.delete(tid);
+    else busyCount.current.set(tid, c);
+    busyTidsRef.current = [...busyCount.current.keys()];
+    setBusyTids(busyTidsRef.current);
   }
 
-  function drop_queue(id: number) {
-    queueRef.current = queueRef.current.filter((q) => q.id !== id);
-    setQueued(queueRef.current);
-  }
-
-  function clear_queue() {
-    queueRef.current = [];
-    setQueued([]);
-  }
-
-  function bump_queue(id: number) {
-    const item = queueRef.current.find((q) => q.id === id);
-    if (!item) return;
-    queueRef.current = [item, ...queueRef.current.filter((q) => q.id !== id)];
-    setQueued(queueRef.current);
-  }
-
-  function start_edit(q: QueuedMsg) {
-    setEditId(q.id);
-    setEditDraft(q.text);
-  }
-
-  function save_edit() {
-    const text = editDraft.trim();
-    if (editId == null || !text) {
-      setEditId(null);
-      return;
-    }
-    queueRef.current = queueRef.current.map((q) =>
-      q.id === editId ? { ...q, text } : q
-    );
-    setQueued(queueRef.current);
-    setEditId(null);
-  }
-
-  async function drain_queue() {
-    for (;;) {
-      const next = queueRef.current.find((q) => !busyTidsRef.current.includes(q.tid));
-      if (!next) return;
-      drop_queue(next.id);
-      await run_send(next.text, next.image, next.tid);
-    }
-  }
-
-  async function send_now(id: number) {
-    const item = queueRef.current.find((q) => q.id === id);
-    if (!item) return;
-    if (busyTidsRef.current.includes(item.tid)) {
-      bump_queue(id);
-      // steer: interrupt the current reply, the queue drain sends this next
-      await stop_thread(item.tid);
-      setToast("interrupting current reply — sends next");
-      return;
-    }
-    drop_queue(id);
-    await run_send(item.text, item.image, item.tid);
-    await drain_queue();
-  }
   const nextThreadId = useRef(1);
   const loadingThreads = useRef(new Set<number>());
   const pickerRef = useRef<HTMLDivElement | null>(null);
@@ -819,40 +756,34 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
       setError("no agent — pick one with the + button");
       return;
     }
-    // one image per message on the wire: the first image rides with the text,
-    // the rest go through the queue as image-only follow-ups
-    const items: Omit<QueuedMsg, "id">[] = pendingImages.map((img, i) => ({
-      tid: activeId,
-      text: i === 0 ? text : "",
-      image: img,
-    }));
-    if (!items.length) items.push({ tid: activeId, text, image: null });
-    if (busyTidsRef.current.includes(activeId)) {
-      items.forEach(push_queue);
-      setInput("");
-      setPendingImages([]);
-      // steer: interrupt the current reply, the queue drain sends this next
-      await stop_thread(activeId);
-      setToast("interrupting current reply — your message sends next");
-      return;
-    }
-    const [head, ...rest] = items;
-    rest.forEach(push_queue);
+    const tid = activeId;
+    // one image per message on the wire: the first rides with the text, the
+    // rest go out sequentially as image-only follow-ups
+    const images = [...pendingImages];
     setInput("");
     setPendingImages([]);
-    await run_send(head.text, head.image, head.tid);
-    await drain_queue();
+    // steer: while the thread is busy, interrupt the current reply and send
+    // this one immediately instead of queueing behind it
+    if (busyTidsRef.current.includes(tid)) {
+      await stop_thread(tid);
+      setToast("interrupted — sending your message now");
+    }
+    await run_send(text, images[0] ?? null, tid);
+    for (const img of images.slice(1)) {
+      await run_send("", img, tid);
+    }
   }
 
   async function run_send(text: string, attachedImage: string | null, tid: number) {
     const thread = threads.find((t) => t.id === tid);
     setError("");
-    set_thread_busy(tid, true);
+    bump_busy(tid, +1);
     runIdsRef.current[tid] = [];
     stickBottom.current = true;
-    set_title_from(tid, text);
+    set_title_from(tid, text || "image");
     const userId = nextId.current++;
     const replyIds = selected.map(() => nextId.current++);
+    try {
     const image = attachedImage;
     patch_thread(tid, (m) => [
       ...m,
@@ -875,7 +806,7 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
     if (serverThreadId === null) {
       try {
         const agentName = selected.map((a) => a.name).join(", ") || "chat";
-        const row = await create_chat_thread(agentName, text.slice(0, THREAD_TITLE_LEN), project_id);
+        const row = await create_chat_thread(agentName, text.slice(0, THREAD_TITLE_LEN) || "image", project_id);
         serverThreadId = row.id;
         setThreads((ts) =>
           ts.map((t) =>
@@ -889,10 +820,10 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
     const outcomes = await Promise.allSettled(
       selected.map((a, i) => {
         // stream deltas into the pending bubble; a new inference round (tool
-        // loop turn) resets it, the final done patch replaces it with the
-        // thinking-split full reply
+        // loop turn) resets it; tool events stream into the live tool trace
         let streamed = "";
-        const run_id = crypto.randomUUID();
+        let liveTools: ChatToolUse[] = [];
+        const run_id = make_run_id();
         runIdsRef.current[tid] = [...(runIdsRef.current[tid] ?? []), run_id];
         return send_agent(a, contexted, serverThreadId, image ?? undefined, (ev: ChatStreamEvent) => {
           if (ev.type === "turn") {
@@ -901,6 +832,12 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
           } else if (ev.type === "delta") {
             streamed += ev.text;
             patch_msg(replyIds[i], { text: streamed });
+          } else if (ev.type === "tool") {
+            liveTools = [
+              ...liveTools,
+              { tool: ev.tool, input: ev.input, ok: ev.ok, summary: ev.summary },
+            ];
+            patch_msg(replyIds[i], { tools: liveTools });
           }
         }, run_id).catch((e) => {
           // interrupted runs keep the partial text instead of a failed bubble
@@ -949,10 +886,19 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
           : `${selected.length} agents finished`
       );
     }
-    delete runIdsRef.current[tid];
-    set_thread_busy(tid, false);
-    // the thread just freed up: flush anything queued behind it
-    await drain_queue();
+    } catch (e) {
+      // never leave bubbles stuck on "generating…": mark every reply of this
+      // run failed and surface the error
+      patch_thread(tid, (m) =>
+        m.map((msg) =>
+          replyIds.includes(msg.id) ? { ...msg, pending: false, failed: true } : msg
+        )
+      );
+      setError(String((e as Error)?.message ?? e));
+    } finally {
+      delete runIdsRef.current[tid];
+      bump_busy(tid, -1);
+    }
   }
 
   // stop the active run(s) on this thread: the server flags each run
@@ -961,11 +907,7 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
     const ids = runIdsRef.current[tid] ?? [];
     if (!ids.length) return;
     await Promise.all(ids.map((run_id) => cancel_chat_run(run_id)));
-    setToast(
-      queueRef.current.some((q) => q.tid === tid)
-        ? "interrupting… the next queued message sends after"
-        : "interrupting…"
-    );
+    setToast("interrupting…");
   }
 
   const activeIdRef = useRef(activeId);
@@ -1018,14 +960,14 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
             aria-label="resize chat panel"
           />
         )}
-        <div className="chat-main">
+        <div className={`chat-main${messages.length === 0 ? " empty" : ""}`}>
+          {messages.length > 0 && (
           <section
             className="log chat-modal-log"
             aria-live="polite"
             ref={logRef}
             onScroll={on_log_scroll}
           >
-            {messages.length === 0 && <p className="empty">Say something to the agent.</p>}
             {messages.map((m) => (
               <div key={m.id} className={`bubble ${m.role}`}>
                 {m.agent_name && (
@@ -1099,79 +1041,8 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
               </div>
             ))}
           </section>
+          )}
           {error && <p className="error">{error}</p>}
-          {queued.length > 0 && (
-              <div className="chat-queue" role="list" aria-label="queued messages">
-                <div className="chat-queue-head">
-                  <button
-                    type="button"
-                    className="chat-queue-toggle"
-                    onClick={() => setQueueOpen((o) => !o)}
-                    aria-expanded={queueOpen}
-                  >
-                    <ChevronDown size={12} className={queueOpen ? "" : "rot-270"} />
-                    {queued.length} queued message{queued.length > 1 ? "s" : ""}
-                  </button>
-                  <button type="button" className="chat-queue-clear" onClick={clear_queue}>
-                    Clear All
-                  </button>
-                </div>
-                {queueOpen &&
-                  queued.map((q) => (
-                    <div key={q.id} className="chat-queue-item" role="listitem">
-                      {editId === q.id ? (
-                        <input
-                          className="chat-queue-edit"
-                          value={editDraft}
-                          onChange={(e) => setEditDraft(e.target.value)}
-                          onKeyDown={(e: React.KeyboardEvent<HTMLInputElement>) => {
-                            if (e.key === "Enter") save_edit();
-                            if (e.key === "Escape") setEditId(null);
-                          }}
-                          onBlur={save_edit}
-                          autoFocus
-                          aria-label="edit queued message"
-                        />
-                      ) : (
-                        <button
-                          type="button"
-                          className="chat-queue-text"
-                          onClick={() => start_edit(q)}
-                          title="edit message"
-                        >
-                          {q.text}
-                        </button>
-                      )}
-                      <span className="chat-queue-actions">
-                        <button
-                          type="button"
-                          onClick={() => start_edit(q)}
-                          title="edit"
-                          aria-label={`edit queued message: ${q.text}`}
-                        >
-                          <Pencil size={12} />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => send_now(q.id)}
-                          title={busyTids.includes(q.tid) ? "interrupt current reply and send now" : "send now"}
-                          aria-label={`send now: ${q.text}`}
-                        >
-                          <Send size={12} /> Send Now
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => drop_queue(q.id)}
-                          title="remove"
-                          aria-label={`remove queued message: ${q.text}`}
-                        >
-                          <X size={12} />
-                        </button>
-                      </span>
-                    </div>
-                  ))}
-              </div>
-            )}
           <form onSubmit={send}>
             <select
               className="search-toggle"
@@ -1289,7 +1160,13 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
                     .catch(() => setError("could not load dropped image"));
                 }
               }}
-              placeholder={threadBusy ? "generating…" : "type a message — drop or paste an image, or drop a card"}
+              placeholder={
+                messages.length === 0
+                  ? "Say something to the agent — type a message, or drop / paste an image"
+                  : threadBusy
+                    ? "generating…"
+                    : "type a message — drop or paste an image, or drop a card"
+              }
             />
             <button
               type="button"
@@ -1322,16 +1199,16 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
             </button>
             <button
               type="submit"
-              className={threadBusy ? "chat-send queue" : "chat-send"}
+              className="chat-send"
               disabled={!selected.length || (!input.trim() && !pendingImages.length)}
               title={
                 threadBusy
-                  ? "queue this message — it sends when the current reply finishes"
+                  ? "interrupt the current reply and send this now"
                   : "send"
               }
-              aria-label={threadBusy ? "queue this message" : "send message"}
+              aria-label={threadBusy ? "interrupt and send now" : "send message"}
             >
-              {threadBusy ? <ListEnd size={16} /> : <Send size={16} />}
+              {threadBusy ? <Square size={16} /> : <Send size={16} />}
             </button>
           </form>
           <CapscreenModal
