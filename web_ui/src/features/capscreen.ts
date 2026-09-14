@@ -5,7 +5,7 @@
 ///   wasm-pack build crates/wgpu-rs --target web --out-dir web_ui/src/wasm/wgpu_rs
 /// The UI falls back to a 2D-canvas renderer when the module is absent.
 
-export const WASM_MODULE_URL = new URL("../wasm/wgpu_rs/susutaku_wgpu_rs.js", import.meta.url).href;
+export const WASM_MODULE_URL = new URL("../wasm/wgpu_rs/wgpu_rs.js", import.meta.url).href;
 
 export interface ScreenAnnotator {
   add_line(x1: number, y1: number, x2: number, y2: number): void;
