@@ -6,6 +6,22 @@
 /// The UI falls back to a 2D-canvas renderer when the module is absent.
 
 export const WASM_MODULE_URL = new URL("../wasm/wgpu_rs/wgpu_rs.js", import.meta.url).href;
+export const WASM_BINARY_URL = new URL("../wasm/wgpu_rs/wgpu_rs_bg.wasm", import.meta.url).href;
+
+/// Import the wasm-bindgen glue and run its default `init()` with an explicit
+/// binary URL (the glue's own relative fetch breaks once Vite renames chunks).
+/// Returns null when either part fails to load.
+export async function load_wasm_module(): Promise<Record<string, unknown> | null> {
+  try {
+    const mod = await import(/* @vite-ignore */ WASM_MODULE_URL);
+    const init = (mod.default ?? mod.init) as ((u: string) => Promise<unknown>) | undefined;
+    if (typeof init !== "function") return null;
+    await init(WASM_BINARY_URL);
+    return mod as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
 
 export interface ScreenAnnotator {
   add_line(x1: number, y1: number, x2: number, y2: number): void;
@@ -27,12 +43,9 @@ export interface AnnotatorCtor {
 }
 
 export async function load_annotator_ctor(): Promise<AnnotatorCtor | null> {
-  try {
-    const mod = await import(/* @vite-ignore */ WASM_MODULE_URL);
-    return (mod.ScreenAnnotator ?? mod.default?.ScreenAnnotator) as AnnotatorCtor | undefined ?? null;
-  } catch {
-    return null;
-  }
+  const mod = await load_wasm_module();
+  if (!mod) return null;
+  return (mod.ScreenAnnotator ?? (mod as { default?: { ScreenAnnotator?: AnnotatorCtor } }).default?.ScreenAnnotator) as AnnotatorCtor | undefined ?? null;
 }
 
 export function make_fallback_annotator(

@@ -4,13 +4,9 @@
 /// Build it with:
 ///   wasm-pack build crates/wgpu-rs --target web --out-dir web_ui/src/wasm/wgpu_rs
 /// The UI falls back to a 2D-canvas renderer when the module is absent.
-import { WASM_MODULE_URL } from "./capscreen.js";
+import { load_wasm_module } from "./capscreen.js";
 
 export const SAMPLE_COUNT = 400;
-const WASM_FALLBACK_URLS = [
-  WASM_MODULE_URL,
-  new URL("../wasm/wgpu_rs/wgpu_rs.js", import.meta.url).href,
-];
 
 export interface PlotSpec {
   exprs: string[];
@@ -28,16 +24,10 @@ export interface Plotter {
 type PlotterCtor = { new(target: HTMLCanvasElement): Promise<Plotter> };
 
 export async function load_plotter_ctor(): Promise<PlotterCtor | null> {
-  for (const url of WASM_FALLBACK_URLS) {
-    try {
-      const mod = await import(/* @vite-ignore */ url);
-      const ctor = mod.Plotter ?? mod.default?.Plotter;
-      if (ctor) return ctor as PlotterCtor;
-    } catch {
-      // try next candidate
-    }
-  }
-  return null;
+  const mod = await load_wasm_module();
+  if (!mod) return null;
+  const m = mod as { Plotter?: PlotterCtor; default?: { Plotter?: PlotterCtor } };
+  return m.Plotter ?? m.default?.Plotter ?? null;
 }
 
 export async function make_plotter(target: HTMLCanvasElement): Promise<Plotter> {
