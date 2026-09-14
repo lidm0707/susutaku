@@ -193,3 +193,6 @@ susutaku/
 - Tests live in each crate's `tests/` dir (integration tests, public API only) — no inline `#[cfg(test)] mod tests` in `src/`
 - New plans go in `./.plans`, numbered 00–99
 - Prefer enums over hard-coded values; constants for all magic numbers
+- Prefer enum + `match` over scattered if-chains: dispatch on an enum of
+  variants (each variant renders/decides for itself) instead of chains of
+  `if x { .. } if y { .. }` on flags or strings — see `prompt.rs` `Section`

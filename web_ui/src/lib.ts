@@ -66,7 +66,7 @@ export interface Agent {
   persona: string;
   prompt: string;
   output: string;
-  /// Tool allow-list (search|fetch|shell|board); empty/omitted = all tools.
+  /// Tool allow-list (search|fetch|shell|board|coding|math|git); empty/omitted = all tools.
   allowed_tools?: string[];
   /// false = the agent must never receive images (screenshots).
   receive_images?: boolean;
@@ -669,17 +669,22 @@ export interface ChatMessageRow {
   created_at: string;
 }
 
-export async function fetch_chat_threads(): Promise<ChatThreadRow[]> {
-  const res = await fetch(`${API_BASE}/api/chat/threads`);
+export async function fetch_chat_threads(project_id?: number | null): Promise<ChatThreadRow[]> {
+  const qs = project_id == null ? "" : `?project_id=${project_id}`;
+  const res = await fetch(`${API_BASE}/api/chat/threads${qs}`);
   if (!res.ok) throw new ApiError(res.status, await res.text());
   return res.json();
 }
 
-export async function create_chat_thread(agent: string, title: string): Promise<ChatThreadRow> {
+export async function create_chat_thread(
+  agent: string,
+  title: string,
+  project_id?: number | null
+): Promise<ChatThreadRow> {
   const res = await fetch(`${API_BASE}/api/chat/threads`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ agent, title }),
+    body: JSON.stringify({ agent, title, project_id: project_id ?? null }),
   });
   if (!res.ok) throw new ApiError(res.status, await res.text());
   return res.json();
@@ -1002,6 +1007,42 @@ export async function run_agent_command(agent: string, cmd: string): Promise<str
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ cmd }),
     })
+  ).json();
+  return res.output;
+}
+
+export interface GitToolRequest {
+  op: "clone" | "status" | "diff";
+  url?: string;
+  token?: string;
+}
+
+/** Host-side git toolcall (clone/status/diff) in an agent's work tree. */
+export async function run_agent_git(agent: string, tool: GitToolRequest): Promise<string> {
+  const res: { agent: string; output: string } = await (
+    await api(`/api/manager/agents/${encodeURIComponent(agent)}/git`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(tool),
+    })
+  ).json();
+  return res.output;
+}
+
+export async function run_machine_git(
+  hostname: string,
+  agent: string,
+  tool: GitToolRequest,
+): Promise<string> {
+  const res: { output: string } = await (
+    await api(
+      `/api/machines/${encodeURIComponent(hostname)}/agents/${encodeURIComponent(agent)}/git`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(tool),
+      },
+    )
   ).json();
   return res.output;
 }

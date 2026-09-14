@@ -27,6 +27,7 @@ claude-cli = { path = "../crates/agent_3th_cli/claude_cli" }
 zai-api = { path = "../crates/cloud_model_api/zai_api" }
 ai-interface-layer = { path = "../crates/cloud_model_api/ai_interface_layer" }
 kanban-rs = { workspace = true }
+math = { workspace = true }
 codex-usage-rs = { workspace = true }
 manager-rs = { workspace = true }
 piplines = { workspace = true }

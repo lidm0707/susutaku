@@ -26,19 +26,20 @@ use crate::infra::claude::chat as claude_chat;
 use crate::infra::client::host_spec::{self, HostSpec};
 use crate::infra::codex::auth::{CodexAuth, LoginStatus};
 use crate::infra::codex::chat as codex_chat;
+use crate::infra::podman::AgentSandbox;
 use crate::infra::provider_quota::QuotaBoard;
-use crate::infra::sandbox_jail::AgentSandbox;
 use crate::infra::search::{DuckDuckGo, PageFetcher};
 
 use crate::infra::zai::chat::ZaiEngine;
 use crate::infra::zai::settings::{SettingsState, ZaiSettings};
 use crate::port::inbound::ChatHandling;
 use crate::port::outbound::{
-    AgentConfigRepo, BoardOps, ChatMemory, Fetcher, Inference, ModelEndpoint, ModelSwitch, Runner,
-    Searcher,
+    AgentConfigRepo, AgentGit, BoardOps, ChatMemory, Fetcher, Inference, ModelEndpoint,
+    ModelSwitch, Runner, Searcher,
 };
 use prompt_sys::{MAX_PROMPT_CHARS, PromptBuilder, Role as PromptRole};
 use proto_rs::AgentBrief;
+use proto_rs::GitTool;
 use std::path::PathBuf;
 use susutaku_mlx::tok::TokKind;
 
@@ -56,6 +57,7 @@ struct ZaiChatDeps {
     agents: Arc<dyn AgentConfigRepo>,
     settings: Arc<SettingsState>,
     store: std::sync::Arc<kanban_rs::Store>,
+    agent_git: Arc<dyn AgentGit>,
 }
 
 fn zai_chat_deps<T: ModelSwitch + 'static>(
@@ -63,6 +65,7 @@ fn zai_chat_deps<T: ModelSwitch + 'static>(
     runner: Arc<dyn Runner>,
     kanban_store: std::sync::Arc<kanban_rs::Store>,
     settings: Arc<SettingsState>,
+    manager: Arc<manager_rs::manager::Manager>,
 ) -> Arc<ZaiChatDeps> {
     Arc::new(ZaiChatDeps {
         searcher: Arc::new(DuckDuckGo),
@@ -76,6 +79,7 @@ fn zai_chat_deps<T: ModelSwitch + 'static>(
         )),
         settings,
         store: kanban_store,
+        agent_git: Arc::new(crate::infra::manager_git::ManagerGit::new(manager)),
     })
 }
 
@@ -110,6 +114,7 @@ pub fn router<T: ChatHandling + ModelSwitch + 'static>(
             get(manager_list_agents).post(spawn_agent),
         )
         .route("/api/manager/agents/{agent}/run", post(run_agent_command))
+        .route("/api/manager/agents/{agent}/git", post(run_agent_git))
         .route("/api/manager/agents/{agent}/logs", get(agent_logs))
         .route("/api/manager/agents/{agent}/finish", post(finish_agent))
         .with_state(ManagerState {
@@ -124,6 +129,10 @@ pub fn router<T: ChatHandling + ModelSwitch + 'static>(
         .route(
             "/api/machines/{hostname}/agents/{agent}/run",
             post(run_machine_agent),
+        )
+        .route(
+            "/api/machines/{hostname}/agents/{agent}/git",
+            post(run_machine_git),
         )
         .route("/api/agents/whereis/{agent}", get(agent_whereis))
         .with_state(MachinesState {
@@ -148,6 +157,7 @@ pub fn router<T: ChatHandling + ModelSwitch + 'static>(
         runner,
         kanban_store.clone(),
         settings_state.clone(),
+        manager.clone(),
     );
     let settings = Router::new()
         .route(
@@ -1571,6 +1581,7 @@ async fn chat_zai(
         .map(str::to_string);
     note_chat_agent(manager.clone(), req.agent.clone(), &req.message).await;
     let engine = ZaiEngine::new(deps.settings.clone(), req.model.clone());
+    let zai_deps_ = deps.clone();
     let zai = ChatUseCase::new(
         deps.searcher.clone(),
         deps.fetcher.clone(),
@@ -1580,7 +1591,8 @@ async fn chat_zai(
         deps.memory.clone(),
         deps.board.clone(),
         deps.agents.clone(),
-    );
+    )
+    .with_agent_git(zai_deps_.agent_git.clone());
     let message = match build_system_message(&req.system)? {
         Some(sys) => format!("{}\n\n{}", sys.content, req.message),
         None => req.message.clone(),
@@ -1638,9 +1650,19 @@ async fn chat_zai(
 
 async fn list_chat_threads(
     Extension(deps): Extension<Arc<ZaiChatDeps>>,
+    Query(query): Query<ChatThreadQuery>,
 ) -> Result<Json<Vec<kanban_rs::ChatThreadRow>>, ApiError> {
-    let rows = deps.store.list_chat_threads().await.map_err(store_err)?;
+    let rows = deps
+        .store
+        .list_chat_threads(query.project_id)
+        .await
+        .map_err(store_err)?;
     Ok(Json(rows))
+}
+
+#[derive(Deserialize)]
+struct ChatThreadQuery {
+    project_id: Option<i64>,
 }
 
 #[derive(Deserialize, utoipa::ToSchema)]
@@ -1648,6 +1670,7 @@ struct NewChatThread {
     agent: String,
     #[serde(default)]
     title: String,
+    project_id: Option<i64>,
 }
 
 async fn create_chat_thread(
@@ -1656,7 +1679,7 @@ async fn create_chat_thread(
 ) -> Result<Json<kanban_rs::ChatThreadRow>, ApiError> {
     let row = deps
         .store
-        .create_chat_thread(&req.agent, &req.title)
+        .create_chat_thread(&req.agent, &req.title, req.project_id)
         .await
         .map_err(store_err)?;
     Ok(Json(row))
@@ -3232,6 +3255,67 @@ async fn run_machine_agent(
     dispatch_machine_agent(hostname, agent, req.cmd).await
 }
 
+#[derive(Deserialize, utoipa::ToSchema)]
+struct MachineAgentGitRequest {
+    op: String,
+    url: Option<String>,
+    token: Option<String>,
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/machines/{hostname}/agents/{agent}/git",
+    request_body = MachineAgentGitRequest,
+    responses((status = 200, body = MachineAgentReply), (status = 400, body = str))
+)]
+async fn run_machine_git(
+    Path((hostname, agent)): Path<(String, String)>,
+    Json(req): Json<MachineAgentGitRequest>,
+) -> Result<Json<MachineAgentReply>, ApiError> {
+    let tool = AgentGitRequest {
+        op: req.op,
+        url: req.url,
+        token: req.token,
+    }
+    .tool()?;
+    if agent.is_empty() {
+        return Err(ApiError::bad_request("agent name required"));
+    }
+    let url = model_server_url();
+    let output = tokio::task::spawn_blocking(move || {
+        let agent_ = ureq::AgentBuilder::new()
+            .timeout(std::time::Duration::from_secs(HUB_TIMEOUT_SECS))
+            .build();
+        let rows = agent_
+            .get(&format!("{url}/api/clients"))
+            .call()
+            .map_err(|e| format!("hub unreachable: {e}"))?
+            .into_json::<serde_json::Value>()
+            .map_err(|e| format!("hub reply: {e}"))?;
+        let id = rows
+            .as_array()
+            .and_then(|rows| {
+                rows.iter()
+                    .find(|c| c["hostname"].as_str() == Some(hostname.as_str()))
+                    .and_then(|c| c["id"].as_u64())
+            })
+            .ok_or_else(|| format!("machine {hostname} is not registered"))?;
+        agent_
+            .post(&format!("{url}/api/clients/{id}/command"))
+            .send_string(&serde_json::json!({ "agent": agent, "git": tool }).to_string())
+            .map_err(|e| format!("dispatch failed: {e}"))?
+            .into_json::<serde_json::Value>()
+            .map_err(|e| format!("dispatch reply: {e}"))?["output"]
+            .as_str()
+            .map(str::to_owned)
+            .ok_or_else(|| "dispatch reply missing output".to_string())
+    })
+    .await
+    .map_err(|e| ApiError::bad_request(e.to_string()))?
+    .map_err(ApiError::bad_request)?;
+    Ok(Json(MachineAgentReply { output }))
+}
+
 #[utoipa::path(
     post,
     path = "/api/sandbox/purge",
@@ -3304,10 +3388,13 @@ async fn spawn_agent(
     Json(req): Json<AgentSpawnRequest>,
 ) -> Result<Json<AgentSpawnReply>, ApiError> {
     let repo = req.project_id.and_then(|id| {
-        state.settings.git_repo(id).map(|r| manager_rs::manager::RemoteRepo {
-            url: r.url,
-            token: r.secret,
-        })
+        state
+            .settings
+            .git_repo(id)
+            .map(|r| manager_rs::manager::RemoteRepo {
+                url: r.url,
+                token: r.secret,
+            })
     });
     let work_tree = state
         .manager
@@ -3327,6 +3414,50 @@ async fn run_agent_command(
     let manager = Arc::clone(&state.manager);
     let cmd_agent = agent.clone();
     let output = tokio::task::spawn_blocking(move || manager.run(&cmd_agent, &req.cmd))
+        .await
+        .map_err(|e| ApiError::bad_request(e.to_string()))?
+        .map_err(ApiError::bad_request)?;
+    Ok(Json(AgentRunReply { agent, output }))
+}
+
+#[derive(Deserialize, utoipa::ToSchema)]
+struct AgentGitRequest {
+    /// `clone` needs `url` (and optional `token`); `status` and `diff` take
+    /// no arguments.
+    op: String,
+    url: Option<String>,
+    token: Option<String>,
+}
+
+impl AgentGitRequest {
+    fn tool(&self) -> Result<GitTool, ApiError> {
+        match self.op.as_str() {
+            "clone" => Ok(GitTool::Clone {
+                url: self
+                    .url
+                    .clone()
+                    .ok_or_else(|| ApiError::bad_request("clone needs url"))?,
+                token: self.token.clone(),
+            }),
+            "status" => Ok(GitTool::Status),
+            "diff" => Ok(GitTool::Diff),
+            other => Err(ApiError::bad_request(format!(
+                "unknown git op {other} (clone | status | diff)"
+            ))),
+        }
+    }
+}
+
+/// Host-side git toolcall (clone/status/diff) in a local agent's work tree.
+async fn run_agent_git(
+    State(state): State<ManagerState>,
+    Path(agent): Path<String>,
+    Json(req): Json<AgentGitRequest>,
+) -> Result<Json<AgentRunReply>, ApiError> {
+    let tool = req.tool()?;
+    let manager = Arc::clone(&state.manager);
+    let git_agent = agent.clone();
+    let output = tokio::task::spawn_blocking(move || manager.git_tool(&git_agent, &tool))
         .await
         .map_err(|e| ApiError::bad_request(e.to_string()))?
         .map_err(ApiError::bad_request)?;

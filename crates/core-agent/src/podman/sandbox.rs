@@ -31,6 +31,11 @@ pub struct Sandbox {
     sandbox_id: String,
     root: PathBuf,
     state_file: PathBuf,
+    /// Image every run container starts from (default or agent cache).
+    image: RwLock<String>,
+    /// When set, each run container is committed into this tag after the
+    /// run, keeping installs for the next spawn.
+    cache_tag: RwLock<Option<String>>,
     state: RwLock<SandboxState>,
     lifecycle: RwLock<Lifecycle>,
     run_seq: AtomicU64,
@@ -55,17 +60,37 @@ impl Sandbox {
         let root = state::sandbox_root(&sandbox_id);
         state::create_workspace_layout(&root)?;
         state::write_metadata(&root, &sandbox_id)?;
-        Self::build(sandbox_id, root, None)
+        Self::build(
+            sandbox_id,
+            root,
+            None,
+            &super::image::AgentImage::Coding.reference(),
+            None,
+        )
     }
 
-    /// Sandbox rooted at an explicit work tree (one per agent).
-    pub fn new_in(work_tree: &Path) -> Result<Self, Error> {
+    /// Sandbox rooted at an explicit work tree (one per agent), running
+    /// from `image` and committing each run into `cache_tag` when given.
+    pub fn new_in_with_image(
+        work_tree: &Path,
+        image: &str,
+        cache_tag: Option<String>,
+    ) -> Result<Self, Error> {
         let sandbox_id = state::random_hex_id()?;
         fs::create_dir_all(work_tree)?;
         let root = work_tree.join(state::sandbox_subdir());
         state::create_workspace_layout(&root)?;
         state::write_metadata(&root, &sandbox_id)?;
-        Self::build(sandbox_id, root, None)
+        Self::build(sandbox_id, root, None, image, cache_tag)
+    }
+
+    /// Sandbox rooted at an explicit work tree (one per agent).
+    pub fn new_in(work_tree: &Path) -> Result<Self, Error> {
+        Self::new_in_with_image(
+            work_tree,
+            &super::image::AgentImage::Coding.reference(),
+            None,
+        )
     }
 
     /// Reload the most recently saved state belonging to *this backend
@@ -100,13 +125,22 @@ impl Sandbox {
             .to_owned();
         let root = state::sandbox_root(&sandbox_id);
         state::create_workspace_layout(&root)?;
-        Self::build(sandbox_id, root, Some((restored, path)))
+        let restored_img = super::image::AgentImage::Coding.reference();
+        Self::build(
+            sandbox_id,
+            root,
+            Some((restored, path)),
+            &restored_img,
+            None,
+        )
     }
 
     fn build(
         sandbox_id: String,
         root: PathBuf,
         restored: Option<(SandboxState, PathBuf)>,
+        image: &str,
+        cache_tag: Option<String>,
     ) -> Result<Self, Error> {
         let (state, state_file) = match restored {
             Some((s, f)) => (s, f),
@@ -119,6 +153,8 @@ impl Sandbox {
             sandbox_id,
             root,
             state_file,
+            image: RwLock::new(image.to_owned()),
+            cache_tag: RwLock::new(cache_tag),
             state: RwLock::new(state),
             lifecycle: RwLock::new(Lifecycle::Idle),
             run_seq: AtomicU64::new(0),
@@ -221,15 +257,23 @@ impl Sandbox {
             .cwd
             .clone();
         let seq = self.run_seq.fetch_add(1, Ordering::Relaxed);
-        runner::run_container(
-            &self.sandbox_id,
+        let image = self
+            .image
+            .read()
+            .map_err(|e| Error::other(e.to_string()))?
+            .clone();
+        let cache_tag = self
+            .cache_tag
+            .read()
+            .map_err(|e| Error::other(e.to_string()))?
+            .clone();
+        let spec = runner::ContainerSpec {
+            sandbox_id: &self.sandbox_id,
             seq,
-            &self.root(),
-            &cwd_rel,
-            cmd,
-            limits,
-            network,
-        )
+            image: &image,
+            cache_tag: cache_tag.as_deref(),
+        };
+        runner::run_container(&self.root(), &cwd_rel, cmd, limits, network, &spec)
     }
 
     pub fn push_context(&self, role: Role, content: impl Into<String>) {

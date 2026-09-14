@@ -7,6 +7,7 @@ pub struct ChatThreadRow {
     pub id: i64,
     pub agent: String,
     pub title: String,
+    pub project_id: Option<i64>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -28,31 +29,39 @@ impl crate::store::Store {
         &self,
         agent: &str,
         title: &str,
+        project_id: Option<i64>,
     ) -> Result<ChatThreadRow, StoreError> {
         let row = sqlx::query_as!(
             ChatThreadRow,
-            r#"INSERT INTO chat_threads (agent, title) VALUES ($1, $2)
-               RETURNING id, agent, title,
+            r#"INSERT INTO chat_threads (agent, title, project_id) VALUES ($1, $2, $3)
+               RETURNING id, agent, title, project_id,
                          created_at,
                          created_at AS "updated_at!""#,
             agent,
-            title
+            title,
+            project_id
         )
         .fetch_one(&self.pool)
         .await?;
         Ok(row)
     }
 
-    pub async fn list_chat_threads(&self) -> Result<Vec<ChatThreadRow>, StoreError> {
+    /// Threads scoped to one project; `None` lists project-less threads.
+    pub async fn list_chat_threads(
+        &self,
+        project_id: Option<i64>,
+    ) -> Result<Vec<ChatThreadRow>, StoreError> {
         let rows = sqlx::query_as!(
             ChatThreadRow,
-            r#"SELECT t.id, t.agent, t.title, t.created_at,
+            r#"SELECT t.id, t.agent, t.title, t.project_id, t.created_at,
                       COALESCE(MAX(m.created_at), t.created_at) AS "updated_at!"
                FROM chat_threads t
                LEFT JOIN chat_messages m ON m.thread_id = t.id
+               WHERE t.project_id IS NOT DISTINCT FROM $1
                GROUP BY t.id
                ORDER BY COALESCE(MAX(m.created_at), t.created_at) DESC, t.id DESC
-               LIMIT 200"#
+               LIMIT 200"#,
+            project_id
         )
         .fetch_all(&self.pool)
         .await?;

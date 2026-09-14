@@ -307,6 +307,7 @@ dependencies = [
  "kanban-rs",
  "libc",
  "manager-rs",
+ "math",
  "mockall",
  "piplines",
  "prompt-sys",
@@ -3036,6 +3037,7 @@ version = "0.1.0"
 dependencies = [
  "core-agent",
  "git-rs",
+ "proto-rs",
  "serde",
 ]
 

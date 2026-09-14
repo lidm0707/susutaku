@@ -8,10 +8,10 @@ use std::time::Duration;
 
 use manager_rs::manager::Manager;
 use proto_rs::client;
-use proto_rs::{AgentBrief, ClientMeta, ROLE_MODEL, ROLE_WORKER};
+use proto_rs::{AgentBrief, ClientMeta, GitTool, ROLE_MODEL, ROLE_WORKER};
 use tokio::time::sleep;
 
-use crate::infra::sandbox_jail::AgentSandbox;
+use crate::infra::podman::AgentSandbox;
 use crate::port::outbound::Runner;
 
 const OS_NAME: &str = std::env::consts::OS;
@@ -51,10 +51,15 @@ impl ClientNode {
                 sandbox: self.sandbox.clone(),
                 manager: self.manager.clone(),
             };
+            let git_node = NodeHandlers {
+                sandbox: self.sandbox.clone(),
+                manager: self.manager.clone(),
+            };
             let result = client::connect(
                 &self.hub_addr,
                 meta.clone(),
                 move |agent, cmd| node.handle(agent, cmd),
+                move |agent, tool| git_node.handle_git(agent, tool),
                 move || {
                     agents
                         .manager
@@ -101,6 +106,12 @@ impl NodeHandlers {
             .spawn(agent)
             .and_then(|_| self.manager.run(agent, cmd))
             .unwrap_or_else(|e| format!("agent error: {e}"))
+    }
+
+    fn handle_git(&self, agent: &str, tool: &GitTool) -> String {
+        self.manager
+            .git_tool(agent, tool)
+            .unwrap_or_else(|e| format!("git error: {e}"))
     }
 }
 

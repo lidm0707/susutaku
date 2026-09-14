@@ -41,8 +41,12 @@ fn spawn_client_raw(
         let mut meta = test_meta();
         meta.hostname = hostname;
         meta.os = os;
-        client::connect(&addr, meta, on_command, || Vec::new()).await
+        client::connect(&addr, meta, on_command, no_git, || Vec::new()).await
     })
+}
+
+fn no_git(_agent: &str, _tool: &proto_rs::GitTool) -> String {
+    String::new()
 }
 
 fn spawn_client(
@@ -57,16 +61,24 @@ fn spawn_client_agents(
     on_command: impl FnMut(&str, &str) -> String + Send + 'static,
     on_agents: impl FnMut() -> Vec<proto_rs::AgentBrief> + Send + 'static,
 ) -> ClientHandle {
-    tokio::spawn(async move { client::connect(&addr, test_meta(), on_command, on_agents).await })
+    tokio::spawn(
+        async move { client::connect(&addr, test_meta(), on_command, no_git, on_agents).await },
+    )
 }
 
 #[tokio::test]
 async fn connect_fails_when_refused() {
     let (listener, addr) = bind_loopback().await;
     drop(listener);
-    let err = client::connect(&addr, test_meta(), |_agent, c| c.to_string(), || Vec::new())
-        .await
-        .expect_err("refused");
+    let err = client::connect(
+        &addr,
+        test_meta(),
+        |_agent, c| c.to_string(),
+        no_git,
+        || Vec::new(),
+    )
+    .await
+    .expect_err("refused");
     assert!(err.contains("connect to"));
 }
 

@@ -8,7 +8,10 @@ import {
   fetch_users,
   kick_machine,
   run_agent_command,
+  run_agent_git,
   run_machine_agent,
+  type AgentBrief,
+  type GitToolRequest,
   type AgentLogs,
   type MachineAgent,
   type MachineView,
@@ -30,6 +33,72 @@ const KICK_CONFIRM_RESET_MS = 3000;
 interface InspectEntry {
   cmd: string;
   output: string;
+}
+
+const GIT_OPS: GitToolRequest["op"][] = ["clone", "status", "diff"];
+
+/// Host-side git toolcall row, scoped to the selected agent: pick an op
+/// (clone needs a url) and run it against the agent's work tree.
+function AgentGitTool({
+  agent,
+  on_output,
+}: {
+  agent: string;
+  on_output: (cmd: string, output: string) => void;
+}) {
+  const [op, set_op] = useState<GitToolRequest["op"]>("status");
+  const [url, set_url] = useState("");
+  const [busy, set_busy] = useState(false);
+
+  async function run() {
+    if (busy) return;
+    if (op === "clone" && !url.trim()) {
+      toast("clone needs a url", "error");
+      return;
+    }
+    set_busy(true);
+    try {
+      const output = await run_agent_git(agent, { op, url: url.trim() || undefined });
+      on_output(`git ${op}${op === "clone" ? ` ${url.trim()}` : ""}`, output);
+      if (op === "clone") set_url("");
+    } catch (err: unknown) {
+      toast(err instanceof Error ? err.message : String(err), "error");
+    } finally {
+      set_busy(false);
+    }
+  }
+
+  return (
+    <form
+      className="agent-inspect-row"
+      onSubmit={(e) => {
+        e.preventDefault();
+        void run();
+      }}
+    >
+      <select
+        value={op}
+        disabled={busy}
+        aria-label={`git op for ${agent}`}
+        onChange={(e) => set_op(e.target.value as GitToolRequest["op"])}
+      >
+        {GIT_OPS.map((o) => (
+          <option key={o} value={o}>{`git ${o}`}</option>
+        ))}
+      </select>
+      {op === "clone" && (
+        <input
+          value={url}
+          disabled={busy}
+          placeholder="https://github.com/owner/repo.git"
+          onChange={(e) => set_url(e.target.value)}
+        />
+      )}
+      <button type="submit" className="agent-inspect-run" disabled={busy} title="run git">
+        <TerminalSquare size={14} />
+      </button>
+    </form>
+  );
 }
 
 export function AgentInspect({ agent }: { agent: string }) {
@@ -61,6 +130,10 @@ export function AgentInspect({ agent }: { agent: string }) {
           </button>
         ))}
       </div>
+      <AgentGitTool
+        agent={agent}
+        on_output={(cmd, output) => set_entries((prev) => [...prev, { cmd, output }])}
+      />
       <form
         className="agent-inspect-row"
         onSubmit={(e) => {
@@ -217,8 +290,8 @@ function SandboxLogs({ path }: { path: string }) {
   );
 }
 
-function MachineAgentConsole({ hostname }: { hostname: string }) {
-  const [agent, set_agent] = useState("");
+function MachineAgentConsole({ hostname, agents }: { hostname: string; agents: AgentBrief[] }) {
+  const [agent, set_agent] = useState(agents[0]?.name ?? "");
   const [cmd, set_cmd] = useState("");
   const [busy, set_busy] = useState(false);
   const [entries, set_entries] = useState<InspectEntry[]>([]);
@@ -252,12 +325,17 @@ function MachineAgentConsole({ hostname }: { hostname: string }) {
           run();
         }}
       >
-        <input
+        <select
           value={agent}
-          disabled={busy}
-          placeholder="agent name…"
+          disabled={busy || agents.length === 0}
+          aria-label={`agent on ${hostname}`}
           onChange={(e) => set_agent(e.target.value)}
-        />
+        >
+          {agents.length === 0 && <option value="">no agents</option>}
+          {agents.map((a) => (
+            <option key={a.name} value={a.name}>{a.name}</option>
+          ))}
+        </select>
       </form>
       <form
         className="agent-inspect-row"
@@ -511,7 +589,12 @@ export function MachinesModal({ open, on_close, on_monitor }: Props) {
               )}
             </div>
           )}
-          {selected?.kind === "machine" && <MachineAgentConsole hostname={selected.hostname} />}
+          {selected?.kind === "machine" && (
+            <MachineAgentConsole
+              hostname={selected.hostname}
+              agents={machines?.find((m) => m.hostname === selected.hostname)?.agents ?? []}
+            />
+          )}
         </section>
       </div>
     </Modal>

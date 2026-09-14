@@ -346,6 +346,9 @@ CREATE TABLE IF NOT EXISTS chat_messages (
     r#"
 CREATE INDEX IF NOT EXISTS chat_messages_thread_idx ON chat_messages (thread_id, id);
 "#,
+    r#"
+ALTER TABLE chat_threads ADD COLUMN IF NOT EXISTS project_id BIGINT REFERENCES projects(id) ON DELETE CASCADE;
+"#,
 ];
 
 const JSON_ARRAY_ERR: &str = "must be a JSON array";

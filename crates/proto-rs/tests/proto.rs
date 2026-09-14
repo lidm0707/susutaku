@@ -33,6 +33,7 @@ async fn command_round_trip_and_heartbeat() {
                     ram_gib: 16,
                 },
                 |_agent, cmd| format!("echo:{cmd}"),
+                |_agent, _tool| "git-ok".to_string(),
                 || Vec::new(),
             )
             .await

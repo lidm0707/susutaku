@@ -1347,8 +1347,11 @@ function GitRepoForm({
   entry: ProjectRepo;
   on_saved: () => Promise<unknown>;
 }) {
+  const AUTOSAVE_DEBOUNCE_MS = 600;
+
   const [url, setUrl] = useState(entry.url);
   const [secret, setSecret] = useState("");
+  const [savedUrl, setSavedUrl] = useState(entry.url);
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
 
@@ -1357,13 +1360,23 @@ function GitRepoForm({
     setError("");
     try {
       await set_git_repo(entry.project_id, url.trim(), clear ? "" : secret || undefined);
+      setSavedUrl(url.trim());
       setSecret("");
-      setStatus(clear ? "token cleared" : "saved");
+      setStatus(clear ? "token cleared" : secret ? "token saved" : "repo saved");
       await on_saved();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));
     }
   }
+
+  useEffect(() => {
+    const next = url.trim();
+    if (next === savedUrl || !next) return;
+    const t = setTimeout(() => {
+      void save(false);
+    }, AUTOSAVE_DEBOUNCE_MS);
+    return () => clearTimeout(t);
+  }, [url, savedUrl]);
 
   async function remove() {
     setStatus("");
@@ -1390,6 +1403,7 @@ function GitRepoForm({
           : "no repo yet — agent work trees start empty"}
       </p>
       <form
+        className="git-repo-form"
         onSubmit={(e) => {
           e.preventDefault();
           void save(false);
@@ -1410,12 +1424,24 @@ function GitRepoForm({
             type="password"
             value={secret}
             onChange={(e) => setSecret(e.target.value)}
+            onBlur={() => {
+              if (secret) void save(false);
+            }}
             placeholder={entry.secret_set ? "replace access token…" : "access token (write-only)…"}
             autoComplete="new-password"
           />
         </div>
         <div className="form-row">
-          <button type="submit">save</button>
+          {entry.secret_set && (
+            <span className="token-set-mark">
+              <KeyRound size={12} /> token set
+            </span>
+          )}
+          {status && (
+            <span className="saved-mark">
+              {status.startsWith("token saved") && <Check size={12} />} {status}
+            </span>
+          )}
           {entry.secret_set && (
             <button type="button" onClick={() => void save(true)}>
               clear token
@@ -1426,7 +1452,6 @@ function GitRepoForm({
               <Trash2 size={14} /> remove
             </button>
           )}
-          {status && <span className="saved-mark">{status}</span>}
           {error && <span className="error">{error}</span>}
         </div>
       </form>

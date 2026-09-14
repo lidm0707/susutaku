@@ -1621,6 +1621,14 @@ button:disabled {
   font-style: normal;
 }
 
+.token-set-mark {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: #5fd39a;
+  font-size: 12px;
+}
+
 header a {
   color: inherit;
   text-decoration: none;
@@ -4299,6 +4307,24 @@ button {
   align-items: center;
 }
 
+.git-repo-form {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.5rem;
+}
+
+.git-repo-form .form-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.git-repo-form .form-row button {
+  font-size: 0.8rem;
+  padding: 0.45rem 0.8rem;
+}
+
 .env-share-form button {
   white-space: nowrap;
 }
@@ -5034,4 +5060,51 @@ select.agent-multi {
 .attachments-table td:last-child button:hover {
   border-color: #888;
   color: #e6e6ea;
+}
+
+/* graph (wgpu plotter) */
+.graph-canvas {
+  display: block;
+  width: 100%;
+  border: 1px solid #2a2a33;
+  border-radius: 8px;
+}
+
+.msg-plot {
+  margin: 0.4rem 0;
+}
+
+.graph-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  margin-bottom: 0.75rem;
+}
+
+.graph-exprs {
+  flex: 1 1 16rem;
+  min-height: 4.5rem;
+  padding: 0.6rem 0.8rem;
+  border-radius: 8px;
+  border: 1px solid #333;
+  background: #1a1a20;
+  color: inherit;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.9rem;
+  resize: vertical;
+}
+
+.graph-range {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: #888;
+  font-size: 0.85rem;
+}
+
+.graph-range input {
+  width: 5.5rem;
+  flex: 0 1 auto;
+  padding: 0.4rem 0.6rem;
 }

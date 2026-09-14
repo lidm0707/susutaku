@@ -1,4 +1,5 @@
 pub mod complex;
+pub mod geomath;
 pub mod linalg;
 pub mod stats;
 pub mod vec;

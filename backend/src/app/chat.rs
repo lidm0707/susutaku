@@ -4,13 +4,14 @@
 use std::sync::Arc;
 
 use crate::domain::{
-    BoardOp, BoardRequest, ChatCmd, ChatOutcome, GenReply, MEMORY_THREAD_DEFAULT, Prompt,
-    SearchMode, SearchResult, TOOL_DENIED, TOOL_RESULT_HEADER, TOOL_ROUNDS_MAX, TOOL_SUMMARY_MAX,
-    ToolCall, ToolKind, ToolSet, ToolUse,
+    BoardOp, BoardRequest, ChatCmd, ChatOutcome, GenReply, GitOp, Prompt, SearchMode, SearchResult,
+    TOOL_DENIED, TOOL_RESULT_HEADER, TOOL_ROUNDS_MAX, TOOL_SUMMARY_MAX, ToolCall, ToolKind,
+    ToolSet, ToolUse,
 };
 use crate::port::inbound::ChatHandling;
 use crate::port::outbound::{
-    AgentConfigRepo, BoardOps, ChatMemory, Fetcher, Inference, ModelSwitch, Runner, Searcher,
+    AgentConfigRepo, AgentGit, BoardOps, ChatMemory, Fetcher, Inference, ModelSwitch, Runner,
+    Searcher,
 };
 use susutaku_mlx::stats::GenStats;
 use susutaku_mlx::tok::TokKind;
@@ -30,6 +31,8 @@ pub struct ChatUseCase {
     memory: Option<Arc<dyn ChatMemory>>,
     board: Arc<dyn BoardOps>,
     agents: Arc<dyn AgentConfigRepo>,
+    /// Per-agent git host; `None` degrades git ops to the shared work tree.
+    agent_git: Option<Arc<dyn AgentGit>>,
 }
 
 impl ChatUseCase {
@@ -53,7 +56,15 @@ impl ChatUseCase {
             memory,
             board,
             agents,
+            agent_git: None,
         }
+    }
+
+    /// Routes git toolcalls of named agents to their own work tree (via the
+    /// manager); chats without an agent keep using the shared work tree.
+    pub fn with_agent_git(mut self, agent_git: Arc<dyn AgentGit>) -> Self {
+        self.agent_git = Some(agent_git);
+        self
     }
 
     /// Resolves the named agent's tool allow-list; unknown/unnamed agents get
@@ -207,16 +218,23 @@ impl ChatHandling for ChatUseCase {
     /// Zed-style agentic loop: the model may call tools before answering.
     async fn execute(&self, cmd: ChatCmd) -> Result<ChatOutcome, String> {
         let allow_tools = cmd.mode == SearchMode::Auto;
-        let tools = self.agent_tools(cmd.agent.as_deref()).await;
+        let mut tools = self.agent_tools(cmd.agent.as_deref()).await;
+        // Auto-select coding only when the work tree fits: a git repo must
+        // exist, otherwise file writes have no project to belong to.
+        if !self.runner.has_git_repo() {
+            tools = tools.without_coding();
+        }
 
         let mut context = String::new();
-        let thread = cmd.thread_id.as_deref().unwrap_or(MEMORY_THREAD_DEFAULT);
-        let memories = self.recall_blocking(thread, &cmd.message).await;
-        if !memories.is_empty() {
-            context.push_str(MEMORY_CONTEXT_HEADER);
-            for line in &memories {
-                context.push_str(line);
-                context.push('\n');
+        let mut memories: Vec<String> = Vec::new();
+        if let Some(thread) = cmd.thread_id.as_deref() {
+            memories = self.recall_blocking(thread, &cmd.message).await;
+            if !memories.is_empty() {
+                context.push_str(MEMORY_CONTEXT_HEADER);
+                for line in &memories {
+                    context.push_str(line);
+                    context.push('\n');
+                }
             }
         }
         let mut trace: Vec<ToolUse> = Vec::new();
@@ -275,6 +293,56 @@ impl ChatHandling for ChatUseCase {
                 ToolCall::Shell(shell_cmd) if tools.allows(ToolKind::Shell) => {
                     let result = self.shell_blocking(&shell_cmd).await;
                     trace.push(ToolUse::new(ToolKind::Shell, &shell_cmd, &result));
+                    let out = result.unwrap_or_else(|e| format!("{TOOL_ERROR}{e}"));
+                    context.push_str(TOOL_RESULT_HEADER);
+                    context.push_str(&out);
+                }
+                ToolCall::Coding { path, code } if tools.allows(ToolKind::Coding) => {
+                    let bytes = code.len();
+                    let label = format!("write {path} ({bytes} bytes)");
+                    let runner = Arc::clone(&self.runner);
+                    let result =
+                        tokio::task::spawn_blocking(move || runner.write_file(&path, &code))
+                            .await
+                            .map_err(|_| "coding task panicked".to_string())
+                            .and_then(|inner| inner)
+                            .map(|_| "file written".to_string());
+                    trace.push(ToolUse::new(ToolKind::Coding, &label, &result));
+                    let out = result.unwrap_or_else(|e| format!("{TOOL_ERROR}{e}"));
+                    context.push_str(TOOL_RESULT_HEADER);
+                    context.push_str(&out);
+                }
+                ToolCall::Math(expr) if tools.allows(ToolKind::Math) => {
+                    let result = math::geomath::eval(&expr);
+                    trace.push(ToolUse::new(ToolKind::Math, &expr, &result));
+                    let out = result.unwrap_or_else(|e| format!("{TOOL_ERROR}{e}"));
+                    context.push_str(TOOL_RESULT_HEADER);
+                    context.push_str(&out);
+                }
+                ToolCall::Git(op) if tools.allows(ToolKind::Git) => {
+                    let input = match &op {
+                        GitOp::Clone { url, .. } => url.clone(),
+                        GitOp::Status => "status".to_string(),
+                        GitOp::Diff => "diff".to_string(),
+                    };
+                    let agent = cmd.agent.as_deref().unwrap_or("").trim().to_string();
+                    let result = match (self.agent_git.as_ref(), !agent.is_empty()) {
+                        (Some(git), true) => {
+                            let git = Arc::clone(git);
+                            tokio::task::spawn_blocking(move || git.git_for(&agent, &op))
+                                .await
+                                .map_err(|_| "git task panicked".to_string())
+                                .and_then(|inner| inner)
+                        }
+                        _ => {
+                            let runner = Arc::clone(&self.runner);
+                            tokio::task::spawn_blocking(move || runner.git(&op))
+                                .await
+                                .map_err(|_| "git task panicked".to_string())
+                                .and_then(|inner| inner)
+                        }
+                    };
+                    trace.push(ToolUse::new(ToolKind::Git, &input, &result));
                     let out = result.unwrap_or_else(|e| format!("{TOOL_ERROR}{e}"));
                     context.push_str(TOOL_RESULT_HEADER);
                     context.push_str(&out);
@@ -342,9 +410,11 @@ impl ChatHandling for ChatUseCase {
             };
         }
 
-        self.remember_blocking(thread, "user", &cmd.message).await;
-        self.remember_blocking(thread, "assistant", &reply.text)
-            .await;
+        if let Some(thread) = cmd.thread_id.as_deref() {
+            self.remember_blocking(thread, "user", &cmd.message).await;
+            self.remember_blocking(thread, "assistant", &reply.text)
+                .await;
+        }
 
         Ok(self.outcome(
             (reply.text, reply.model, reply.stats),

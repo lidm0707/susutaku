@@ -2,9 +2,6 @@
 
 use crate::domain::{SearchMode, ToolUse};
 
-/// Memory scope when the caller supplies no thread id.
-pub const MEMORY_THREAD_DEFAULT: &str = "global";
-
 /// Driving-adapter request: one chat turn.
 pub struct ChatCmd {
     pub message: String,
@@ -23,7 +20,7 @@ pub struct ChatCmd {
     /// Optional attached image (data URL); sent on the first model call only.
     pub image: Option<String>,
     /// Memory scope: chat thread id. Memories are recalled/stored per thread;
-    /// None falls back to the shared default scope.
+    /// None disables memory entirely (no shared scope).
     pub thread_id: Option<String>,
 }
 

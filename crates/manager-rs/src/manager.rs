@@ -9,10 +9,13 @@ use std::sync::Arc;
 use std::sync::RwLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use core_agent::podman::Sandbox;
+use core_agent::podman::{Sandbox, cached_tag, resolve_image};
 use core_agent::sandbox_abstract_layer::{Role, SandboxState};
 use git_rs::GitRepo;
+use proto_rs::GitTool;
 use serde::Serialize;
+
+use crate::git_tool;
 
 /// Root directory holding every agent work tree.
 pub const AGENTS_ROOT: &str = "work/agents";
@@ -105,7 +108,12 @@ impl Manager {
         let work_tree = PathBuf::from(AGENTS_ROOT).join(sanitize(agent));
         reclaim_stale(&work_tree);
         seed_work_tree(&work_tree, repo)?;
-        let sandbox = Sandbox::new_in(&work_tree).map_err(|e| e.to_string())?;
+        // Run from the agent's cached image when one exists (installs from a
+        // previous task), else the default coding image; every run is then
+        // committed back into the cache tag for the next spawn.
+        let cache = cached_tag(agent);
+        let sandbox = Sandbox::new_in_with_image(&work_tree, &resolve_image(agent), Some(cache))
+            .map_err(|e| e.to_string())?;
         let base_commit = GitRepo::open_or_init(&work_tree)
             .ok()
             .and_then(|repo| repo.head_oid().ok())
@@ -141,6 +149,29 @@ impl Manager {
     pub fn push_context(&self, agent: &str, text: &str) -> Result<(), String> {
         self.slot(agent)?.sandbox.push_context(Role::User, text);
         Ok(())
+    }
+
+    /// Runs a git toolcall in `agent`'s mounted workspace (spawning the
+    /// agent on demand). Host-side execution: the sandbox has no network,
+    /// so clone/status/diff run here, where credentials live.
+    pub fn git_tool(&self, agent: &str, tool: &GitTool) -> Result<String, String> {
+        let slot = self
+            .agents
+            .read()
+            .map_err(|_| "agent map poisoned".to_string())?
+            .get(agent)
+            .cloned()
+            .map(Ok)
+            .unwrap_or_else(|| {
+                self.spawn(agent)?;
+                self.agents
+                    .read()
+                    .map_err(|_| "agent map poisoned".to_string())?
+                    .get(agent)
+                    .cloned()
+                    .ok_or_else(|| format!("agent {agent} failed to spawn"))
+            })?;
+        git_tool::apply(&slot.sandbox.root(), tool)
     }
 
     /// Finishes the agent's task: captures the task patch (committing pending

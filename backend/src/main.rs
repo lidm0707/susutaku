@@ -8,9 +8,10 @@ use backend::app::board::BoardService;
 use backend::infra::chat_memory;
 use backend::infra::client::node::ClientNode;
 use backend::infra::codex::auth::codex_home;
+use backend::infra::manager_git::ManagerGit;
 use backend::infra::model_client::RemoteModel;
+use backend::infra::podman::AgentSandbox;
 use backend::infra::postgres::{codex_usage, kanban};
-use backend::infra::sandbox_jail::AgentSandbox;
 use backend::infra::search::{DuckDuckGo, PageFetcher};
 use backend::infra::settings::local;
 use backend::port::outbound::ChatMemory;
@@ -91,20 +92,23 @@ async fn main() {
     let agents: Arc<dyn backend::port::outbound::AgentConfigRepo> = Arc::new(
         backend::infra::postgres::kanban::PgKanban::new(kanban_store.clone()),
     );
-    let use_case = Arc::new(ChatUseCase::new(
-        Arc::new(DuckDuckGo),
-        Arc::new(PageFetcher),
-        sandbox.clone(),
-        model.clone(),
-        model.clone(),
-        chat_memory(),
-        board,
-        agents,
-    ));
+    let manager = Manager::new();
+    let use_case = Arc::new(
+        ChatUseCase::new(
+            Arc::new(DuckDuckGo),
+            Arc::new(PageFetcher),
+            sandbox.clone(),
+            model.clone(),
+            model.clone(),
+            chat_memory(),
+            board,
+            agents,
+        )
+        .with_agent_git(Arc::new(ManagerGit::new(manager.clone()))),
+    );
 
     let usage_store = Arc::new(codex_usage::connect().await);
     codex_usage::spawn_scheduler(usage_store.clone(), codex_home());
-    let manager = Manager::new();
     spawn_health_log(manager.clone());
     let addr = SocketAddr::from(([0, 0, 0, 0], PORT));
     let listener = tokio::net::TcpListener::bind(addr).await.expect("bind");

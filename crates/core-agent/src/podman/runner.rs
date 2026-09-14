@@ -10,8 +10,6 @@ use super::limits::{NetworkPolicyChoice, SandboxLimits};
 use super::util::{cwd_mount_path, drain, truncate_bytes};
 
 const PODMAN_BIN: &str = "podman";
-const DEFAULT_IMAGE: &str = "localhost/susutaku-sandbox:latest";
-const IMAGE_ENV: &str = "SUSUTAKU_SANDBOX_IMAGE";
 const RUN_NAME_PREFIX: &str = "susutaku-run";
 const CONTAINER_WORKSPACE: &str = "/workspace";
 const NOFILE: u64 = 64;
@@ -31,27 +29,37 @@ const SANDBOX_ENV: [(&str, &str); 5] = [
     ("LANG", "C.UTF-8"),
 ];
 
-/// Run one command in a fresh `--rm` container. `workspace` is the host-side
-/// bind source, `cwd_rel` the stored relative cwd, `seq` disambiguates
-/// concurrent container names for the same sandbox.
+/// Container identity for one run: sandbox name parts, base image, and the
+/// optional cache tag the container is committed into after the run.
+pub(crate) struct ContainerSpec<'a> {
+    pub sandbox_id: &'a str,
+    pub seq: u64,
+    pub image: &'a str,
+    pub cache_tag: Option<&'a str>,
+}
+
+/// Run one command in a fresh container. `workspace` is the host-side
+/// bind source, `cwd_rel` the stored relative cwd. With `cache_tag`, the
+/// container is committed into that image after the run (instead of
+/// `--rm`), so installs persist for the next spawn.
 pub(crate) fn run_container(
-    sandbox_id: &str,
-    seq: u64,
     workspace: &Path,
     cwd_rel: &str,
     cmd: &str,
     limits: &SandboxLimits,
     network: NetworkPolicyChoice,
+    spec: &ContainerSpec<'_>,
 ) -> Result<String, Error> {
     super::install::ensure_podman()?;
     let workspace = std::fs::canonicalize(workspace)?;
-    let name = format!("{RUN_NAME_PREFIX}-{sandbox_id}-{seq}");
+    let name = format!("{RUN_NAME_PREFIX}-{}-{}", spec.sandbox_id, spec.seq);
 
     let mut command = Command::new(PODMAN_BIN);
+    command.arg("run").arg(format!("--name={name}"));
+    if spec.cache_tag.is_none() {
+        command.arg("--rm");
+    }
     command
-        .arg("run")
-        .arg("--rm")
-        .arg(format!("--name={name}"))
         .arg("--pids-limit")
         .arg(limits.max_processes.to_string());
     match network {
@@ -67,7 +75,7 @@ pub(crate) fn run_container(
     for (k, v) in SANDBOX_ENV {
         command.arg("-e").arg(format!("{k}={v}"));
     }
-    command.arg(image());
+    command.arg(spec.image);
     command.arg(SHELL).arg(RUN_FLAG);
     command.arg(format!("{}{cmd}", ulimit_prelude(limits)));
     command
@@ -112,15 +120,21 @@ pub(crate) fn run_container(
     let status = child.wait()?;
 
     if !status.success() {
+        force_remove(&name);
         let mut msg = String::from_utf8_lossy(&err_buf).into_owned();
         truncate_bytes(&mut msg, ERR_REPORT_CAP);
         if msg.is_empty() {
             msg = format!(
                 "podman exited with {status} (missing `{PODMAN_BIN}` or image `{}`?)",
-                image()
+                spec.image
             );
         }
         return Err(Error::other(msg));
+    }
+    if let Some(tag) = spec.cache_tag
+        && let Err(e) = super::image::commit_and_remove(&name, tag)
+    {
+        eprintln!("sandbox: image cache commit failed: {e}");
     }
     let mut text = String::from_utf8_lossy(&out_buf).into_owned();
     truncate_bytes(&mut text, limits.max_output_bytes);
@@ -143,10 +157,6 @@ fn ulimit_prelude(limits: &SandboxLimits) -> String {
         pre.push_str(&format!("ulimit -f {}; ", fsz / 1024));
     }
     pre
-}
-
-fn image() -> String {
-    std::env::var(IMAGE_ENV).unwrap_or_else(|_| DEFAULT_IMAGE.to_owned())
 }
 
 fn force_remove(name: &str) {

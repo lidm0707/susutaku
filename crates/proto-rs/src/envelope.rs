@@ -45,6 +45,17 @@ impl ClientMeta {
     }
 }
 
+/// Host-side git toolcall against an agent's work tree. Runs on the machine
+/// that owns the agent — where network and credentials live — never inside
+/// the network-less sandbox.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "op", rename_all = "lowercase")]
+pub enum GitTool {
+    Clone { url: String, token: Option<String> },
+    Status,
+    Diff,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Kind {
     Register {
@@ -60,6 +71,11 @@ pub enum Kind {
     Command {
         cmd: String,
         agent: String,
+    },
+    /// Run a git toolcall in `agent`'s work tree on the client machine.
+    Git {
+        agent: String,
+        tool: GitTool,
     },
     Result {
         output: String,

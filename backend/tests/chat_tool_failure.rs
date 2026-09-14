@@ -4,7 +4,9 @@
 use std::sync::Arc;
 
 use backend::app::ChatUseCase;
-use backend::domain::{BoardResult, ChatCmd, GenReply, SearchMode, SearchResult, TOOL_DENIED};
+use backend::domain::{
+    BoardResult, ChatCmd, GenReply, GitOp, SearchMode, SearchResult, TOOL_DENIED,
+};
 use backend::port::inbound::ChatHandling;
 use backend::port::outbound::{BoardOps, Fetcher, Inference, ModelSwitch, Runner, Searcher};
 use susutaku_mlx::stats::GenStats;
@@ -30,6 +32,15 @@ struct NoShell;
 impl Runner for NoShell {
     fn run(&self, _cmd: &str) -> Result<String, String> {
         Err("no shell in test".to_string())
+    }
+    fn write_file(&self, _path: &str, _content: &str) -> Result<(), String> {
+        Err("no work tree in test".to_string())
+    }
+    fn has_git_repo(&self) -> bool {
+        false
+    }
+    fn git(&self, _op: &GitOp) -> Result<String, String> {
+        Err("no work tree in test".to_string())
     }
 }
 

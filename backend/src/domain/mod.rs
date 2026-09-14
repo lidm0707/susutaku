@@ -20,6 +20,6 @@ pub use service::{
 };
 pub use valueobject::TOOL_SUMMARY_MAX;
 pub use valueobject::{
-    BoardOp, BoardRequest, BoardResult, ChatCmd, ChatOutcome, GenReply, MEMORY_THREAD_DEFAULT,
-    MemoryHit, ReplyRx, SearchMode, SearchResult, TOOL_KIND_NAMES, ToolKind, ToolSet, ToolUse,
+    BoardOp, BoardRequest, BoardResult, ChatCmd, ChatOutcome, GenReply, GitOp, MemoryHit, ReplyRx,
+    SearchMode, SearchResult, TOOL_KIND_NAMES, ToolKind, ToolSet, ToolUse,
 };

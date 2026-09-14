@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
-import { Bot, Brain, Camera, Check, ChevronDown, Copy, Link2, MessageSquarePlus, PanelRight, Pencil, Send, Wrench, X } from "lucide-react";
+import { Bot, Brain, Camera, Check, ChevronDown, Copy, Crosshair, Link2, MessageSquarePlus, PanelRight, Pencil, Send, Wrench, X } from "lucide-react";
 import {
   API_BASE,
   chat_codex,
@@ -27,6 +27,9 @@ import {
   type PromptSection,
 } from "../lib.js";
 import { Modal } from "../ui/Overlay.js";
+import { use_projects } from "./ProjectContext.js";
+import GraphView from "./GraphView.tsx";
+import { parse_plot_spec } from "../features/graph.js";
 import CapscreenModal from "./CapscreenModal.js";
 import { image_file_to_canvas } from "../features/capscreen.js";
 
@@ -38,6 +41,8 @@ const THINK_CLOSE = "</think>";
 const TOAST_MS = 4000;
 
 const THREAD_TITLE_LEN = 24;
+
+const SCROLL_STICK_PX = 48;
 
 const CARD_MIME = "application/x-susutaku-card";
 const CARD_MENTION_RE = /#card:(\d+)/g;
@@ -192,12 +197,32 @@ function CodeBlock({ lang, body }: { lang: string; body: string }) {
   );
 }
 
+const PLOT_LANG = "plot";
+
+function PlotFence({ body }: { body: string }) {
+  const spec = parse_plot_spec(body);
+  if (!spec) return <CodeBlock lang={PLOT_LANG} body={body} />;
+  return (
+    <div className="msg-plot">
+      <GraphView spec={spec} />
+    </div>
+  );
+}
+
 function MessageText({ text }: { text: string }) {
   const segments = split_segments(text);
   return (
     <div className="msg-body">
       {segments.map((s, i) =>
-        s.kind === "code" ? <CodeBlock key={i} lang={s.lang} body={s.body} /> : <InlineText key={i} body={s.body} />,
+        s.kind === "code" ? (
+          s.lang === PLOT_LANG ? (
+            <PlotFence key={i} body={s.body} />
+          ) : (
+            <CodeBlock key={i} lang={s.lang} body={s.body} />
+          )
+        ) : (
+          <InlineText key={i} body={s.body} />
+        ),
       )}
     </div>
   );
@@ -226,6 +251,7 @@ interface Thread {
   messages: Msg[];
   server_id: number | null;
   loaded: boolean;
+  updated_at: number;
 }
 
 interface QueuedMsg {
@@ -237,8 +263,9 @@ interface QueuedMsg {
 
 export default function ChatModal({ open, on_close }: { open: boolean; on_close: () => void }) {
   const { pathname } = useLocation();
+  const { project_id } = use_projects();
   const [threads, setThreads] = useState<Thread[]>([
-    { id: 0, title: "thread 1", messages: [], server_id: null, loaded: true },
+    { id: 0, title: "thread 1", messages: [], server_id: null, loaded: true, updated_at: Date.now() },
   ]);
   const [activeId, setActiveId] = useState(0);
   const [input, setInput] = useState("");
@@ -254,6 +281,8 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
   const dock_w = useRef(read_dock_w());
   const [error, setError] = useState("");
   const [toast, setToast] = useState("");
+  // focus toggle: OFF (default) sends the bare message, ON prefixes page/card context
+  const [focusOn, setFocusOn] = useState(false);
   // server thread id taken from a shared ?chat= link, resolved once threads load
   const [sharedId, setSharedId] = useState(
     () => Number(new URLSearchParams(window.location.search).get(CHAT_PARAM)) || 0,
@@ -334,8 +363,13 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
   const nextThreadId = useRef(1);
   const loadingThreads = useRef(new Set<number>());
   const pickerRef = useRef<HTMLDivElement | null>(null);
+  const logRef = useRef<HTMLElement | null>(null);
+  const stickBottom = useRef(true);
   const active = threads.find((t) => t.id === activeId) ?? threads[0];
   const messages = active.messages;
+  const sortedThreads = [...threads].sort(
+    (a, b) => b.updated_at - a.updated_at || b.id - a.id
+  );
   const selected = agents.filter((a) => selectedIds.includes(a.id as number));
 
   useEffect(() => {
@@ -365,7 +399,7 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
       })
       .catch(() => {});
     fetch_system_prompt().then(setSysPrompt).catch(() => {});
-    fetch_chat_threads()
+    fetch_chat_threads(project_id)
       .then((rows) =>
         setThreads((ts) => {
           const locals = ts.filter((t) => t.server_id === null);
@@ -377,12 +411,22 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
             messages: [],
             server_id: r.id,
             loaded: false,
+            updated_at: Date.parse(r.updated_at) || 0,
           }));
           return [...server, ...locals];
         })
       )
       .catch(() => {});
-  }, [open]);
+  }, [open, project_id]);
+
+  // switching project resets to a fresh thread of the new project scope
+  useEffect(() => {
+    if (!open) return;
+    setActiveId(0);
+    setThreads([
+      { id: 0, title: "thread 1", messages: [], server_id: null, loaded: true, updated_at: Date.now() },
+    ]);
+  }, [project_id]);
 
   // Fetch a server thread's messages the first time it is opened.
   useEffect(() => {
@@ -472,8 +516,23 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
     window.addEventListener("mouseup", on_up);
   }
 
+  function on_log_scroll() {
+    const el = logRef.current;
+    if (!el) return;
+    stickBottom.current =
+      el.scrollHeight - el.scrollTop - el.clientHeight <= SCROLL_STICK_PX;
+  }
+
+  useEffect(() => {
+    const el = logRef.current;
+    if (!el || !stickBottom.current) return;
+    el.scrollTop = el.scrollHeight;
+  }, [messages, activeId]);
+
   function patch_thread(id: number, fn: (msgs: Msg[]) => Msg[]) {
-    setThreads((ts) => ts.map((t) => (t.id === id ? { ...t, messages: fn(t.messages) } : t)));
+    setThreads((ts) =>
+      ts.map((t) => (t.id === id ? { ...t, messages: fn(t.messages), updated_at: Date.now() } : t))
+    );
   }
 
 
@@ -491,7 +550,7 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
     const id = nextThreadId.current++;
     setThreads((ts) => [
       ...ts,
-      { id, title: `thread ${id + 1}`, messages: [], server_id: null, loaded: true },
+      { id, title: `thread ${id + 1}`, messages: [], server_id: null, loaded: true, updated_at: Date.now() },
     ]);
     setActiveId(id);
     setError("");
@@ -527,6 +586,7 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
           messages: [] as Msg[],
           server_id: null,
           loaded: true,
+          updated_at: Date.now(),
         };
         setActiveId(fresh.id);
         return [fresh];
@@ -584,7 +644,7 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
       const res = await fetch(`${API_BASE}/api/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text, max_tokens: MAX_TOKENS, search: searchMode, agent: a.name }),
+        body: JSON.stringify({ message: text, max_tokens: MAX_TOKENS, search: searchMode, agent: a.name, thread_id: thread_id ?? undefined }),
       });
       return res.json();
     }
@@ -622,6 +682,7 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
     const thread = threads.find((t) => t.id === tid);
     setError("");
     setBusy(true);
+    stickBottom.current = true;
     set_title_from(tid, text);
     const userId = nextId.current++;
     const replyIds = selected.map(() => nextId.current++);
@@ -638,18 +699,22 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
         model: a.model,
       })),
     ]);
-    const page = page_label(pathname);
-    const data = await page_data(pathname);
-    const cards = await card_context(text);
-    const contexted =
-      `[context: user is currently on the ${page} page${data ? `\n${data}` : ""}${cards ? `\n${cards}` : ""}]${image ? "\n[a screenshot is attached]" : ""}\n\n${text}`;
+    const data = focusOn ? await page_data(pathname) : "";
+    const cards = focusOn ? await card_context(text) : "";
+    const contexted = focusOn
+      ? `[context: user is currently on the ${page_label(pathname)} page${data ? `\n${data}` : ""}${cards ? `\n${cards}` : ""}]${image ? "\n[a screenshot is attached]" : ""}\n\n${text}`
+      : text;
     let serverThreadId = thread?.server_id ?? null;
     if (serverThreadId === null) {
       try {
         const agentName = selected.map((a) => a.name).join(", ") || "chat";
-        const row = await create_chat_thread(agentName, text.slice(0, THREAD_TITLE_LEN));
+        const row = await create_chat_thread(agentName, text.slice(0, THREAD_TITLE_LEN), project_id);
         serverThreadId = row.id;
-        setThreads((ts) => ts.map((t) => (t.id === tid ? { ...t, server_id: row.id } : t)));
+        setThreads((ts) =>
+          ts.map((t) =>
+            t.id === tid ? { ...t, server_id: row.id, updated_at: Date.now() } : t
+          )
+        );
       } catch {
         // transcript stays client-only if the thread row can't be created
       }
@@ -733,7 +798,12 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
           />
         )}
         <div className="chat-main">
-          <section className="log chat-modal-log" aria-live="polite">
+          <section
+            className="log chat-modal-log"
+            aria-live="polite"
+            ref={logRef}
+            onScroll={on_log_scroll}
+          >
             {messages.length === 0 && <p className="empty">Say something to the agent.</p>}
             {messages.map((m) => (
               <div key={m.id} className={`bubble ${m.role}`}>
@@ -963,6 +1033,16 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
             />
             <button
               type="button"
+              className={focusOn ? "chat-capscreen on" : "chat-capscreen"}
+              onClick={() => setFocusOn((f) => !f)}
+              title={focusOn ? "focus on: page context is sent — click to stop" : "focus off: send bare messages — click to include page context"}
+              aria-label="toggle page focus context"
+              aria-pressed={focusOn}
+            >
+              <Crosshair size={16} />
+            </button>
+            <button
+              type="button"
               className={pendingImage ? "chat-capscreen on" : "chat-capscreen"}
               onClick={() => setCapscreenOpen(true)}
               title="attach annotated screenshot"
@@ -1004,7 +1084,7 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
               <MessageSquarePlus size={14} />
             </button>
           </div>
-          {threads.map((t) => (
+          {sortedThreads.map((t) => (
             <div key={t.id} className={`chat-thread-row ${t.id === activeId ? "active" : ""}`}>
               <button
                 type="button"

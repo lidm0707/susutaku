@@ -65,6 +65,10 @@ pub struct CommandRequest {
     /// Non-empty addresses the client's per-agent manager (own work tree).
     #[serde(default)]
     pub agent: String,
+    /// When set, run this git toolcall in the agent's work tree instead of
+    /// a shell command.
+    #[serde(default)]
+    pub git: Option<proto_rs::GitTool>,
 }
 
 #[derive(Serialize)]
@@ -156,11 +160,11 @@ async fn client_command(
     Path(client_id): Path<u64>,
     Json(req): Json<CommandRequest>,
 ) -> Result<Json<CommandReply>, (StatusCode, String)> {
-    let output = state
-        .hub
-        .dispatch(client_id, req.cmd, req.agent)
-        .await
-        .map_err(|e| (StatusCode::GATEWAY_TIMEOUT, e))?;
+    let output = match req.git {
+        Some(tool) => state.hub.dispatch_git(client_id, req.agent, tool).await,
+        None => state.hub.dispatch(client_id, req.cmd, req.agent).await,
+    }
+    .map_err(|e| (StatusCode::GATEWAY_TIMEOUT, e))?;
     Ok(Json(CommandReply { output }))
 }
 

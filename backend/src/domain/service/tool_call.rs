@@ -1,16 +1,21 @@
 //! Entity: a tool invocation parsed out of a model reply. It is the object
 //! the chat use case acts upon in the agentic loop.
 
+use crate::domain::GitOp;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ToolCall {
     Search(String),
     Fetch(String),
     Shell(String),
+    Coding { path: String, code: String },
     CardCreate { project_id: i64, title: String },
     CardSchedule { card_id: i64, cron: String },
     CardLink { card_id: i64, pipeline_id: i64 },
     PipelineCreate { name: String, spec: Option<String> },
     BoardList,
+    Math(String),
+    Git(GitOp),
 }
 
 const TOOL_PREFIX: &str = "TOOL:";
@@ -22,12 +27,17 @@ const PARAM_CLOSE: &str = "</parameter>";
 const XML_SEARCH: &str = "search";
 const XML_FETCH: &str = "fetch";
 const XML_SHELL: &str = "shell";
+const XML_CODING: &str = "coding";
+const XML_CODING_ALIAS: &str = "write_file";
 const XML_CARD_CREATE: &str = "card_create";
 const XML_CARD_CREATE_ALIAS: &str = "create_card";
 const XML_CARD_ROUTINE: &str = "card_routine";
 const XML_CARD_LINK: &str = "card_link";
 const XML_PIPELINE_CREATE: &str = "pipeline_create";
 const XML_BOARD_LIST: &str = "board_list";
+const XML_MATH: &str = "math";
+const XML_MATH_ALIAS: &str = "geomath";
+const XML_GIT: &str = "git";
 const TOOL_SEARCH: &str = "SEARCH";
 const TOOL_FETCH: &str = "FETCH";
 const TOOL_SHELL: &str = "SHELL";
@@ -36,6 +46,12 @@ const TOOL_CARD_ROUTINE: &str = "CARD_ROUTINE";
 const TOOL_CARD_LINK: &str = "CARD_LINK";
 const TOOL_PIPELINE_CREATE: &str = "PIPELINE_CREATE";
 const TOOL_BOARD_LIST: &str = "BOARD_LIST";
+const TOOL_MATH: &str = "MATH";
+const TOOL_MATH_ALIAS: &str = "GEOMATH";
+const TOOL_GIT: &str = "GIT";
+const GIT_OP_CLONE: &str = "CLONE";
+const GIT_OP_STATUS: &str = "STATUS";
+const GIT_OP_DIFF: &str = "DIFF";
 
 impl ToolCall {
     /// First TOOL: line after the </think> block, if any. The argument may be
@@ -97,6 +113,8 @@ impl ToolCall {
                 })
             }
             TOOL_BOARD_LIST => Some(Self::BoardList),
+            TOOL_MATH | TOOL_MATH_ALIAS if !arg.is_empty() => Some(Self::Math(arg.to_string())),
+            TOOL_GIT => Self::parse_git(arg),
             _ => None,
         }
     }
@@ -113,6 +131,16 @@ impl ToolCall {
             XML_SEARCH => Some(Self::Search(p("query")?.to_string())),
             XML_FETCH => Some(Self::Fetch(p("url")?.to_string())),
             XML_SHELL => Some(Self::Shell(p("command")?.to_string())),
+            XML_CODING | XML_CODING_ALIAS => {
+                let path = p("path")?.trim().to_string();
+                if path.is_empty() {
+                    return None;
+                }
+                Some(Self::Coding {
+                    path,
+                    code: p("code")?.to_string(),
+                })
+            }
             XML_CARD_CREATE | XML_CARD_CREATE_ALIAS => Some(Self::CardCreate {
                 project_id: p("project_id")?.trim().parse().ok()?,
                 title: p(PARAM_TITLE).or_else(|| p(PARAM_TITLE_ALIAS))?.to_string(),
@@ -139,6 +167,40 @@ impl ToolCall {
                 })
             }
             XML_BOARD_LIST => Some(Self::BoardList),
+            XML_MATH | XML_MATH_ALIAS => {
+                let expr = p("expr")?.trim().to_string();
+                if expr.is_empty() {
+                    return None;
+                }
+                Some(Self::Math(expr))
+            }
+            XML_GIT => {
+                let url = p("url").map(|u| u.trim().to_string());
+                Self::parse_git_op(p("op").map(str::trim), url.as_deref())
+            }
+            _ => None,
+        }
+    }
+
+    fn parse_git(arg: &str) -> Option<Self> {
+        let (op, url) = match arg.split_once(' ') {
+            Some((op, url)) => (op, Some(url.trim())),
+            None => (arg, None),
+        };
+        Self::parse_git_op(Some(op), url)
+    }
+
+    fn parse_git_op(op: Option<&str>, url: Option<&str>) -> Option<Self> {
+        match op?.to_uppercase().as_str() {
+            GIT_OP_CLONE => {
+                let url = url.filter(|u| !u.is_empty())?;
+                Some(Self::Git(GitOp::Clone {
+                    url: url.to_string(),
+                    token: None,
+                }))
+            }
+            GIT_OP_STATUS if url.is_none() => Some(Self::Git(GitOp::Status)),
+            GIT_OP_DIFF if url.is_none() => Some(Self::Git(GitOp::Diff)),
             _ => None,
         }
     }

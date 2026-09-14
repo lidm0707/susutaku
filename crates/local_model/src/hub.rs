@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use proto_rs::server::{ClientConn, Registry};
-use proto_rs::{AgentBrief, Envelope, Kind};
+use proto_rs::{AgentBrief, Envelope, GitTool, Kind};
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::timeout;
@@ -105,6 +105,16 @@ impl Hub {
         agent: String,
     ) -> Result<String, String> {
         self.request(client_id, Kind::Command { cmd, agent }).await
+    }
+
+    /// Git toolcall against an agent's work tree on the client machine.
+    pub async fn dispatch_git(
+        &self,
+        client_id: u64,
+        agent: String,
+        tool: GitTool,
+    ) -> Result<String, String> {
+        self.request(client_id, Kind::Git { agent, tool }).await
     }
 
     /// Agents a client machine holds (name/runs/last-command snapshot).

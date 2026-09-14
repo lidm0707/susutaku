@@ -59,7 +59,7 @@ const OUTPUT_TEMPLATES: Record<string, string> = {
 
 const OUTPUT_TYPES = Object.keys(OUTPUT_TEMPLATES);
 
-const TOOL_NAMES = ["search", "fetch", "shell", "board"] as const;
+const TOOL_NAMES = ["search", "fetch", "shell", "board", "coding", "math", "git"] as const;
 
 const EMPTY = {
   name: "",

@@ -86,6 +86,7 @@ async fn hub_registration_and_dispatch() {
                 ram_gib: 16,
             },
             |_agent, cmd| format!("ran:{cmd}"),
+            |_agent: &str, _tool: &proto_rs::GitTool| String::new(),
             || Vec::new(),
         )
         .await

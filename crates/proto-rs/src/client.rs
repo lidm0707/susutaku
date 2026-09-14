@@ -1,17 +1,19 @@
 use tokio::net::TcpStream;
 
 use crate::codec::{read_frame, write_frame};
-use crate::envelope::{ClientMeta, Envelope, Kind};
+use crate::envelope::{ClientMeta, Envelope, GitTool, Kind};
 
 /// Connects to a hub, announces itself with [`Kind::Register`] carrying the
-/// mandatory [`ClientMeta`], then serves inbound [`Kind::Command`] and
-/// [`Kind::AgentNames`] envelopes through `on_command` / `on_agents` until
-/// the connection drops. Fails before connecting when `meta` is incomplete —
-/// the hub would refuse the registration anyway.
+/// mandatory [`ClientMeta`], then serves inbound [`Kind::Command`],
+/// [`Kind::Git`] and [`Kind::AgentNames`] envelopes through `on_command` /
+/// `on_git` / `on_agents` until the connection drops. Fails before
+/// connecting when `meta` is incomplete — the hub would refuse the
+/// registration anyway.
 pub async fn connect(
     addr: &str,
     meta: ClientMeta,
     mut on_command: impl FnMut(&str, &str) -> String,
+    mut on_git: impl FnMut(&str, &GitTool) -> String,
     mut on_agents: impl FnMut() -> Vec<crate::envelope::AgentBrief>,
 ) -> Result<(), String> {
     if !meta.is_valid() {
@@ -40,6 +42,14 @@ pub async fn connect(
         match env.kind {
             Kind::Command { cmd, agent } => {
                 let output = on_command(&agent, &cmd);
+                let reply = Envelope {
+                    id: env.id,
+                    kind: Kind::Result { output },
+                };
+                write_frame(&mut wr, &reply).await?;
+            }
+            Kind::Git { agent, tool } => {
+                let output = on_git(&agent, &tool);
                 let reply = Envelope {
                     id: env.id,
                     kind: Kind::Result { output },

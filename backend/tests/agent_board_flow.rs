@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use backend::app::ChatUseCase;
 use backend::domain::{
-    BoardOp, BoardRequest, BoardResult, ChatCmd, GenReply, SearchMode, SearchResult,
+    BoardOp, BoardRequest, BoardResult, ChatCmd, GenReply, GitOp, SearchMode, SearchResult,
 };
 use backend::port::inbound::ChatHandling;
 use backend::port::outbound::{BoardOps, Fetcher, Inference, ModelSwitch, Runner, Searcher};
@@ -37,6 +37,15 @@ struct NoShell;
 impl Runner for NoShell {
     fn run(&self, _cmd: &str) -> Result<String, String> {
         Err("no shell in test".to_string())
+    }
+    fn write_file(&self, _path: &str, _content: &str) -> Result<(), String> {
+        Err("no work tree in test".to_string())
+    }
+    fn has_git_repo(&self) -> bool {
+        false
+    }
+    fn git(&self, _op: &GitOp) -> Result<String, String> {
+        Err("no work tree in test".to_string())
     }
 }
 

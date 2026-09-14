@@ -7,13 +7,19 @@ pub enum ToolKind {
     Fetch,
     Shell,
     Board,
+    Coding,
+    Math,
+    Git,
 }
 
-pub const TOOL_KIND_NAMES: [(&str, ToolKind); 4] = [
+pub const TOOL_KIND_NAMES: [(&str, ToolKind); 7] = [
     ("search", ToolKind::Search),
     ("fetch", ToolKind::Fetch),
     ("shell", ToolKind::Shell),
     ("board", ToolKind::Board),
+    ("coding", ToolKind::Coding),
+    ("math", ToolKind::Math),
+    ("git", ToolKind::Git),
 ];
 
 /// Allow-list of tools for one agent. An empty allow-list means every tool
@@ -24,6 +30,9 @@ pub struct ToolSet {
     pub fetch: bool,
     pub shell: bool,
     pub board: bool,
+    pub coding: bool,
+    pub math: bool,
+    pub git: bool,
 }
 
 impl ToolSet {
@@ -34,6 +43,9 @@ impl ToolSet {
             fetch: true,
             shell: true,
             board: true,
+            coding: true,
+            math: true,
+            git: true,
         }
     }
 
@@ -49,12 +61,17 @@ impl ToolSet {
             let (_, kind) = TOOL_KIND_NAMES
                 .iter()
                 .find(|(n, _)| *n == name)
-                .ok_or_else(|| format!("unknown tool {name:?} (use search|fetch|shell|board)"))?;
+                .ok_or_else(|| {
+                    format!("unknown tool {name:?} (use search|fetch|shell|board|coding|math|git)")
+                })?;
             match kind {
                 ToolKind::Search => set.search = true,
                 ToolKind::Fetch => set.fetch = true,
                 ToolKind::Shell => set.shell = true,
                 ToolKind::Board => set.board = true,
+                ToolKind::Coding => set.coding = true,
+                ToolKind::Math => set.math = true,
+                ToolKind::Git => set.git = true,
             }
         }
         Ok(set)
@@ -66,6 +83,18 @@ impl ToolSet {
             ToolKind::Fetch => self.fetch,
             ToolKind::Shell => self.shell,
             ToolKind::Board => self.board,
+            ToolKind::Coding => self.coding,
+            ToolKind::Math => self.math,
+            ToolKind::Git => self.git,
+        }
+    }
+
+    /// Copy without the coding tool (used when the work tree has no git
+    /// repo, so coding writes would have nothing to belong to).
+    pub const fn without_coding(&self) -> Self {
+        Self {
+            coding: false,
+            ..*self
         }
     }
 }
