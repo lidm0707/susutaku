@@ -663,6 +663,84 @@ export async function chat_zai(
   return res.json();
 }
 
+export type ChatStreamEvent =
+  | { type: "turn" }
+  | { type: "delta"; text: string }
+  | { type: "done"; reply: ChatReply }
+  | { type: "error"; error: string };
+
+/// POST /api/chat/zai/stream and parse the SSE body, invoking `on_event` per
+/// server event. Resolves with the final reply from the `done` event.
+export async function chat_zai_stream(
+  message: string,
+  model: string,
+  system: PromptSection[] | undefined,
+  agent: string | undefined,
+  thread_id: number | undefined,
+  image: string | undefined,
+  on_event: (ev: ChatStreamEvent) => void
+): Promise<ChatReply> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const token = get_token();
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const res = await fetch(`${API_BASE}/api/chat/zai/stream`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ message, model: model || undefined, system, agent, thread_id, image }),
+  });
+  if (!res.ok || !res.body) throw new ApiError(res.status, await res.text());
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let reply: ChatReply | null = null;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let sep = buffer.indexOf("\n\n");
+    while (sep !== -1) {
+      const frame = buffer.slice(0, sep);
+      buffer = buffer.slice(sep + 2);
+      sep = buffer.indexOf("\n\n");
+      const ev = parse_sse_frame(frame);
+      if (!ev) continue;
+      on_event(ev);
+      if (ev.type === "done") reply = ev.reply;
+      if (ev.type === "error") throw new Error(ev.error);
+    }
+  }
+  if (!reply) throw new ApiError(0, "stream ended without a done event");
+  return reply;
+}
+
+const SSE_EVENT_LINE = /^event: (.*)$/;
+const SSE_DATA_PREFIX = "data: ";
+
+function parse_sse_frame(frame: string): ChatStreamEvent | null {
+  let event = "";
+  let data = "";
+  for (const line of frame.split("\n")) {
+    if (line.startsWith(SSE_DATA_PREFIX)) {
+      data = line.slice(SSE_DATA_PREFIX.length);
+    } else {
+      const m = line.match(SSE_EVENT_LINE);
+      if (m) event = m[1].trim();
+    }
+  }
+  switch (event) {
+    case "turn":
+      return { type: "turn" };
+    case "delta":
+      return { type: "delta", text: JSON.parse(data).text ?? "" };
+    case "done":
+      return { type: "done", reply: JSON.parse(data) as ChatReply };
+    case "error":
+      return { type: "error", error: JSON.parse(data).error ?? "unknown error" };
+    default:
+      return null;
+  }
+}
+
 export interface ChatThreadRow {
   id: number;
   agent: string;

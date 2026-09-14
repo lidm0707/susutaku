@@ -99,7 +99,24 @@ fn parses_board_tool_calls() {
         ToolCall::parse("TOOL: CARD_LINK 7 2"),
         Some(ToolCall::CardLink {
             card_id: 7,
+
             pipeline_id: 2
+        })
+    );
+
+    assert_eq!(
+        ToolCall::parse("TOOL: CARD_FIND quota research"),
+        Some(ToolCall::CardFind {
+            query: "quota research".into()
+        })
+    );
+    assert_eq!(ToolCall::parse("TOOL: CARD_FIND"), None);
+    assert_eq!(
+        ToolCall::parse(
+            "<invoke name=\"find_card\"><parameter name=\"query\">quota</parameter></invoke>"
+        ),
+        Some(ToolCall::CardFind {
+            query: "quota".into()
         })
     );
 }

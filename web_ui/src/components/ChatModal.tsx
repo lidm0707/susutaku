@@ -5,6 +5,7 @@ import {
   API_BASE,
   chat_codex,
   chat_zai,
+  chat_zai_stream,
   create_chat_thread,
   delete_chat_thread,
   fetch_agent_machine,
@@ -16,12 +17,14 @@ import {
   fetch_cronjobs,
   fetch_models,
   fetch_system_prompt,
+  get_token,
   pretty_name,
   select_model,
   PARAM_CARD,
   PARAM_PROJECT,
   type Agent,
   type ChatReply,
+  type ChatStreamEvent,
   type ChatToolUse,
   type CodexModel,
   type CronJob,
@@ -325,7 +328,16 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
   ]);
   const [activeId, setActiveId] = useState(0);
   const [input, setInput] = useState("");
-  const [busy, setBusy] = useState(false);
+  // runs are isolated per thread: several threads can generate at once
+  const [busyTids, setBusyTids] = useState<number[]>([]);
+  const busyTidsRef = useRef<number[]>([]);
+  const threadBusy = busyTids.includes(activeId);
+  function set_thread_busy(tid: number, on: boolean) {
+    busyTidsRef.current = on
+      ? [...new Set([...busyTidsRef.current, tid])]
+      : busyTidsRef.current.filter((x) => x !== tid);
+    setBusyTids(busyTidsRef.current);
+  }
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [codexModels, setCodexModels] = useState<CodexModel[]>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -370,13 +382,6 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
     setQueued([]);
   }
 
-  function take_queue(): QueuedMsg | undefined {
-    const [head, ...rest] = queueRef.current;
-    queueRef.current = rest;
-    setQueued(rest);
-    return head;
-  }
-
   function bump_queue(id: number) {
     const item = queueRef.current.find((q) => q.id === id);
     if (!item) return;
@@ -402,19 +407,26 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
     setEditId(null);
   }
 
-  async function send_now(id: number) {
-    if (busy) {
-      bump_queue(id);
-      setToast("moved to front — sends after the current reply");
-      return;
-    }
-    const item = queueRef.current.find((q) => q.id === id);
-    if (!item) return;
-    drop_queue(id);
-    await run_send(item.text, item.image, item.tid);
-    for (let next = take_queue(); next; next = take_queue()) {
+  async function drain_queue() {
+    for (;;) {
+      const next = queueRef.current.find((q) => !busyTidsRef.current.includes(q.tid));
+      if (!next) return;
+      drop_queue(next.id);
       await run_send(next.text, next.image, next.tid);
     }
+  }
+
+  async function send_now(id: number) {
+    const item = queueRef.current.find((q) => q.id === id);
+    if (!item) return;
+    if (busyTidsRef.current.includes(item.tid)) {
+      bump_queue(id);
+      setToast("moved to front — sends after this thread's current reply");
+      return;
+    }
+    drop_queue(id);
+    await run_send(item.text, item.image, item.tid);
+    await drain_queue();
   }
   const nextThreadId = useRef(1);
   const loadingThreads = useRef(new Set<number>());
@@ -475,14 +487,57 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
       .catch(() => {});
   }, [open, project_id]);
 
-  // switching project resets to a fresh thread of the new project scope
+  // switching project resets to a fresh thread of the new project scope,
+  // but threads with in-flight replies are kept so runs are not lost
   useEffect(() => {
     if (!open) return;
     setActiveId(0);
-    setThreads([
-      { id: 0, title: "thread 1", messages: [], server_id: null, loaded: true, updated_at: Date.now() },
+    setThreads((ts) => [
+      { id: nextThreadId.current++, title: "thread 1", messages: [], server_id: null, loaded: true, updated_at: Date.now() },
+      ...ts.filter((t) => t.messages.some((m) => m.pending)),
     ]);
   }, [project_id]);
+
+  // re-opening the chat (or the panel re-gaining focus after a page change)
+  // pulls fresh messages for the active thread so replies that finished while
+  // hidden show up instead of staying on the pending dots forever
+  useEffect(() => {
+    if (!open) return;
+    const t = threads.find((x) => x.id === activeId);
+    if (
+      !t ||
+      t.server_id === null ||
+      busyTidsRef.current.includes(t.id) ||
+      loadingThreads.current.has(t.id)
+    )
+      return;
+    loadingThreads.current.add(t.id);
+    fetch_chat_messages(t.server_id)
+      .then((rows) =>
+        setThreads((ts) =>
+          ts.map((x) =>
+            x.id === t.id
+              ? {
+                  ...x,
+                  loaded: true,
+                  messages: [
+                    ...rows.map((m) =>
+                      m.role === "user"
+                        ? { id: m.id, role: "user" as const, text: m.text }
+                        : { id: m.id, role: "assistant" as const, text: m.text }
+                    ),
+                    // keep optimistic in-flight bubbles at the end
+                    ...x.messages.filter((m) => m.pending),
+                  ],
+                }
+              : x
+          )
+        )
+      )
+      .catch(() => {})
+      .finally(() => loadingThreads.current.delete(t.id));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   // Fetch a server thread's messages the first time it is opened.
   useEffect(() => {
@@ -591,6 +646,21 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
     );
   }
 
+  // patch a single message by id across threads (streamed reply updates)
+  function patch_msg(id: number, over: Partial<Msg>) {
+    setThreads((ts) =>
+      ts.map((t) =>
+        t.messages.some((m) => m.id === id)
+          ? {
+              ...t,
+              messages: t.messages.map((m) => (m.id === id ? { ...m, ...over } : m)),
+              updated_at: Date.now(),
+            }
+          : t
+      )
+    );
+  }
+
 
   function set_title_from(id: number, text: string) {
     setThreads((ts) =>
@@ -686,7 +756,8 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
     a: Agent,
     text: string,
     thread_id: number | null,
-    image?: string
+    image?: string,
+    on_event?: (ev: ChatStreamEvent) => void
   ): Promise<ChatReply> {
     let codex = codexModels;
     if (!codex.length) {
@@ -697,9 +768,13 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
     const local = models.find((m) => m.name === a.model);
     if (local) {
       if (!local.selected) await select_model(a.model);
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      // the board tools run with the caller's token (editor guard)
+      const token = get_token();
+      if (token) headers.Authorization = `Bearer ${token}`;
       const res = await fetch(`${API_BASE}/api/chat`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({
           message: text,
           max_tokens: MAX_TOKENS,
@@ -715,11 +790,22 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
     // agents flagged receive_images=false get text only — the backend rejects
     // images for them with 403
     const img = a.receive_images === false ? undefined : image;
+    if (on_event) {
+      return chat_zai_stream(
+        text,
+        a.model,
+        agent_sections(a),
+        a.name,
+        thread_id ?? undefined,
+        img,
+        on_event
+      );
+    }
     return chat_zai(text, a.model, agent_sections(a), a.name, thread_id ?? undefined, img);
   }
 
-  async function send(e: React.FormEvent) {
-    e.preventDefault();
+  async function send(e?: React.FormEvent | React.KeyboardEvent) {
+    e?.preventDefault();
     const text = input.trim();
     if (!text && !pendingImages.length) return;
     if (!selected.length) {
@@ -734,11 +820,11 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
       image: img,
     }));
     if (!items.length) items.push({ tid: activeId, text, image: null });
-    if (busy) {
+    if (busyTidsRef.current.includes(activeId)) {
       items.forEach(push_queue);
       setInput("");
       setPendingImages([]);
-      setToast("queued — sends after the current reply finishes");
+      setToast("queued — sends after this thread's current reply finishes");
       return;
     }
     const [head, ...rest] = items;
@@ -746,15 +832,13 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
     setInput("");
     setPendingImages([]);
     await run_send(head.text, head.image, head.tid);
-    for (let item = take_queue(); item; item = take_queue()) {
-      await run_send(item.text, item.image, item.tid);
-    }
+    await drain_queue();
   }
 
   async function run_send(text: string, attachedImage: string | null, tid: number) {
     const thread = threads.find((t) => t.id === tid);
     setError("");
-    setBusy(true);
+    set_thread_busy(tid, true);
     stickBottom.current = true;
     set_title_from(tid, text);
     const userId = nextId.current++;
@@ -793,7 +877,21 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
       }
     }
     const outcomes = await Promise.allSettled(
-      selected.map((a) => send_agent(a, contexted, serverThreadId, image ?? undefined))
+      selected.map((a, i) => {
+        // stream deltas into the pending bubble; a new inference round (tool
+        // loop turn) resets it, the final done patch replaces it with the
+        // thinking-split full reply
+        let streamed = "";
+        return send_agent(a, contexted, serverThreadId, image ?? undefined, (ev: ChatStreamEvent) => {
+          if (ev.type === "turn") {
+            streamed = "";
+            patch_msg(replyIds[i], { text: "" });
+          } else if (ev.type === "delta") {
+            streamed += ev.text;
+            patch_msg(replyIds[i], { text: streamed });
+          }
+        });
+      })
     );
     let failures = 0;
     outcomes.forEach((out, i) => {
@@ -833,7 +931,7 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
           : `${selected.length} agents finished`
       );
     }
-    setBusy(false);
+    set_thread_busy(tid, false);
   }
 
   const activeIdRef = useRef(activeId);
@@ -1022,7 +1120,7 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
                         <button
                           type="button"
                           onClick={() => send_now(q.id)}
-                          title={busy ? "move to front of queue" : "send now"}
+                          title={busyTids.includes(q.tid) ? "move to front of queue" : "send now"}
                           aria-label={`send now: ${q.text}`}
                         >
                           <Send size={12} /> Send Now
@@ -1104,14 +1202,22 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
                 </button>
               </span>
             ))}
-            <input
+            <textarea
+              className="chat-input"
+              rows={1}
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              onDragOver={(e: React.DragEvent<HTMLInputElement>) => {
+              onKeyDown={(e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  void send();
+                }
+              }}
+              onDragOver={(e: React.DragEvent<HTMLTextAreaElement>) => {
                 if (e.dataTransfer.types.includes(CARD_MIME) || e.dataTransfer.types.includes("Files"))
                   e.preventDefault();
               }}
-              onDrop={(e: React.DragEvent<HTMLInputElement>) => {
+              onDrop={(e: React.DragEvent<HTMLTextAreaElement>) => {
                 const id = e.dataTransfer.getData(CARD_MIME);
                 if (id) {
                   e.preventDefault();
@@ -1130,7 +1236,7 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
                     .catch(() => setError("could not load dropped image"));
                 }
               }}
-              placeholder={busy ? "generating…" : "type a message or drop a card"}
+              placeholder={threadBusy ? "generating…" : "type a message or drop a card"}
             />
             <button
               type="button"
@@ -1154,7 +1260,7 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
             <button
               type="submit"
               disabled={!selected.length || (!input.trim() && !pendingImages.length)}
-              title={busy ? "queue this message" : "send"}
+              title={threadBusy ? "queue this message" : "send"}
             >
               <Send size={16} />
             </button>

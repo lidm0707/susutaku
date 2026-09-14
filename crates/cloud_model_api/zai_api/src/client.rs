@@ -1,4 +1,5 @@
 use std::env;
+use std::io::BufRead;
 
 use ai_interface_layer::error::AiError;
 use ai_interface_layer::provider::{ChatProvider, NamedProvider};
@@ -19,6 +20,9 @@ pub const JSON_CONTENT_TYPE: &str = "application/json";
 pub const CHOICES_FIELD: &str = "choices";
 pub const MESSAGE_FIELD: &str = "message";
 pub const CONTENT_FIELD: &str = "content";
+pub const STREAM_FIELD: &str = "stream";
+pub const SSE_DATA_PREFIX: &str = "data:";
+pub const SSE_DONE_MARKER: &str = "[DONE]";
 pub const EMPTY_BODY_NOTE: &str = "<unreadable body>";
 pub const REQUEST_TIMEOUT_SECS: u64 = 300;
 
@@ -93,7 +97,13 @@ impl ZaiClient {
     }
 
     fn send(&self, body: &str) -> Result<String, AiError> {
-        let response = ureq::post(self.endpoint.url())
+        self.post(body)?
+            .into_string()
+            .map_err(|e| AiError::Http(e.to_string()))
+    }
+
+    fn post(&self, body: &str) -> Result<ureq::Response, AiError> {
+        ureq::post(self.endpoint.url())
             .timeout(std::time::Duration::from_secs(REQUEST_TIMEOUT_SECS))
             .set(CONTENT_TYPE, JSON_CONTENT_TYPE)
             .set(AUTH_HEADER, &format!("{BEARER_PREFIX}{}", self.api_key))
@@ -106,10 +116,66 @@ impl ZaiClient {
                         .unwrap_or_else(|_| EMPTY_BODY_NOTE.to_string()),
                 ),
                 other => AiError::Http(other.to_string()),
-            })?;
-        response
-            .into_string()
-            .map_err(|e| AiError::Http(e.to_string()))
+            })
+    }
+
+    /// OpenAI-compatible SSE stream of content deltas. The request sets
+    /// `"stream": true` and the caller iterates `DeltaStream` as tokens arrive.
+    fn send_stream(&self, body: &str) -> Result<DeltaStream, AiError> {
+        let reader = self.post(body)?.into_reader();
+        Ok(DeltaStream {
+            reader: std::io::BufReader::new(Box::new(reader)),
+            done: false,
+        })
+    }
+
+    fn request_body(&self, request: &ChatRequest, stream: bool) -> String {
+        json!({
+            "model": self.effective_model(request),
+            "messages": crate::parse::messages_value(request),
+            "temperature": request.temperature,
+            STREAM_FIELD: stream,
+        })
+        .to_string()
+    }
+}
+
+/// Iterator over content deltas of an SSE completion stream. Yields only the
+/// non-empty `choices[0].delta.content` strings; ends on `data: [DONE]`.
+pub struct DeltaStream {
+    reader: std::io::BufReader<Box<dyn std::io::Read + Send + Sync>>,
+    done: bool,
+}
+
+impl Iterator for DeltaStream {
+    type Item = Result<String, AiError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if self.done {
+                return None;
+            }
+            let mut line = String::new();
+            match self.reader.read_line(&mut line) {
+                Ok(0) => self.done = true,
+                Ok(_) => {
+                    let line = line.trim_end_matches(['\n', '\r']);
+                    let Some(payload) = line.strip_prefix(SSE_DATA_PREFIX) else {
+                        continue;
+                    };
+                    let payload = payload.trim();
+                    if payload == SSE_DONE_MARKER {
+                        self.done = true;
+                    } else if let Some(delta) = crate::parse::extract_delta(payload) {
+                        return Some(Ok(delta));
+                    }
+                }
+                Err(e) => {
+                    self.done = true;
+                    return Some(Err(AiError::Http(e.to_string())));
+                }
+            }
+        }
     }
 }
 
@@ -125,14 +191,16 @@ impl NamedProvider for ZaiClient {
 
 impl ChatProvider for ZaiClient {
     fn complete(&self, request: &ChatRequest) -> Result<ChatResponse, AiError> {
-        let body = json!({
-            "model": self.effective_model(request),
-            "messages": crate::parse::messages_value(request),
-            "temperature": request.temperature,
-        })
-        .to_string();
-        let raw = self.send(&body)?;
+        let raw = self.send(&self.request_body(request, false))?;
         let content = crate::parse::extract_content(&raw)?;
         Ok(ChatResponse { content })
+    }
+}
+
+impl ZaiClient {
+    /// Streamed variant of [`ChatProvider::complete`]: returns an iterator of
+    /// content deltas instead of waiting for the full body.
+    pub fn complete_stream(&self, request: &ChatRequest) -> Result<DeltaStream, AiError> {
+        self.send_stream(&self.request_body(request, true))
     }
 }

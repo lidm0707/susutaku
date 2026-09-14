@@ -9,10 +9,15 @@ use axum::{
         ws::{Message, WebSocketUpgrade},
     },
     http::{self, StatusCode, request::Parts},
-    response::{IntoResponse, Response},
+    response::{
+        IntoResponse, Response,
+        sse::{Event, Sse},
+    },
     routing::{delete, get, post, put},
 };
 use serde::{Deserialize, Serialize};
+use std::convert::Infallible;
+use tokio_stream::wrappers::ReceiverStream;
 use utoipa::OpenApi;
 
 use crate::app::kanban::{CardView, KanbanApp};
@@ -30,7 +35,7 @@ use crate::infra::podman::AgentSandbox;
 use crate::infra::provider_quota::QuotaBoard;
 use crate::infra::search::{DuckDuckGo, PageFetcher};
 
-use crate::infra::zai::chat::ZaiEngine;
+use crate::infra::zai::chat::{STREAM_EVENT_CAPACITY, StreamEvent, ZaiEngine};
 use crate::infra::zai::settings::{SettingsState, ZaiSettings};
 use crate::port::inbound::ChatHandling;
 use crate::port::outbound::{
@@ -201,6 +206,10 @@ pub fn router<T: ChatHandling + ModelSwitch + 'static>(
         .route(
             "/api/chat/zai",
             post(chat_zai).layer(DefaultBodyLimit::max(ATTACHMENT_MAX_BYTES)),
+        )
+        .route(
+            "/api/chat/zai/stream",
+            post(chat_zai_stream).layer(DefaultBodyLimit::max(ATTACHMENT_MAX_BYTES)),
         )
         .route(
             "/api/chat/threads",
@@ -1693,6 +1702,158 @@ async fn chat_zai(
         decode_tokens: outcome.stats.decode_tokens,
         decode_tps: ZERO_TPS,
     }))
+}
+
+/// Buffer of the mpsc feeding the SSE response body.
+const SSE_CHANNEL_BUFFER: usize = 64;
+
+type SseItem = Result<Event, Infallible>;
+type SseBody = ReceiverStream<SseItem>;
+
+fn stream_event(name: &str, data: &str) -> Result<Event, Infallible> {
+    Ok(Event::default().event(name).data(data))
+}
+
+async fn persist_transcript(
+    store: std::sync::Arc<kanban_rs::Store>,
+    thread_id: i64,
+    user_text: &str,
+    reply_text: &str,
+) {
+    if let Err(e) = store.add_chat_message(thread_id, "user", user_text).await {
+        tracing::warn!("chat transcript save (user) failed: {e}");
+    }
+    if let Err(e) = store
+        .add_chat_message(thread_id, "assistant", reply_text)
+        .await
+    {
+        tracing::warn!("chat transcript save (assistant) failed: {e}");
+    }
+}
+
+/// Same tool loop as `chat_zai`, but generation progress is streamed to the
+/// client as server-sent events: `turn` (new inference round), `delta`
+/// (content chunk), then a final `done` (full reply payload, same shape as
+/// the non-streamed JSON) or `error`.
+async fn chat_zai_stream(
+    Extension(manager): Extension<Arc<manager_rs::manager::Manager>>,
+    Extension(deps): Extension<Arc<ZaiChatDeps>>,
+    headers: http::HeaderMap,
+    Json(req): Json<ZaiChatRequest>,
+) -> Result<Sse<SseBody>, ApiError> {
+    const TOKENIZER: &str = "zai";
+    let board_token = headers
+        .get(http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix(BEARER_PREFIX))
+        .map(str::to_string);
+    note_chat_agent(manager.clone(), req.agent.clone(), &req.message).await;
+    let (event_tx, _) = tokio::sync::broadcast::channel::<StreamEvent>(STREAM_EVENT_CAPACITY);
+    let engine =
+        ZaiEngine::new(deps.settings.clone(), req.model.clone()).with_events(event_tx.clone());
+    let zai = ChatUseCase::new(
+        deps.searcher.clone(),
+        deps.fetcher.clone(),
+        deps.runner.clone(),
+        Arc::new(engine),
+        deps.models.clone(),
+        deps.memory.clone(),
+        deps.board.clone(),
+        deps.agents.clone(),
+    )
+    .with_agent_git(deps.agent_git.clone())
+    .with_project_git(deps.project_git.clone())
+    .with_resources(deps.resources.clone());
+    let message = match build_system_message(&req.system)? {
+        Some(sys) => format!("{}\n\n{}", sys.content, req.message),
+        None => req.message.clone(),
+    };
+    let gated_image =
+        gate_image(deps.agents.clone(), req.agent.as_deref(), req.image.clone()).await?;
+    if let Some(data_url) = gated_image.as_deref() {
+        store_chat_image(data_url);
+    }
+    let cmd = ChatCmd {
+        message,
+        mode: SearchMode::Auto,
+        max_tokens: DEFAULT_MAX_TOKENS,
+        tokenizer: TokKind::Normal,
+        think: false,
+        board_token,
+        agent: req.agent.clone(),
+        image: gated_image,
+        thread_id: req.thread_id.map(|id| id.to_string()),
+        card_id: req.card_id,
+    };
+    let (done_tx, done_rx) = tokio::sync::oneshot::channel::<Result<ChatReply, String>>();
+    let store = deps.store.clone();
+    let thread_id = req.thread_id;
+    let user_text = req.message.clone();
+    let agent = req.agent.clone();
+    tokio::spawn(async move {
+        let reply = match zai.execute(cmd).await {
+            Ok(outcome) => {
+                note_chat_reply(manager, agent, &outcome.text).await;
+                if let Some(thread_id) = thread_id {
+                    persist_transcript(store, thread_id, &user_text, &outcome.text).await;
+                }
+                const ZERO_TPS: f64 = 0.0;
+                let tools: Vec<ToolUseDto> =
+                    outcome.tools.iter().map(ToolUseDto::from_use).collect();
+                ChatReply {
+                    model: outcome.model,
+                    reply: outcome.text,
+                    searched: outcome.searched,
+                    tools,
+                    memories: outcome.memories,
+                    tokenizer: TOKENIZER,
+                    prompt_tokens: outcome.stats.prompt_tokens,
+                    prompt_tps: ZERO_TPS,
+                    decode_tokens: outcome.stats.decode_tokens,
+                    decode_tps: ZERO_TPS,
+                }
+            }
+            Err(e) => {
+                let _ = done_tx.send(Err(e));
+                return;
+            }
+        };
+        let _ = done_tx.send(Ok(reply));
+    });
+    let mut events = event_tx.subscribe();
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(SSE_CHANNEL_BUFFER);
+    tokio::spawn(async move {
+        // forward live deltas until the engine drops its sender, then relay
+        // the final result
+        while let Ok(ev) = events.recv().await {
+            let sent = match ev {
+                StreamEvent::Turn => tx.send(stream_event("turn", "")).await,
+                StreamEvent::Delta(text) => {
+                    let payload = serde_json::json!({ "text": text }).to_string();
+                    tx.send(stream_event("delta", &payload)).await
+                }
+            };
+            if sent.is_err() {
+                return;
+            }
+        }
+        match done_rx.await {
+            Ok(Ok(reply)) => {
+                let payload = serde_json::to_string(&reply).unwrap_or_default();
+                let _ = tx.send(stream_event("done", &payload)).await;
+            }
+            Ok(Err(e)) => {
+                let payload = serde_json::json!({ "error": e }).to_string();
+                let _ = tx.send(stream_event("error", &payload)).await;
+            }
+            Err(_) => {
+                let payload =
+                    serde_json::json!({ "error": "chat task ended without a result" }).to_string();
+                let _ = tx.send(stream_event("error", &payload)).await;
+            }
+        }
+    });
+    Ok(Sse::new(ReceiverStream::new(rx)))
 }
 
 async fn list_chat_threads(

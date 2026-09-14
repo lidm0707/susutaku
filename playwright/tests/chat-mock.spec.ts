@@ -13,6 +13,8 @@ const AGENT_NAME_PREFIX = "e2e-agent";
 const SANDBOX_AGENT_NAME = "e2e-sandbox-agent";
 const AGENT_OUTPUT_MARKER = "agent-run-ok";
 const KANBAN_CONTEXT = "[context: user is currently on the kanban page]";
+const TASK_OK_MARKER = "TASK-OK:";
+const TASK_CRON = "0 * * * *";
 
 test.skip(
   process.env.E2E_MOCK_MODEL !== "1",
@@ -66,6 +68,10 @@ async function selectAgent(page: import("@playwright/test").Page, name: string) 
     if (checked !== isTarget) await item.click();
   }
   await dialog.locator('button[title="choose agent(s)"]').click();
+  // The focus toggle is OFF by default (bare message); these specs assert the
+  // context-prefixed echo, so turn it on.
+  const focus = dialog.locator('button[aria-label="toggle page focus context"]');
+  if ((await focus.getAttribute("aria-pressed")) === "false") await focus.click();
 }
 
 async function openChatModal(page: import("@playwright/test").Page) {
@@ -143,6 +149,58 @@ test.describe("chat against the mock model (backend in container)", () => {
     expect(res.ok()).toBeTruthy();
     const body = (await res.json()) as { reply: string };
     expect(body.reply.startsWith(SUMMARY_MARKER)).toBe(true);
+  });
+
+  test("chat walks the do-task flow into a card (find-or-create, pipeline, routine)", async ({
+    page,
+    login,
+    request,
+  }) => {
+    const agentName = await seedChatAgent(request);
+    const dialog = await openChatModal(page);
+    await selectAgent(page, agentName);
+    const topic = `moon harvest ${Date.now()}`;
+    // Auto mode: the tool loop only runs when the mode allows tools.
+    await dialog.locator('select[title="web search mode"]').selectOption("auto");
+    await dialog.getByPlaceholder(/type a message/).fill(`please do task: ${topic}`);
+    await dialog.locator('form button[type="submit"]').click();
+
+    // The mock model walks BOARD_LIST -> CARD_FIND -> CARD_CREATE ->
+    // PIPELINE_CREATE -> CARD_LINK -> CARD_ROUTINE, one tool line per round.
+    const reply = page.locator(".bubble.assistant p", { hasText: TASK_OK_MARKER });
+    await expect(reply).toBeVisible({ timeout: CHAT_TIMEOUT_MS });
+
+    // The card exists exactly once, with a single-node agent pipeline + cron.
+    const token = await loginToken();
+    const headers = { Authorization: `Bearer ${token}` };
+    const workspaces = (await (await request.get(`${API}/api/workspaces`, { headers })).json()) as {
+      id: number;
+    }[];
+    const cards: { id: number; title: string; project_id: number | null; pipeline_id: number | null; cron: string | null }[] = [];
+    for (const ws of workspaces) {
+      const projects = (await (
+        await request.get(`${API}/api/workspaces/${ws.id}/projects`, { headers })
+      ).json()) as { id: number }[];
+      for (const p of projects) {
+        const list = (await (
+          await request.get(`${API}/api/kanban/cards?project_id=${p.id}`, { headers })
+        ).json()) as typeof cards;
+        cards.push(...list);
+      }
+    }
+    const mine = cards.filter((c) => c.title === topic);
+    expect(mine).toHaveLength(1);
+    expect(mine[0].pipeline_id).toBeTruthy();
+    expect(mine[0].cron).toBe(TASK_CRON);
+
+    // Saying the same task again must reuse the card, not duplicate it.
+    await dialog.getByPlaceholder(/type a message/).fill(`please do task: ${topic}`);
+    await dialog.locator('form button[type="submit"]').click();
+    await expect(page.locator(".bubble.assistant p", { hasText: TASK_OK_MARKER }).last()).toBeVisible({
+      timeout: CHAT_TIMEOUT_MS,
+    });
+    const again = cards.filter((c) => c.title === topic);
+    expect(again).toHaveLength(1);
   });
 
   test("an agent can be spawned and run inside that backend", async ({

@@ -61,6 +61,9 @@ pub enum ToolCall {
         spec: Option<String>,
     },
     BoardList,
+    CardFind {
+        query: String,
+    },
     Math(String),
     Git {
         op: GitOp,
@@ -96,6 +99,8 @@ const XML_CARD_ROUTINE: &str = "card_routine";
 const XML_CARD_LINK: &str = "card_link";
 const XML_PIPELINE_CREATE: &str = "pipeline_create";
 const XML_BOARD_LIST: &str = "board_list";
+const XML_CARD_FIND: &str = "card_find";
+const XML_CARD_FIND_ALIAS: &str = "find_card";
 const XML_MATH: &str = "math";
 const XML_MATH_ALIAS: &str = "geomath";
 const XML_GIT: &str = "git";
@@ -108,6 +113,7 @@ const TOOL_CARD_ROUTINE: &str = "CARD_ROUTINE";
 const TOOL_CARD_LINK: &str = "CARD_LINK";
 const TOOL_PIPELINE_CREATE: &str = "PIPELINE_CREATE";
 const TOOL_BOARD_LIST: &str = "BOARD_LIST";
+const TOOL_CARD_FIND: &str = "CARD_FIND";
 const TOOL_MATH: &str = "MATH";
 const TOOL_MATH_ALIAS: &str = "GEOMATH";
 const TOOL_GIT: &str = "GIT";
@@ -191,6 +197,9 @@ impl ToolCall {
                 })
             }
             TOOL_BOARD_LIST => Some(Self::BoardList),
+            TOOL_CARD_FIND if !arg.is_empty() => Some(Self::CardFind {
+                query: arg.to_string(),
+            }),
             TOOL_MATH | TOOL_MATH_ALIAS if !arg.is_empty() => Some(Self::Math(arg.to_string())),
             TOOL_GIT => Self::parse_git(arg),
             TOOL_LSP => Self::parse_lsp(arg),
@@ -247,6 +256,13 @@ impl ToolCall {
                 })
             }
             XML_BOARD_LIST => Some(Self::BoardList),
+            XML_CARD_FIND | XML_CARD_FIND_ALIAS => {
+                let query = p("query")?.trim().to_string();
+                if query.is_empty() {
+                    return None;
+                }
+                Some(Self::CardFind { query })
+            }
             XML_MATH | XML_MATH_ALIAS => {
                 let expr = p("expr")?.trim().to_string();
                 if expr.is_empty() {

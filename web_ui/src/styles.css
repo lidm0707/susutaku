@@ -4934,6 +4934,16 @@ select.agent-multi {
 }
 
 /* capscreen: annotated screenshots */
+.chat-modal-body form textarea.chat-input {
+  flex: 1;
+  resize: none;
+  max-height: 10rem;
+  overflow-y: auto;
+  align-self: center;
+}
+
+/* button.chat-capscreen specificity must beat .overlay-box button[type="button"] (0,2,1) */
+.overlay-box button.chat-capscreen,
 .chat-capscreen {
   width: 2rem;
   height: 2rem;
@@ -4946,9 +4956,17 @@ select.agent-multi {
   justify-content: center;
   cursor: pointer;
 }
+.overlay-box button.chat-capscreen.on,
 .chat-capscreen.on {
-  color: #f33;
-  border-color: #f33;
+  color: #ff5544;
+  border-color: #ff5544;
+  background: #3a1512;
+}
+.overlay-box button.chat-capscreen[aria-pressed="true"],
+.chat-capscreen[aria-pressed="true"] {
+  color: #ff5544;
+  border-color: #ff5544;
+  background: #3a1512;
 }
 .capscreen-actions {
   display: flex;

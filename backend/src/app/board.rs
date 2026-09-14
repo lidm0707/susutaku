@@ -39,6 +39,25 @@ impl BoardService {
 const FORBIDDEN: &str = "forbidden: editor role required";
 const CRON_HINT: &str = " (5-field cron, UTC, e.g. 0 */5 * * * for every 5 hours)";
 const EMPTY_SPEC: &str = r#"{"nodes":[],"links":[]}"#;
+const NO_CARDS_MATCH: &str = "no cards match ";
+const NO_PIPELINE: &str = "none";
+const NO_CRON: &str = "none";
+
+fn card_line(card: &kanban_rs::CardRow) -> String {
+    let cron = card.cron.as_deref().unwrap_or(NO_CRON);
+    let pipeline = card
+        .pipeline_id
+        .map(|p| p.to_string())
+        .unwrap_or_else(|| NO_PIPELINE.to_owned());
+    let project = card
+        .project_id
+        .map(|p| p.to_string())
+        .unwrap_or_else(|| "-".to_owned());
+    format!(
+        "card {} `{}` (project {}, pipeline {}, cron {})",
+        card.id, card.title, project, pipeline, cron
+    )
+}
 
 #[async_trait]
 impl BoardOps for BoardService {
@@ -104,50 +123,67 @@ impl BoardOps for BoardService {
                     None => Ok(format!("card {card_id} routine cleared")),
                 }
             }
-            BoardOp::Summary => {
-                let workspaces = self
-                    .store
-                    .list_workspaces()
-                    .await
-                    .map_err(|e| e.to_string())?;
-                let mut lines = Vec::new();
-                for ws in &workspaces {
-                    for project in self
-                        .store
-                        .list_projects(ws.id)
-                        .await
-                        .map_err(|e| e.to_string())?
-                    {
-                        lines.push(format!(
-                            "project {} `{}` (workspace {})",
-                            project.id, project.name, ws.id
-                        ));
-                    }
+            BoardOp::Summary | BoardOp::FindCards { .. } => {
+                if let BoardOp::Summary = req.op {
+                    return self.summary().await;
                 }
-                for pipeline in self
-                    .store
-                    .list_pipelines()
-                    .await
-                    .map_err(|e| e.to_string())?
-                {
-                    lines.push(format!("pipeline {} `{}`", pipeline.id, pipeline.name));
+                let BoardOp::FindCards { query } = &req.op else {
+                    unreachable!("matched above")
+                };
+                let query = query.trim().to_lowercase();
+                let cards = self.store.list(None).await.map_err(|e| e.to_string())?;
+                let hits: Vec<_> = cards
+                    .iter()
+                    .filter(|c| {
+                        c.title.to_lowercase().contains(&query)
+                            || c.description.to_lowercase().contains(&query)
+                    })
+                    .collect();
+                if hits.is_empty() {
+                    return Ok(format!("{NO_CARDS_MATCH}`{query}`"));
                 }
-                for card in self.store.list(None).await.map_err(|e| e.to_string())? {
-                    let cron = match &card.cron {
-                        Some(expr) => format!(", routine `{expr}`"),
-                        None => String::new(),
-                    };
-                    let project = match card.project_id {
-                        Some(p) => format!(" (project {p})"),
-                        None => String::new(),
-                    };
-                    lines.push(format!(
-                        "card {} `{}`{}{}",
-                        card.id, card.title, project, cron
-                    ));
-                }
-                Ok(lines.join("\n"))
+                Ok(hits
+                    .iter()
+                    .map(|c| card_line(c))
+                    .collect::<Vec<_>>()
+                    .join("\n"))
             }
         }
+    }
+}
+
+impl BoardService {
+    async fn summary(&self) -> Result<String, String> {
+        let workspaces = self
+            .store
+            .list_workspaces()
+            .await
+            .map_err(|e| e.to_string())?;
+        let mut lines = Vec::new();
+        for ws in &workspaces {
+            for project in self
+                .store
+                .list_projects(ws.id)
+                .await
+                .map_err(|e| e.to_string())?
+            {
+                lines.push(format!(
+                    "project {} `{}` (workspace {})",
+                    project.id, project.name, ws.id
+                ));
+            }
+        }
+        for pipeline in self
+            .store
+            .list_pipelines()
+            .await
+            .map_err(|e| e.to_string())?
+        {
+            lines.push(format!("pipeline {} `{}`", pipeline.id, pipeline.name));
+        }
+        for card in self.store.list(None).await.map_err(|e| e.to_string())? {
+            lines.push(card_line(&card));
+        }
+        Ok(lines.join("\n"))
     }
 }

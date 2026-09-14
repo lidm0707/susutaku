@@ -194,12 +194,6 @@ CREATE TABLE IF NOT EXISTS users (
 ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN NOT NULL DEFAULT FALSE;
 "#,
     r#"
-ALTER TABLE agent_settings ADD COLUMN IF NOT EXISTS allowed_tools TEXT[] NOT NULL DEFAULT '{}';
-"#,
-    r#"
-ALTER TABLE agent_settings ADD COLUMN IF NOT EXISTS receive_images BOOLEAN NOT NULL DEFAULT TRUE;
-"#,
-    r#"
 CREATE TABLE IF NOT EXISTS auth_sessions (
     token      TEXT PRIMARY KEY,
     user_id    BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -239,6 +233,12 @@ CREATE TABLE IF NOT EXISTS agent_settings (
     prompt  TEXT NOT NULL DEFAULT '',
     output  TEXT NOT NULL DEFAULT ''
 );
+"#,
+    r#"
+ALTER TABLE agent_settings ADD COLUMN IF NOT EXISTS allowed_tools TEXT[] NOT NULL DEFAULT '{}';
+"#,
+    r#"
+ALTER TABLE agent_settings ADD COLUMN IF NOT EXISTS receive_images BOOLEAN NOT NULL DEFAULT TRUE;
 "#,
     r#"
 CREATE TABLE IF NOT EXISTS skills (

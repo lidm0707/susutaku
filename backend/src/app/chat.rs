@@ -119,7 +119,11 @@ impl ChatUseCase {
             return ToolSet::all();
         };
         match self.agents.by_name(name).await {
-            Ok(Some(cfg)) => ToolSet::from_names(&cfg.allowed_tools).unwrap_or_default(),
+            Ok(Some(cfg)) => ToolSet::from_names(&cfg.allowed_tools).unwrap_or_else(|_| {
+                // stale/unknown tool names in the stored list must not mute
+                // the agent entirely — deny nothing, fail open
+                ToolSet::all()
+            }),
             _ => ToolSet::all(),
         }
     }
@@ -424,6 +428,9 @@ impl ChatUseCase {
                 cron: Some(cron.clone()),
             }),
             ToolCall::BoardList => Some(BoardOp::Summary),
+            ToolCall::CardFind { query } => Some(BoardOp::FindCards {
+                query: query.clone(),
+            }),
             _ => None,
         }
     }
@@ -431,7 +438,7 @@ impl ChatUseCase {
     /// Which permission kind this board toolcall needs.
     fn board_kind(call: &ToolCall) -> Option<ToolKind> {
         match call {
-            ToolCall::BoardList => Some(ToolKind::Board),
+            ToolCall::BoardList | ToolCall::CardFind { .. } => Some(ToolKind::Board),
             ToolCall::CardCreate { .. } | ToolCall::CardLink { .. } => Some(ToolKind::Card),
             ToolCall::PipelineCreate { .. } => Some(ToolKind::Pipeline),
             ToolCall::CardSchedule { .. } => Some(ToolKind::Routine),

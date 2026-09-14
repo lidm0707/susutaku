@@ -19,6 +19,8 @@ pub enum BoardOp {
     SetCron { card_id: i64, cron: Option<String> },
     /// Projects/pipelines/cards summary with ids.
     Summary,
+    /// Cards whose title or description contains the query (case-insensitive).
+    FindCards { query: String },
 }
 
 /// A board operation plus the caller's bearer token (authorization input).

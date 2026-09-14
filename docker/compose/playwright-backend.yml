@@ -52,9 +52,16 @@ services:
     security_opt:
       - seccomp=unconfined
       - apparmor=unconfined
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/8991'"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
     depends_on:
-      - postgres
-      - mock-model
+      postgres:
+        condition: service_started
+      mock-model:
+        condition: service_started
     restart: unless-stopped
 
   web:
@@ -63,8 +70,14 @@ services:
       dockerfile: docker/web/Dockerfile.web
     environment:
       BACKEND_URL: http://backend:8991
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1/"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     restart: unless-stopped
 
   playwright:
@@ -94,4 +107,7 @@ services:
       - ../../playwright/screenshots:/work/screenshots
       - ../../playwright/test-results:/work/test-results
     depends_on:
-      - web
+      web:
+        condition: service_healthy
+      backend:
+        condition: service_healthy

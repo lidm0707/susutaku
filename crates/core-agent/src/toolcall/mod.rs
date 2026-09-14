@@ -1,5 +1,6 @@
 pub mod fetch;
 pub mod git_in_sandbox;
+pub mod kanban;
 pub mod lsp;
 pub mod web_search;
 
@@ -30,6 +31,11 @@ pub enum Tool {
         line: u32,
         col: usize,
     },
+    CreateCard {
+        project_id: i64,
+        title: String,
+        description: Option<String>,
+    },
 }
 
 impl Tool {
@@ -38,6 +44,7 @@ impl Tool {
             Tool::Fetch { .. } => "fetch",
             Tool::WebSearch { .. } => "web_search",
             Tool::Definition { .. } => "definition",
+            Tool::CreateCard { .. } => "create_card",
         }
     }
 
@@ -54,6 +61,19 @@ impl Tool {
                 line,
                 col,
             } => lsp::definition(lsp::DEFAULT_ROOT, path, text, *line, *col),
+            Tool::CreateCard {
+                project_id,
+                title,
+                description,
+            } => kanban::create_card(
+                &kanban::base_url(),
+                kanban::token().as_deref(),
+                &kanban::NewCard {
+                    project_id: *project_id,
+                    title: title.clone(),
+                    description: description.clone(),
+                },
+            ),
         }
     }
 }
