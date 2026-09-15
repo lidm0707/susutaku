@@ -5459,3 +5459,186 @@ select.agent-multi {
   font-size: 0.8rem;
   color: #a8a8b3;
 }
+
+/* ---- routine modal (clean form layout) ---- */
+.routine-modal {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+.routine-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.routine-field > label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #8a8a96;
+}
+
+.routine-field input,
+.routine-field select,
+.routine-field textarea {
+  background: #1a1a22;
+  border: 1px solid #2a2a33;
+  border-radius: 8px;
+  color: #e6e6ea;
+  padding: 0.45rem 0.6rem;
+  font-size: 0.85rem;
+}
+
+.routine-field input:focus,
+.routine-field select:focus,
+.routine-field textarea:focus {
+  outline: none;
+  border-color: #4a4a5a;
+}
+
+.routine-field-schedule {
+  border: 1px solid #23232b;
+  border-radius: 10px;
+  padding: 0.6rem 0.7rem;
+  background: #16161d;
+}
+
+.routine-field-schedule .routine-editor {
+  margin: 0;
+}
+
+.routine-field-toggle {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.routine-field-toggle > label {
+  font-size: 0.8rem;
+  text-transform: none;
+  letter-spacing: 0;
+  color: #c8c8d0;
+}
+
+.routine-switch {
+  width: 36px;
+  height: 20px;
+  border-radius: 999px;
+  border: 1px solid #2a2a33;
+  background: #1a1a22;
+  cursor: pointer;
+  position: relative;
+  padding: 0;
+}
+
+.routine-switch-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #6f6f7a;
+  transition: left 0.15s ease, background 0.15s ease;
+}
+
+.routine-switch.on {
+  background: #2d4a3a;
+  border-color: #3a6a4f;
+}
+
+.routine-switch.on .routine-switch-knob {
+  left: 18px;
+  background: #7bd88f;
+}
+
+.routine-modal-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  padding-top: 0.4rem;
+  border-top: 1px solid #23232b;
+}
+
+.routine-modal-foot button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  border: 1px solid #2a2a33;
+  background: transparent;
+  color: #c8c8d0;
+  border-radius: 8px;
+  padding: 0.4rem 0.8rem;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.routine-modal-foot button.primary {
+  background: #2f6f4f;
+  border-color: #2f6f4f;
+  color: #f0fff5;
+}
+
+.routine-modal-foot button.primary:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.routine-modal-foot button:hover:not(:disabled) {
+  filter: brightness(1.15);
+}
+
+/* embedded schedule editor: tighter, no inner chrome */
+.routine-editor.embedded {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.routine-editor.embedded .cron-builder {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0;
+}
+
+/* ---- routines page empty state ---- */
+.routine-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  border: 1px dashed #2a2a33;
+  border-radius: 12px;
+  padding: 2.2rem 1rem;
+  margin-top: 0.8rem;
+  color: #8a8a96;
+}
+
+.routine-empty-title {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #c8c8d0;
+}
+
+.routine-empty-hint {
+  font-size: 0.78rem;
+  max-width: 40ch;
+  text-align: center;
+}
+
+.routine-empty .primary {
+  margin-top: 0.4rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  background: #2f6f4f;
+  border: none;
+  color: #f0fff5;
+  border-radius: 8px;
+  padding: 0.45rem 0.9rem;
+  font-size: 0.8rem;
+  cursor: pointer;
+}

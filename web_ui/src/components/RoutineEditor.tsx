@@ -160,16 +160,22 @@ function preset_of(expr: string): string {
   return CRON_PRESETS.some((p) => p.expr === expr) ? expr : CUSTOM;
 }
 
-/// Per-task routine editor: preset select + custom builder (every N
+/// Routine schedule editor: preset select + custom builder (every N
 /// minutes/hours/days from a start time, or a raw cron expression).
+/// `embedded` strips the chrome (label, clear/save buttons) and reports
+/// every valid change live via `on_change` — for use inside another form.
 export function RoutineEditor({
   cron,
   on_save,
   next_run,
+  embedded,
+  on_change,
 }: {
   cron: string | null;
   on_save: (cron: string | null) => void;
   next_run: number | null;
+  embedded?: boolean;
+  on_change?: (cron: string) => void;
 }) {
   const [cronPick, setCronPick] = useState(() => (cron ? preset_of(cron) : ""));
   const [routineUnit, setRoutineUnit] = useState<RoutineUnit>(RoutineUnit.Minutes);
@@ -188,6 +194,13 @@ export function RoutineEditor({
   const customCron = showRaw ? rawCron.trim() : builtCron;
   const customCronValid = cron_valid(customCron);
   const customPreview = describe_cron(customCron);
+
+  // Embedded mode: stream every valid custom expression up as it is edited.
+  useEffect(() => {
+    if (embedded && cronPick === CUSTOM && customCronValid && on_change) {
+      on_change(customCron);
+    }
+  }, [embedded, cronPick, customCron, customCronValid, on_change]);
 
   function pick(value: string) {
     if (value === "") {
@@ -212,12 +225,14 @@ export function RoutineEditor({
   const active_desc = cron ? describe_cron(cron) : null;
 
   return (
-    <div className="routine-editor">
-      <label className="modal-label" htmlFor="task-detail-schedule">
-        <Clock size={13} /> routine
-      </label>
+    <div className={embedded ? "routine-editor embedded" : "routine-editor"}>
+      {!embedded && (
+        <label className="modal-label" htmlFor="task-detail-schedule">
+          <Clock size={13} /> routine
+        </label>
+      )}
       <select
-        id="task-detail-schedule"
+        id={embedded ? "routine-schedule" : "task-detail-schedule"}
         className="task-select"
         value={cronPick}
         onChange={(e) => pick(e.target.value)}
@@ -240,7 +255,7 @@ export function RoutineEditor({
           )}
         </p>
       )}
-      {cron && (
+      {cron && !embedded && (
         <button type="button" className="task-run-inline" onClick={() => on_save(null)}>
           <Trash2 size={13} /> clear routine
         </button>
@@ -294,9 +309,11 @@ export function RoutineEditor({
           <p className={customCronValid ? "cron-preview" : "cron-preview invalid"}>
             <code>{customCron || "—"}</code> · {customPreview}
           </p>
-          <button type="submit" disabled={!customCronValid}>
-            <Play size={13} /> save routine
-          </button>
+          {!embedded && (
+            <button type="submit" disabled={!customCronValid}>
+              <Play size={13} /> save routine
+            </button>
+          )}
         </form>
       )}
     </div>

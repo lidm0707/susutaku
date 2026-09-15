@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Bot, CalendarClock, Pencil, Play, Plus, Trash2 } from "lucide-react";
+import { Bot, CalendarClock, Pencil, Play, Plus, Trash2, X } from "lucide-react";
 import {
   create_routine,
   delete_routine,
@@ -14,8 +14,7 @@ import {
 } from "../lib.js";
 import { Modal } from "../ui/Overlay.js";
 import { toast } from "../ui/Toast.js";
-import { use_projects } from "../components/ProjectContext.tsx";
-import { cron_label, RoutineEditor } from "../components/RoutineEditor.js";
+import { cron_valid, describe_cron, RoutineEditor } from "../components/RoutineEditor.js";
 
 interface Draft {
   id: number | null;
@@ -36,7 +35,6 @@ const EMPTY: Draft = {
 };
 
 export default function Routines() {
-  const { project_id } = use_projects();
   const [routines, setRoutines] = useState<Routine[] | null>(null);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -55,9 +53,11 @@ export default function Routines() {
       .catch(() => {});
   }, [refresh]);
 
+  const draft_valid = Boolean(draft && draft.name.trim() && cron_valid(draft.cron));
+
   async function save(e: React.FormEvent) {
     e.preventDefault();
-    if (!draft || !draft.name.trim() || !draft.cron.trim()) return;
+    if (!draft || !draft_valid) return;
     try {
       if (draft.id == null) {
         await create_routine(draft.name.trim(), draft.cron.trim(), draft.agent, draft.instruction.trim(), draft.enabled);
@@ -115,20 +115,26 @@ export default function Routines() {
           </button>
         </div>
       </header>
-      {project_id == null && (
-        <p className="empty">pick a project scope in the dock — routines are project-scoped for agents</p>
-      )}
       <section aria-label="routine list" className="routine-list">
         {routines === null && <p className="empty">loading…</p>}
         {routines !== null && routines.length === 0 && (
-          <p className="empty">no routines — a routine is recurring automation (cron), not a task</p>
+          <div className="routine-empty">
+            <CalendarClock size={28} />
+            <p className="routine-empty-title">no routines yet</p>
+            <p className="routine-empty-hint">
+              routines are recurring automation on a cron schedule — they never touch the task board
+            </p>
+            <button className="primary" onClick={() => setDraft({ ...EMPTY })}>
+              <Plus size={14} /> create the first routine
+            </button>
+          </div>
         )}
         {(routines ?? []).map((r) => (
           <article key={r.id} className={`routine-row ${r.enabled ? "" : "disabled"}`}>
             <div className="routine-main">
               <span className="routine-name">{r.name}</span>
               <span className="routine-cron" title={r.cron}>
-                <CalendarClock size={12} /> {cron_label(r.cron)}
+                <CalendarClock size={12} /> {describe_cron(r.cron)}
               </span>
               {r.agent && (
                 <span className="routine-agent">
@@ -166,56 +172,86 @@ export default function Routines() {
       </section>
 
       <Modal open={draft != null} title={draft?.id == null ? "new routine" : "edit routine"} on_close={() => setDraft(null)}>
-        <form className="modal-form" onSubmit={save}>
-          <label htmlFor="routine-name">name</label>
-          <input
-            id="routine-name"
-            autoFocus
-            value={draft?.name ?? ""}
-            onChange={(e) => setDraft((d) => (d ? { ...d, name: e.target.value } : d))}
-            placeholder="e.g. summarize rust news"
-            required
-          />
-          <label>schedule</label>
-          <RoutineEditor
-            cron={draft?.cron ?? null}
-            on_save={(expr) => setDraft((d) => (d ? { ...d, cron: expr || d.cron } : d))}
-            next_run={null}
-          />
-          <label htmlFor="routine-agent">agent</label>
-          <select
-            id="routine-agent"
-            value={draft?.agent ?? ""}
-            onChange={(e) => setDraft((d) => (d ? { ...d, agent: e.target.value } : d))}
-          >
-            <option value="">(default engine)</option>
-            {agents.map((a) => (
-              <option key={a.name} value={a.name}>{a.name}</option>
-            ))}
-          </select>
-          <label htmlFor="routine-instruction">instruction</label>
-          <textarea
-            id="routine-instruction"
-            rows={3}
-            value={draft?.instruction ?? ""}
-            onChange={(e) => setDraft((d) => (d ? { ...d, instruction: e.target.value } : d))}
-            placeholder="what this routine does each run…"
-          />
-          <label className="routine-enabled">
+        <form className="modal-form routine-modal" onSubmit={save}>
+          <div className="routine-field">
+            <label htmlFor="routine-name">name</label>
             <input
-              type="checkbox"
-              checked={draft?.enabled ?? true}
-              onChange={(e) => setDraft((d) => (d ? { ...d, enabled: e.target.checked } : d))}
-            />{" "}
-            enabled
-          </label>
-          <button type="submit">save routine</button>
+              id="routine-name"
+              autoFocus
+              value={draft?.name ?? ""}
+              onChange={(e) => setDraft((d) => (d ? { ...d, name: e.target.value } : d))}
+              placeholder="e.g. summarize rust news"
+              required
+            />
+          </div>
+
+          <div className="routine-field routine-field-schedule">
+            <label>schedule</label>
+            <RoutineEditor
+              cron={draft?.cron ?? null}
+              on_change={(cron) => setDraft((d) => (d ? { ...d, cron } : d))}
+              on_save={(cron) => setDraft((d) => (d ? { ...d, cron: cron ?? d.cron } : d))}
+              next_run={null}
+              embedded
+            />
+            <p className={draft && cron_valid(draft.cron) ? "cron-preview" : "cron-preview invalid"}>
+              <code>{draft?.cron || "—"}</code> · {draft ? describe_cron(draft.cron) : ""}
+            </p>
+          </div>
+
+          <div className="routine-field">
+            <label htmlFor="routine-agent">agent</label>
+            <select
+              id="routine-agent"
+              value={draft?.agent ?? ""}
+              onChange={(e) => setDraft((d) => (d ? { ...d, agent: e.target.value } : d))}
+            >
+              <option value="">(default engine)</option>
+              {agents.map((a) => (
+                <option key={a.name} value={a.name}>{a.name}</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="routine-field">
+            <label htmlFor="routine-instruction">instruction</label>
+            <textarea
+              id="routine-instruction"
+              rows={3}
+              value={draft?.instruction ?? ""}
+              onChange={(e) => setDraft((d) => (d ? { ...d, instruction: e.target.value } : d))}
+              placeholder="what this routine does each run…"
+            />
+          </div>
+
+          <div className="routine-field routine-field-toggle">
+            <label htmlFor="routine-enabled">enabled</label>
+            <button
+              id="routine-enabled"
+              type="button"
+              role="switch"
+              aria-checked={draft?.enabled ?? true}
+              className={`routine-switch ${draft?.enabled ?? true ? "on" : ""}`}
+              onClick={() => setDraft((d) => (d ? { ...d, enabled: !d.enabled } : d))}
+            >
+              <span className="routine-switch-knob" />
+            </button>
+          </div>
+
+          <footer className="routine-modal-foot">
+            <button type="button" onClick={() => setDraft(null)}>
+              <X size={13} /> cancel
+            </button>
+            <button type="submit" className="primary" disabled={!draft_valid}>
+              {draft?.id == null ? "create routine" : "save changes"}
+            </button>
+          </footer>
         </form>
       </Modal>
 
       <Modal open={runsFor != null} title={`runs — ${runsFor?.name ?? ""}`} on_close={() => setRunsFor(null)}>
         {runs === null && <p className="empty">loading…</p>}
-        {runs !== null && runs.length === 0 && <p className="empty">no runs yet</p>}
+        {runs !== null && runs.length === 0 && <p className="empty">no runs yet — press run now to try it</p>}
         {runs !== null && runs.length > 0 && (
           <div className="routine-runs">
             {runs.map((run) => (
