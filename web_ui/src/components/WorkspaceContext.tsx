@@ -13,6 +13,7 @@ const WorkspaceCtx = createContext<WorkspaceCtxValue | null>(null);
 export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [workspaces, set_workspaces] = useState<Workspace[]>([]);
   const [ws_id, set_ws_id] = useState<number | null>(null);
+  const [has_token, set_has_token] = useState(() => Boolean(get_token()));
 
   async function reload() {
     if (!get_token()) return;
@@ -23,7 +24,18 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     reload().catch(() => {});
-  }, []);
+    // Login is an SPA navigation: the provider mounts before the token
+    // exists. Poll until it appears, then fetch once.
+    if (has_token) return;
+    const timer = setInterval(() => {
+      if (get_token()) {
+        clearInterval(timer);
+        set_has_token(true);
+        reload().catch(() => {});
+      }
+    }, 500);
+    return () => clearInterval(timer);
+  }, [has_token]);
 
   return (
     <WorkspaceCtx.Provider value={{ workspaces, ws_id, pick: set_ws_id, reload }}>
