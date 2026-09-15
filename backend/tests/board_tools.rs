@@ -8,24 +8,32 @@ fn board_tool_permissions_are_per_kind() {
     let set = ToolSet::from_names(&["board".to_string()]).unwrap();
     assert!(set.allows(ToolKind::Board));
     assert!(!set.allows(ToolKind::Card));
-    assert!(!set.allows(ToolKind::Pipeline));
     assert!(!set.allows(ToolKind::Routine));
 
     let set = ToolSet::from_names(&[
         "card".to_string(),
-        "pipeline".to_string(),
         "routine".to_string(),
     ])
     .unwrap();
     assert!(!set.allows(ToolKind::Board));
     assert!(set.allows(ToolKind::Card));
-    assert!(set.allows(ToolKind::Pipeline));
     assert!(set.allows(ToolKind::Routine));
     assert!(set.any_board());
 
     let set = ToolSet::from_names(&["search".to_string()]).unwrap();
     assert!(!set.any_board());
-    assert!(ToolSet::from_names(&["kanban".to_string()]).is_err());
+    assert!(ToolSet::from_names(&["task".to_string()]).is_err());
+}
+
+#[test]
+fn legacy_pipeline_tool_name_is_ignored() {
+    let set = ToolSet::from_names(&[
+        "card".to_string(),
+        "pipeline".to_string(),
+    ])
+    .unwrap();
+    assert!(set.allows(ToolKind::Card));
+    assert!(!set.allows(ToolKind::Routine));
 }
 
 #[test]
@@ -33,42 +41,6 @@ fn parses_board_tool_calls() {
     assert_eq!(
         ToolCall::parse("TOOL: BOARD_LIST"),
         Some(ToolCall::BoardList)
-    );
-    assert_eq!(
-        ToolCall::parse("</think>\nTOOL: PIPELINE_CREATE nightly-report"),
-        Some(ToolCall::PipelineCreate {
-            name: "nightly-report".into(),
-            spec: None
-        })
-    );
-    assert_eq!(
-        ToolCall::parse(
-            r#"TOOL: PIPELINE_CREATE nightly {"nodes":[{"id":"a","stage":"search","params":{"query":"trump"}}],"links":[]}"#
-        ),
-        Some(ToolCall::PipelineCreate {
-            name: "nightly".into(),
-            spec: Some(
-                r#"{"nodes":[{"id":"a","stage":"search","params":{"query":"trump"}}],"links":[]}"#
-                    .into()
-            )
-        })
-    );
-    assert_eq!(ToolCall::parse("TOOL: PIPELINE_CREATE"), None);
-    assert_eq!(
-        ToolCall::parse("TOOL: PIPELINE_CREATE nightly "),
-        Some(ToolCall::PipelineCreate {
-            name: "nightly".into(),
-            spec: None
-        })
-    );
-    assert_eq!(
-        ToolCall::parse(
-            "<invoke name=\"pipeline_create\"><parameter name=\"name\">nightly</parameter><parameter name=\"spec\">   </parameter></invoke>"
-        ),
-        Some(ToolCall::PipelineCreate {
-            name: "nightly".into(),
-            spec: None
-        })
     );
     assert_eq!(
         ToolCall::parse("TOOL: CARD_CREATE 3 run backups"),
@@ -89,18 +61,33 @@ fn parses_board_tool_calls() {
         })
     );
     assert_eq!(
+        ToolCall::parse("TOOL: CARD_AGENT 7 nightly"),
+        Some(ToolCall::CardAgent {
+            card_id: 7,
+            agent: "nightly".into()
+        })
+    );
+    assert_eq!(ToolCall::parse("TOOL: CARD_AGENT 7"), None);
+    assert_eq!(ToolCall::parse("TOOL: CARD_AGENT 7  "), None);
+    assert_eq!(
+        ToolCall::parse("TOOL: CARD_IMAGE 7 debian-slim"),
+        Some(ToolCall::CardImage {
+            card_id: 7,
+            image: Some("debian-slim".into())
+        })
+    );
+    assert_eq!(
+        ToolCall::parse("TOOL: CARD_IMAGE 7 clear"),
+        Some(ToolCall::CardImage {
+            card_id: 7,
+            image: None
+        })
+    );
+    assert_eq!(
         ToolCall::parse("TOOL: CARD_ROUTINE 7 0 */5 * * *"),
         Some(ToolCall::CardSchedule {
             card_id: 7,
             cron: "0 */5 * * *".into()
-        })
-    );
-    assert_eq!(
-        ToolCall::parse("TOOL: CARD_LINK 7 2"),
-        Some(ToolCall::CardLink {
-            card_id: 7,
-
-            pipeline_id: 2
         })
     );
 
@@ -129,11 +116,31 @@ fn parses_board_tool_calls() {
     );
     assert_eq!(ToolCall::parse("TOOL: CARD_RUN"), None);
     assert_eq!(ToolCall::parse("TOOL: CARD_ROUTINE_CLEAR x"), None);
+    assert_eq!(ToolCall::parse("TOOL: PIPELINE_CREATE nightly"), None);
+    assert_eq!(ToolCall::parse("TOOL: CARD_LINK 7 2"), None);
     assert_eq!(
         ToolCall::parse(
             "<invoke name=\"card_run\"><parameter name=\"card_id\">6</parameter></invoke>"
         ),
         Some(ToolCall::CardRun { card_id: 6 })
+    );
+    assert_eq!(
+        ToolCall::parse(
+            "<invoke name=\"card_agent\"><parameter name=\"card_id\">6</parameter><parameter name=\"agent\">nightly</parameter></invoke>"
+        ),
+        Some(ToolCall::CardAgent {
+            card_id: 6,
+            agent: "nightly".into()
+        })
+    );
+    assert_eq!(
+        ToolCall::parse(
+            "<invoke name=\"card_image\"><parameter name=\"card_id\">6</parameter><parameter name=\"image\">debian-slim</parameter></invoke>"
+        ),
+        Some(ToolCall::CardImage {
+            card_id: 6,
+            image: Some("debian-slim".into())
+        })
     );
     assert_eq!(
         ToolCall::parse(
@@ -180,13 +187,8 @@ fn parses_xml_invoke_fallback() {
         Some(ToolCall::BoardList)
     );
     assert_eq!(
-        ToolCall::parse(
-            "<invoke name=\"pipeline_create\"><parameter name=\"name\">nightly</parameter></invoke>"
-        ),
-        Some(ToolCall::PipelineCreate {
-            name: "nightly".into(),
-            spec: None
-        })
+        ToolCall::parse("<invoke name=\"pipeline_create\"><parameter name=\"name\">nightly</parameter></invoke>"),
+        None
     );
     assert_eq!(
         ToolCall::parse(
@@ -213,8 +215,8 @@ impl BoardOps for FakeBoard {
             return Err("forbidden: editor role required".into());
         }
         match req.op {
-            BoardOp::CreatePipeline { name, spec } => {
-                Ok(format!("pipeline 1 created: {name} spec={spec:?}"))
+            BoardOp::AssignAgent { card_id, agent } => {
+                Ok(format!("agent {agent} assigned to card {card_id}"))
             }
             _ => Ok("ok".into()),
         }
@@ -239,11 +241,11 @@ async fn board_port_executes_with_token() {
     let out = board
         .exec(BoardRequest {
             token: Some("tok".into()),
-            op: BoardOp::CreatePipeline {
-                name: "nightly".into(),
-                spec: None,
+            op: BoardOp::AssignAgent {
+                card_id: 3,
+                agent: "nightly".into(),
             },
         })
         .await;
-    assert_eq!(out.unwrap(), "pipeline 1 created: nightly spec=None");
+    assert_eq!(out.unwrap(), "agent nightly assigned to card 3");
 }

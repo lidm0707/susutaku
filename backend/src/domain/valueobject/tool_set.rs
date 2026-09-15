@@ -8,12 +8,12 @@ pub enum ToolKind {
     Shell,
     Board,
     Card,
-    Pipeline,
     Routine,
     Coding,
     Math,
     Git,
     Lsp,
+    Agent,
 }
 
 pub const TOOL_KIND_NAMES: [(&str, ToolKind); 11] = [
@@ -22,13 +22,17 @@ pub const TOOL_KIND_NAMES: [(&str, ToolKind); 11] = [
     ("shell", ToolKind::Shell),
     ("board", ToolKind::Board),
     ("card", ToolKind::Card),
-    ("pipeline", ToolKind::Pipeline),
     ("routine", ToolKind::Routine),
     ("coding", ToolKind::Coding),
     ("math", ToolKind::Math),
     ("git", ToolKind::Git),
     ("lsp", ToolKind::Lsp),
+    ("agent", ToolKind::Agent),
 ];
+
+/// Legacy allow-list entry from the removed pipeline feature; parsed but
+/// grants nothing so old agent rows keep loading.
+const LEGACY_TOOL_NAMES: [&str; 1] = ["pipeline"];
 
 /// Allow-list of tools for one agent. An empty allow-list means every tool
 /// is permitted; a non-empty list permits only the listed kinds.
@@ -39,12 +43,12 @@ pub struct ToolSet {
     pub shell: bool,
     pub board: bool,
     pub card: bool,
-    pub pipeline: bool,
     pub routine: bool,
     pub coding: bool,
     pub math: bool,
     pub git: bool,
     pub lsp: bool,
+    pub agent: bool,
 }
 
 impl ToolSet {
@@ -56,12 +60,12 @@ impl ToolSet {
             shell: true,
             board: true,
             card: true,
-            pipeline: true,
             routine: true,
             coding: true,
             math: true,
             git: true,
             lsp: true,
+            agent: true,
         }
     }
 
@@ -74,12 +78,15 @@ impl ToolSet {
         let mut set = Self::default();
         for name in names {
             let name = name.trim();
+            if LEGACY_TOOL_NAMES.contains(&name) {
+                continue;
+            }
             let (_, kind) = TOOL_KIND_NAMES
                 .iter()
                 .find(|(n, _)| *n == name)
                 .ok_or_else(|| {
                     format!(
-                        "unknown tool {name:?} (use search|fetch|shell|board|card|pipeline|routine|coding|math|git|lsp)"
+                        "unknown tool {name:?} (use search|fetch|shell|board|card|routine|coding|math|git|lsp|agent)"
                     )
                 })?;
             match kind {
@@ -88,12 +95,12 @@ impl ToolSet {
                 ToolKind::Shell => set.shell = true,
                 ToolKind::Board => set.board = true,
                 ToolKind::Card => set.card = true,
-                ToolKind::Pipeline => set.pipeline = true,
                 ToolKind::Routine => set.routine = true,
                 ToolKind::Coding => set.coding = true,
                 ToolKind::Math => set.math = true,
                 ToolKind::Git => set.git = true,
                 ToolKind::Lsp => set.lsp = true,
+                ToolKind::Agent => set.agent = true,
             }
         }
         Ok(set)
@@ -106,18 +113,18 @@ impl ToolSet {
             ToolKind::Shell => self.shell,
             ToolKind::Board => self.board,
             ToolKind::Card => self.card,
-            ToolKind::Pipeline => self.pipeline,
             ToolKind::Routine => self.routine,
             ToolKind::Coding => self.coding,
             ToolKind::Math => self.math,
             ToolKind::Git => self.git,
             ToolKind::Lsp => self.lsp,
+            ToolKind::Agent => self.agent,
         }
     }
 
-    /// Any kanban-family permission (board, card, pipeline, routine).
+    /// Any task-family permission (board, card, routine).
     pub const fn any_board(&self) -> bool {
-        self.board || self.card || self.pipeline || self.routine
+        self.board || self.card || self.routine
     }
 
     /// Copy without the coding tool (used when the work tree has no git

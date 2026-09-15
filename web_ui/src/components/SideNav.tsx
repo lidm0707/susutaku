@@ -4,19 +4,17 @@ import {
   Activity,
   Bot,
   Check,
-  CircleDot,
   CircleUserRound,
-  Clock,
+  FileDiff,
+  Inbox,
   KanbanSquare,
   KeyRound,
   LogOut,
   Monitor,
   Settings,
-  Workflow,
   MessageSquareText,
   Paperclip,
   Gauge,
-  GitPullRequest,
 } from "lucide-react";
 import { use_workspaces } from "./WorkspaceContext.tsx";
 import {
@@ -41,12 +39,10 @@ import { use_projects } from "./ProjectContext.tsx";
 import QuotaBoard from "./QuotaBoard.tsx";
 
 const ITEMS = [
-  { to: "/kanban", title: "kanban", Icon: KanbanSquare },
-  { to: "/pipelines", title: "pipelines", Icon: Workflow },
-  { to: "/routine", title: "routine", Icon: Clock },
+  { to: "/task", title: "task", Icon: KanbanSquare },
   { to: "/attachments", title: "attachments", Icon: Paperclip },
   { to: "/agents", title: "agents", Icon: Bot },
-  { to: "/review", title: "review", Icon: GitPullRequest },
+  { to: "/review", title: "review", Icon: FileDiff },
   { to: "/settings", title: "settings", Icon: Settings },
 ];
 
@@ -162,15 +158,6 @@ export default function SideNav({ on_chat, shifted }: { on_chat: () => void; shi
       <div className="dock-out">
         <button
           type="button"
-          className="chat-dock-btn title-circle-btn"
-          onClick={() => nav("/review")}
-          title="review agent work (work tree · git actions)"
-          aria-label="review agent work"
-        >
-          <CircleDot size={16} />
-        </button>
-        <button
-          type="button"
           className={`chat-dock-btn quota-dock-btn ${quota_open ? "open" : ""}`}
           onClick={() => set_quota_open((v) => !v)}
           title="quota board"
@@ -206,11 +193,11 @@ export default function SideNav({ on_chat, shifted }: { on_chat: () => void; shi
           <button
             className={`dock-profile-btn ${outputs_open ? "open" : ""}`}
             onClick={() => set_outputs_open((v) => !v)}
-            title="agents"
+            title="agent outputs"
             aria-haspopup="dialog"
             aria-expanded={outputs_open}
           >
-            <GitPullRequest size={16} />
+            <Inbox size={16} />
             <span className="dock-label">outputs</span>
           </button>
         </div>

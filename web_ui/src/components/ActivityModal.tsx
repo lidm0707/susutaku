@@ -10,7 +10,7 @@ import { Modal } from "../ui/Overlay.js";
 
 const POLL_TICK_MS = 5000;
 
-const RUN_MSG_RE = /^started pipeline run for task (\d+)$/;
+const RUN_MSG_RE = /^started (?:pipeline |agent )run for task (\d+)$/;
 
 export function run_task_id(message: string): number | null {
   const m = RUN_MSG_RE.exec(message.trim());
@@ -51,7 +51,7 @@ function RunDetail({ task_id }: { task_id: number }) {
       {!error && run && (
         <>
           <p className="agent-logs-result">
-            {run.pipeline_name} · {run.status} · finished {run.finished_at}
+            {agent ?? "run"} · {run.status} · finished {run.finished_at}
           </p>
           {run.stages.length === 0 ? (
             <p className="empty">no stages recorded</p>

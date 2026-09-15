@@ -12,7 +12,7 @@ const CHAT_TIMEOUT_MS = 20_000;
 const AGENT_NAME_PREFIX = "e2e-agent";
 const SANDBOX_AGENT_NAME = "e2e-sandbox-agent";
 const AGENT_OUTPUT_MARKER = "agent-run-ok";
-const KANBAN_CONTEXT = "[context: user is currently on the kanban page]";
+const TASK_CONTEXT = "[context: user is currently on the task page]";
 const TASK_OK_MARKER = "TASK-OK:";
 const TASK_CRON = "0 * * * *";
 
@@ -75,7 +75,7 @@ async function selectAgent(page: import("@playwright/test").Page, name: string) 
 }
 
 async function openChatModal(page: import("@playwright/test").Page) {
-  await page.goto("/kanban");
+  await page.goto("/task");
   await page.click("button[aria-label='open chat']");
   const dialog = page.locator('[role="dialog"]');
   await expect(dialog).toBeVisible();
@@ -106,7 +106,7 @@ test.describe("chat against the mock model (backend in container)", () => {
     await dialog.locator('form button[type="submit"]').click();
 
     const reply = page.locator(".bubble.assistant p", {
-      hasText: `echo: ${KANBAN_CONTEXT}`,
+      hasText: `echo: ${TASK_CONTEXT}`,
     });
     await expect(reply).toBeVisible({ timeout: CHAT_TIMEOUT_MS });
   });
@@ -151,7 +151,7 @@ test.describe("chat against the mock model (backend in container)", () => {
     expect(body.reply.startsWith(SUMMARY_MARKER)).toBe(true);
   });
 
-  test("chat walks the do-task flow into a card (find-or-create, pipeline, routine)", async ({
+  test("chat walks the do-task flow into a card (find-or-create, agent, routine)", async ({
     page,
     login,
     request,
@@ -166,31 +166,30 @@ test.describe("chat against the mock model (backend in container)", () => {
     await dialog.locator('form button[type="submit"]').click();
 
     // The mock model walks BOARD_LIST -> CARD_FIND -> CARD_CREATE ->
-    // PIPELINE_CREATE -> CARD_LINK -> CARD_ROUTINE, one tool line per round.
+    // CARD_AGENT -> CARD_ROUTINE, one tool line per round.
     const reply = page.locator(".bubble.assistant p", { hasText: TASK_OK_MARKER });
     await expect(reply).toBeVisible({ timeout: CHAT_TIMEOUT_MS });
 
-    // The card exists exactly once, with a single-node agent pipeline + cron.
+    // The card exists exactly once, with an assigned agent + cron.
     const token = await loginToken();
     const headers = { Authorization: `Bearer ${token}` };
     const workspaces = (await (await request.get(`${API}/api/workspaces`, { headers })).json()) as {
       id: number;
     }[];
-    const cards: { id: number; title: string; project_id: number | null; pipeline_id: number | null; cron: string | null }[] = [];
+    const cards: { id: number; title: string; project_id: number | null; cron: string | null }[] = [];
     for (const ws of workspaces) {
       const projects = (await (
         await request.get(`${API}/api/workspaces/${ws.id}/projects`, { headers })
       ).json()) as { id: number }[];
       for (const p of projects) {
         const list = (await (
-          await request.get(`${API}/api/kanban/cards?project_id=${p.id}`, { headers })
+          await request.get(`${API}/api/task/cards?project_id=${p.id}`, { headers })
         ).json()) as typeof cards;
         cards.push(...list);
       }
     }
     const mine = cards.filter((c) => c.title === topic);
     expect(mine).toHaveLength(1);
-    expect(mine[0].pipeline_id).toBeTruthy();
     expect(mine[0].cron).toBe(TASK_CRON);
 
     // Saying the same task again must reuse the card, not duplicate it.

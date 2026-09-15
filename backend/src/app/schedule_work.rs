@@ -9,7 +9,7 @@ use serde::Serialize;
 use utoipa::ToSchema;
 use work::services::cron::Cron;
 
-use super::kanban::KanbanApp;
+use super::task::TaskApp;
 use crate::port::outbound::Inference;
 
 pub const TICK_SECS: u64 = 30;
@@ -61,7 +61,7 @@ pub const SCHEDULE_LOCK: &str = "schedule state lock";
 
 /// One scheduler pass without spawning a task; used by tests and spawn.
 pub async fn run_once(
-    app: &KanbanApp,
+    app: &TaskApp,
     engine: Option<&Arc<dyn Inference>>,
     handle: &ScheduleHandle,
 ) {
@@ -69,7 +69,7 @@ pub async fn run_once(
 }
 
 /// Spawns the background ticker; returns the shared inspection handle.
-pub fn spawn(app: Arc<KanbanApp>, engine: Option<Arc<dyn Inference>>) -> ScheduleHandle {
+pub fn spawn(app: Arc<TaskApp>, engine: Option<Arc<dyn Inference>>) -> ScheduleHandle {
     let handle = ScheduleHandle::new();
     let state = Arc::clone(&handle.state);
     tokio::spawn(async move {
@@ -90,7 +90,7 @@ pub fn unix_now() -> u64 {
 }
 
 /// Due decisions keep the lock scope tiny; pipeline runs happen unlocked.
-async fn run_due(app: &KanbanApp, engine: Option<&Arc<dyn Inference>>, state: &Arc<RwLock<State>>) {
+async fn run_due(app: &TaskApp, engine: Option<&Arc<dyn Inference>>, state: &Arc<RwLock<State>>) {
     let now = unix_now();
     let cards = app.cards.list(None).await.unwrap_or_default();
     let scheduled: HashSet<i64> = cards
@@ -118,18 +118,13 @@ async fn run_due(app: &KanbanApp, engine: Option<&Arc<dyn Inference>>, state: &A
         if now < due {
             continue;
         }
-        let next = if super::pipeline_run::run_card_pipeline(
-            app,
-            engine.cloned(),
-            id,
-            kanban_rs::TRIGGER_CRON,
-        )
-        .await
-        .is_ok()
+        let next = if super::card_run::run_card(app, engine.cloned(), id, task_rs::TRIGGER_CRON)
+            .await
+            .is_ok()
         {
             cron.next_after(now)
         } else {
-            // retry a broken pipeline on the next tick
+            // retry a broken run on the next tick
             now + TICK_SECS
         };
         state.write().expect(SCHEDULE_LOCK).next.insert(id, next);

@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use kanban_rs::{AgentState, CardRow, RunRecordNew, RunRecordRow, StoreError};
+use task_rs::{AgentState, CardRow, RunRecordNew, RunRecordRow, StoreError};
 
 use crate::domain::{CardMove, CardPatch, NewCard};
 use crate::port::outbound::CardRepo;
@@ -71,15 +71,15 @@ impl CardService {
         self.repo.card_runs(card_id).await
     }
 
-    pub async fn set_pipeline(
-        &self,
-        card_id: i64,
-        pipeline_id: Option<i64>,
-    ) -> Result<(), StoreError> {
-        self.repo.set_pipeline(card_id, pipeline_id).await
-    }
-
     pub async fn set_cron(&self, card_id: i64, cron: Option<String>) -> Result<(), StoreError> {
         self.repo.set_cron(card_id, cron).await
+    }
+
+    pub async fn set_card_image(
+        &self,
+        card_id: i64,
+        image: Option<&str>,
+    ) -> Result<(), StoreError> {
+        self.repo.set_card_image(card_id, image).await
     }
 }

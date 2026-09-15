@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use kanban_rs::{AgentConfigRow, StoreError};
+use task_rs::{AgentConfigRow, StoreError};
 
 use crate::domain::AgentConfigDraft;
 use crate::port::outbound::AgentConfigRepo;

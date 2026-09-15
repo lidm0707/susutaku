@@ -7,16 +7,15 @@ import { API, loginToken } from "./helpers";
 // for manual UX review.
 const PAGES = [
   { path: "/", name: "login", auth: false },
-  // /chat no longer exists as a page (redirects to /kanban); chat is the
+  // /chat no longer exists as a page (redirects to /task); chat is the
   // global ChatModal, covered functionally in chat-modal.spec.ts.
-  { path: "/kanban", name: "kanban", auth: true },
-  { path: "/pipelines", name: "pipelines", auth: true },
+  { path: "/task", name: "task", auth: true },
   { path: "/prompts", name: "prompts", auth: true },
   { path: "/settings", name: "settings", auth: true },
 ];
 
 // The e2e DB persists across runs (E2E_SKIP_DB_LIFECYCLE=1); cards left by
-// other specs (walkthrough, kanban) would shift the board and break the
+// other specs (walkthrough, task) would shift the board and break the
 // baseline. Clear them so the snapshot only shows the page chrome.
 async function clearCards() {
   const token = await loginToken();
@@ -30,10 +29,10 @@ async function clearCards() {
     ).json()) as { id: number }[];
     for (const p of projects) {
       const cards = (await (
-        await fetch(`${API}/api/kanban/cards?project_id=${p.id}`, { headers })
+        await fetch(`${API}/api/task/cards?project_id=${p.id}`, { headers })
       ).json()) as { id: number }[];
       for (const c of cards) {
-        await fetch(`${API}/api/kanban/cards/${c.id}`, {
+        await fetch(`${API}/api/task/cards/${c.id}`, {
           method: "DELETE",
           headers,
         });
@@ -48,7 +47,7 @@ for (const { path, name, auth } of PAGES) {
       // Fixture logged us in; use a fresh context for the logged-out login page.
       await page.evaluate(() => localStorage.removeItem("susutaku_token"));
     }
-    if (name === "kanban") await clearCards();
+    if (name === "task") await clearCards();
     await page.goto(path);
     await page.waitForLoadState("networkidle");
     await page.waitForTimeout(300); // settle animations

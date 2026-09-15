@@ -1,10 +1,34 @@
 import { useEffect, useState } from "react";
-import { GitCommitHorizontal, GitPullRequestArrow, Upload, User } from "lucide-react";
-import { Button, Field, TextArea, TextInput } from "../ui/controls.js";
+import { FileDiff, GitCommitHorizontal, GitPullRequestArrow, RefreshCw, Upload, User } from "lucide-react";
+import { Button, Field, TextInput } from "../ui/controls.js";
+import { Modal } from "../ui/Overlay.js";
 import { use_projects } from "../components/ProjectContext.js";
-import { agent_git, fetch_agents, fetch_manager_agents, type ManagerAgent } from "../lib.js";
+import { agent_git, fetch_agents, fetch_manager_agents, type AgentGitBody, type ManagerAgent } from "../lib.js";
+import DiffView, { DiffFileList, DiffStats, type DiffFile } from "../components/DiffView.js";
 
 const TASK_COMMIT_PREFIX = "agent task: ";
+const NO_CHANGES = "(no changes)";
+
+// merge flow steps, shown so the commit → push → pr order is obvious
+const FLOW_STEPS = [
+  "1. commit — save the changes inside the agent's work tree",
+  "2. push — upload the branch to the remote",
+  "3. open pr — request merging that branch into main",
+] as const;
+
+type ActionKind = "commit" | "push" | "pr";
+
+const ACTION_LABEL: Record<ActionKind, string> = {
+  commit: "commit",
+  push: "push",
+  pr: "open pr",
+};
+
+const ACTION_HINT: Record<ActionKind, string> = {
+  commit: "saves all changes in the agent's work tree as one commit",
+  push: "uploads the branch to the remote — commit first",
+  pr: "opens a pull request to merge this branch into main",
+};
 
 function prefill(name: string) {
   return {
@@ -24,6 +48,9 @@ export default function Review() {
   const [message, setMessage] = useState("");
   const [branch, setBranch] = useState("");
   const [title, setTitle] = useState("");
+  const [action, setAction] = useState<ActionKind | null>(null);
+  const [file, setFile] = useState<DiffFile | null>(null);
+  const [fullDiff, setFullDiff] = useState(false);
   const { project_id } = use_projects();
   const projectId = project_id ?? undefined;
 
@@ -62,7 +89,7 @@ export default function Review() {
         agent_git(agent, { op: "diff" }, projectId),
       ]);
       setStatus(st.trim());
-      setDiff(d.trim() || "(no changes)");
+      setDiff(d.trim() || NO_CHANGES);
       // the first op auto-spawns the slot — pick up its work tree
       fetch_manager_agents()
         .then((rows) => setAgents((cur) => {
@@ -102,7 +129,21 @@ export default function Review() {
     }
   }
 
+  async function run_action() {
+    if (!action) return;
+    const body: AgentGitBody =
+      action === "commit" ? { op: "commit", message } :
+      action === "push" ? { op: "push", branch: branch.trim() } :
+      { op: "pr", title: title.trim() };
+    setAction(null);
+    await act(body);
+  }
+
   const clean = status.includes("clean");
+  const dirty = Boolean(status) && !clean;
+
+  const action_value = action === "commit" ? message : action === "push" ? branch : title;
+  const set_action_value = action === "commit" ? setMessage : action === "push" ? setBranch : setTitle;
 
   return (
     <main className="chat review-page">
@@ -111,7 +152,7 @@ export default function Review() {
         <span className="sub">{agents.length} agent{agents.length === 1 ? "" : "s"}</span>
       </header>
       <div className="review-grid">
-        <section className="review-left" aria-label="work tree">
+        <section className="review-left" aria-label="changes">
           <nav className="review-agent-list">
             {agents.length === 0 && <p className="empty">no agents — create one on the agents page</p>}
             {agents.map((a) => (
@@ -131,36 +172,108 @@ export default function Review() {
               work tree: <code title={info.work_tree}>{info.work_tree}</code>
             </p>
           )}
-          <Field label="status" icon={<GitCommitHorizontal size={12} />}>
-            <TextArea readOnly value={status || "…"} rows={2} spellCheck={false} />
-          </Field>
-          <Field label="diff" icon={<GitCommitHorizontal size={12} />}>
-            <TextArea readOnly value={diff} rows={16} spellCheck={false} />
-          </Field>
+          <div className="review-diff-panel">
+            <div className="review-diff-head">
+              <span className="review-diff-title"><FileDiff size={14} /> changes</span>
+              {diff && diff !== NO_CHANGES
+                ? <DiffStats diff={diff} />
+                : <span className="diff-stats">{dirty ? "untracked changes only" : "no changes"}</span>}
+              <span className={`review-badge ${clean ? "ok" : dirty ? "dirty" : ""}`}>
+                {clean ? "clean" : dirty ? "dirty" : "…"}
+              </span>
+              <button
+                type="button"
+                className="review-diff-open"
+                onClick={() => refresh().catch(() => {})}
+                disabled={busy}
+                title="re-read status and diff from the work tree"
+              >
+                <RefreshCw size={12} /> refresh
+              </button>
+              {diff && diff !== NO_CHANGES && (
+                <button type="button" className="review-diff-open" onClick={() => setFullDiff(true)}>
+                  view full diff
+                </button>
+              )}
+            </div>
+            {diff && diff !== NO_CHANGES ? (
+              <DiffFileList diff={diff} on_pick={setFile} />
+            ) : (
+              <p className="review-diff-none">
+                {busy ? "loading…" : !status
+                  ? "…"
+                  : info && info.runs === 0
+                    ? "this agent has 0 runs — nothing was ever written to its work tree. work shown in chat threads does not appear here; run the agent first."
+                    : clean
+                      ? "nothing to review — work tree is clean"
+                      : "no tracked changes"}
+              </p>
+            )}
+            {dirty && (
+              <button type="button" className="review-status-link" onClick={() => setFullDiff(true)}>
+                show git status
+              </button>
+            )}
+          </div>
         </section>
         <section className="review-right" aria-label="actions">
-          <Field label="commit message" icon={<GitCommitHorizontal size={12} />}>
-            <TextInput value={message} onChange={(e) => setMessage(e.target.value)} />
-          </Field>
-          <Button variant="primary" disabled={busy || !agent} onClick={() => act({ op: "commit", message })}>
-            <GitCommitHorizontal size={14} /> commit
-          </Button>
-          <Field label="branch to push" icon={<Upload size={12} />}>
-            <TextInput value={branch} onChange={(e) => setBranch(e.target.value)} />
-          </Field>
-          <Button variant="primary" disabled={busy || !branch.trim()} onClick={() => act({ op: "push", branch: branch.trim() })}>
-            <Upload size={14} /> push
-          </Button>
-          <Field label="pr title" icon={<GitPullRequestArrow size={12} />}>
-            <TextInput value={title} onChange={(e) => setTitle(e.target.value)} />
-          </Field>
-          <Button variant="primary" disabled={busy || !title.trim()} onClick={() => act({ op: "pr", title: title.trim() })}>
-            <GitPullRequestArrow size={14} /> open pr
-          </Button>
+          <ol className="review-flow">
+            {FLOW_STEPS.map((s) => <li key={s}>{s}</li>)}
+          </ol>
+          <button type="button" className="review-action" disabled={busy || !agent} onClick={() => setAction("commit")}>
+            <GitCommitHorizontal size={14} /> commit…
+          </button>
+          <button type="button" className="review-action" disabled={busy || !agent} onClick={() => setAction("push")}>
+            <Upload size={14} /> push…
+          </button>
+          <button type="button" className="review-action" disabled={busy || !agent} onClick={() => setAction("pr")}>
+            <GitPullRequestArrow size={14} /> open pr…
+          </button>
           {output && <pre className="agent-review-output">{output}</pre>}
-          {!clean && status && <p className="agent-review-hint">work tree dirty — commit before push</p>}
         </section>
       </div>
+
+      <Modal open={action !== null} title={action ? ACTION_LABEL[action] : ""} on_close={() => setAction(null)}>
+        <form
+          className="modal-form"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (action_value.trim()) run_action();
+          }}
+        >
+          {action && <p className="review-action-hint">{ACTION_HINT[action]}</p>}
+          <Field label={action === "commit" ? "commit message" : action === "push" ? "branch" : "pr title"}>
+            <TextInput
+              autoFocus
+              value={action_value}
+              onChange={(e) => set_action_value(e.target.value)}
+            />
+          </Field>
+          <Button variant="primary" type="submit" disabled={busy || !action_value.trim()}>
+            {action ? ACTION_LABEL[action] : ""}
+          </Button>
+        </form>
+      </Modal>
+
+      <Modal open={file !== null} title={file?.path ?? ""} on_close={() => setFile(null)} wide>
+        <DiffView diff={file?.text ?? ""} rows={24} />
+      </Modal>
+
+      <Modal
+        open={fullDiff}
+        title={status.includes("clean") || !status ? "diff" : "git status + diff"}
+        on_close={() => setFullDiff(false)}
+        wide
+      >
+        {status && (
+          <Field label="git status">
+            <pre className="agent-review-output">{status}</pre>
+          </Field>
+        )}
+        <Field label="diff">
+          <DiffView diff={diff} rows={24} />
+        </Field>
+      </Modal>
     </main>
   );
 }

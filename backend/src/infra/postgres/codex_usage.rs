@@ -5,12 +5,12 @@ use std::sync::Arc;
 
 use codex_usage_rs::Store;
 
-use crate::infra::postgres::kanban::DATABASE_URL_ENV;
+use crate::infra::postgres::task::DATABASE_URL_ENV;
 
-/// Connect to the usage Postgres store (same DB as kanban).
+/// Connect to the usage Postgres store (same DB as task).
 pub async fn connect() -> Store {
     let url =
-        std::env::var(DATABASE_URL_ENV).unwrap_or_else(|_| kanban_rs::Store::default_url().into());
+        std::env::var(DATABASE_URL_ENV).unwrap_or_else(|_| task_rs::Store::default_url().into());
     Store::connect(&url)
         .await
         .expect("codex usage postgres connect")

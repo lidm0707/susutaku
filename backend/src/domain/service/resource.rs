@@ -2,8 +2,8 @@
 
 use std::sync::Arc;
 
-use kanban_rs::resource::UpsertResource;
-use kanban_rs::{ResourceRow, StoreError};
+use task_rs::resource::UpsertResource;
+use task_rs::{ResourceRow, StoreError};
 
 use crate::port::outbound::ResourceRepo;
 

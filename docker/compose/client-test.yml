@@ -49,7 +49,7 @@ services:
       dockerfile: docker/backend/Dockerfile.client
     environment:
       SUSUTAKU_HUB_ADDR: hub:8993
-      # Worker-only node still inits kanban storage at boot.
+      # Worker-only node still inits task storage at boot.
       DATABASE_URL: postgres://susutaku:susutaku@postgres:5432/susutaku_sandbox
     # Nested rootless podman (see docs/podman-sandbox.md).
     privileged: true

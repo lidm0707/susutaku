@@ -33,7 +33,7 @@ pub struct ChatCmd {
     /// Emit a reasoning block (gemma `<|think|>` system turn / qwen native
     /// thinking). Default off.
     pub think: bool,
-    /// Caller bearer token; when present, kanban board tools are offered and
+    /// Caller bearer token; when present, task board tools are offered and
     /// the token is passed to them for role checks. None disables board tools.
     pub board_token: Option<String>,
     /// Chat agent name; when set, the agent's configured tool allow-list
@@ -44,7 +44,7 @@ pub struct ChatCmd {
     /// Memory scope: chat thread id. Memories are recalled/stored per thread;
     /// None disables memory entirely (no shared scope).
     pub thread_id: Option<String>,
-    /// Target kanban card: artifacts produced this turn (written files,
+    /// Target task card: artifacts produced this turn (written files,
     /// shell-created images/text) are attached to it as card resources.
     pub card_id: Option<i64>,
 }

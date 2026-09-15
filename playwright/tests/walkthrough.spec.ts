@@ -1,8 +1,8 @@
 import { test, expect } from "./fixtures";
 import type { Page } from "@playwright/test";
 
-// Step-by-step walkthrough capture: login, kanban + task modal, chat modal,
-// machines popover, agent inspect, activity popover, pipelines, settings.
+// Step-by-step walkthrough capture: login, task + task modal, chat modal,
+// machines popover, agent inspect, activity popover, cronjobs/agents/settings.
 // Screenshots land in playwright/screenshots/walkthrough/.
 
 const OUT = "screenshots/walkthrough";
@@ -14,15 +14,15 @@ async function shot(page: Page, name: string) {
 
 test.describe("walkthrough", () => {
   test("capture the main flows", async ({ page, login }) => {
-    // 1. kanban after login
-    await page.goto("/kanban");
-    await shot(page, "01-kanban");
+    // 1. task after login
+    await page.goto("/task");
+    await shot(page, "01-task");
 
     // 2. add-task modal
     await page.click('button:has-text("add task")');
     await expect(page.locator('[role="dialog"]')).toBeVisible();
     await page.fill('[role="dialog"] input', "walkthrough task");
-    await shot(page, "02-kanban-add-task-modal");
+    await shot(page, "02-task-add-task-modal");
     await page.click('[role="dialog"] button[type="submit"]');
     await expect(page.locator('[role="dialog"]')).toBeHidden();
 
@@ -78,14 +78,12 @@ test.describe("walkthrough", () => {
     await shot(page, "09-after-activity");
   });
 
-  test("pipelines and settings", async ({ page, login }) => {
-    await page.goto("/pipelines");
-    await shot(page, "10-pipelines");
+  test("cronjobs, agents and settings", async ({ page, login }) => {
     await page.goto("/cronjobs");
-    await shot(page, "11-cronjobs");
+    await shot(page, "10-cronjobs");
     await page.goto("/agents");
-    await shot(page, "12-agents");
+    await shot(page, "11-agents");
     await page.goto("/settings");
-    await shot(page, "13-settings");
+    await shot(page, "12-settings");
   });
 });

@@ -7,7 +7,7 @@ import { API, loginToken } from "./helpers";
 
 const MOCK_MODEL = "e2e-mock";
 const AGENT_NAME_PREFIX = "e2e-modal-agent";
-const CONTEXT_PREFIX = "[context: user is currently on the kanban page]";
+const CONTEXT_PREFIX = "[context: user is currently on the task page]";
 const ECHO_TEXT = "hello modal";
 const CHAT_TIMEOUT_MS = 20_000;
 
@@ -73,7 +73,7 @@ async function rawChatEcho(request: APIRequestContext, text: string): Promise<st
 }
 
 async function openChatModal(page: import("@playwright/test").Page) {
-  await page.goto("/kanban");
+  await page.goto("/task");
   const fab = page.locator("button[aria-label='open chat']");
   await expect(fab).toBeVisible();
   await fab.click();
@@ -92,7 +92,7 @@ test.describe("chat modal", () => {
     ).toBeVisible();
   });
 
-  test("sending from kanban carries page context in the echoed reply", async ({
+  test("sending from task carries page context in the echoed reply", async ({
     page,
     login,
     request,

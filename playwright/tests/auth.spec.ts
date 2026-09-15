@@ -13,16 +13,16 @@ test.describe("auth", () => {
     await expect(page).toHaveURL(/\/$|\/login/);
   });
 
-  test("e2e user can log in and reaches kanban", async ({ page }) => {
+  test("e2e user can log in and reaches task", async ({ page }) => {
     await page.goto("/");
     await page.fill('input[placeholder="username"]', E2E_USER);
     await page.fill('input[placeholder="password"]', E2E_PASSWORD);
     await page.click('button[type="submit"]');
-    await expect(page).toHaveURL(/\/kanban/);
+    await expect(page).toHaveURL(/\/task/);
   });
 
   test("unauthenticated user is redirected to login", async ({ page }) => {
-    await page.goto("/kanban");
+    await page.goto("/task");
     await expect(page).toHaveURL(/\/$|\/login/);
   });
 });

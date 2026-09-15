@@ -12,7 +12,7 @@ export const test = base.extend<Fixtures>({
       await page.fill('input[placeholder="username"]', username);
       await page.fill('input[placeholder="password"]', password);
       await page.click('button[type="submit"]');
-      await page.waitForURL("**/kanban");
+      await page.waitForURL("**/task");
       await use();
     },
     { auto: false },

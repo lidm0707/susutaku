@@ -18,7 +18,7 @@ susutaku/
 │   ├── hf_loader/             ← model dir scanning + loadability filter (policy: local_model/AGENTS.md)
 │   ├── mlx-rs/                ← MLX inference backend
 │   ├── gguf-rs/               ← GGUF model file parsing
-│   ├── kanban-rs/             ← kanban board + Postgres store (query_as!)
+│   ├── task-rs/             ← task board + Postgres store (query_as!)
 │   │                            workspace → project → card; card agent state
 │   ├── piplines/              ← pipeline graph/stage engine
 │   ├── prompt-sys/            ← prompt builder + sections
@@ -58,7 +58,8 @@ susutaku/
 ├── log/                       ← runtime logs
 ├── .sqlx/                     ← sqlx query metadata (offline compile)
 ├── bench/                     ← benchmark/design summaries (coverage, design renders)
-├── docs/                      ← workflow docs (attachments, playwright, docker)
+├── docs/                      ← workflow docs (attachments, playwright, docker,
+│                                review flow, work tree, podman sandbox, git sandbox)
 ├── attachments/               ← uploaded file storage
 ├── piplines/ input/ output/   ← pipeline assets
 ```
@@ -72,7 +73,7 @@ susutaku/
 - `crates/local_model` — standalone model server (MLX on Metal, hub, HTTP API).
   Owns the model size/quantization policy — see `crates/local_model/AGENTS.md`.
 - `crates/pdf-rs` — PDF parsing
-- `crates/kanban-rs` — kanban board model + Postgres store (`query_as!`); hierarchy
+- `crates/task-rs` — task board model + Postgres store (`query_as!`); hierarchy
   workspace → project → task (card); cards carry per-card agent state (`agent_name`, `agent_state` JSON)
 - `crates/gguf-rs` — GGUF model file parsing
 - `crates/agent_3th_cli/` — third-party CLI integrations (`claude_cli`, `codex_cli`)
@@ -91,7 +92,7 @@ susutaku/
 - `crates/solana_wallet` — browser wallet keypair (ed25519-dalek) + RPC helpers,
   wasm-ready via gloo; localStorage persistence
 - `attachments/` — file attachment storage (see `docs/attachments.md`)
-- `piplines/`, `input/`, `output/`, `web_ui/` — pipeline and UI assets (`web_ui` includes a Kanban board page backed by `crates/kanban-rs` + Postgres)
+- `piplines/`, `input/`, `output/`, `web_ui/` — pipeline and UI assets (`web_ui` includes a Task board page backed by `crates/task-rs` + Postgres)
 
 ## Backend in Docker (standalone)
 
@@ -151,28 +152,28 @@ susutaku/
   (`depends_on: condition: service_healthy`); a plain `depends_on` starts the
   playwright runner while nginx still 502s.
 
-## Kanban Postgres
+## Task Postgres
 
 - Postgres runs via `docker/compose/base.yml` (`postgres` service, host port **5434** — 5432/5433 are taken by other local containers).
 - Connection: `postgres://susutaku:susutaku@localhost:5434/susutaku` (override with `DATABASE_URL`).
-- sqlx macros compile against the live DB — keep the container up when running `cargo check` on `kanban-rs`/`backend`.
+- sqlx macros compile against the live DB — keep the container up when running `cargo check` on `task-rs`/`backend`.
 - API: `/api/workspaces` (GET/POST), `/api/workspaces/{id}` (DELETE),
   `/api/workspaces/{id}/projects` (GET/POST), `/api/projects/{id}` (DELETE).
-- Tasks: `/api/kanban/cards?project_id=` (GET/POST), `/api/kanban/cards/{id}` (DELETE),
-  `/api/kanban/cards/{id}/move` (POST), `/api/kanban/cards/{id}/agent` (GET/PUT).
+- Tasks: `/api/task/cards?project_id=` (GET/POST), `/api/task/cards/{id}` (DELETE),
+  `/api/task/cards/{id}/move` (POST), `/api/task/cards/{id}/agent` (GET/PUT).
   A task (card) belongs to exactly one project; deleting a workspace cascades
   to its projects and tasks.
 
 ## User auth (argon2)
 
-- `kanban-rs/src/user.rs`: argon2 password hashing, ranked `Role` enum —
+- `task-rs/src/user.rs`: argon2 password hashing, ranked `Role` enum —
   `owner > super_admin > admin > editor > viewer`.
 - Tables: `users(username unique, password_hash, role)`, `auth_sessions(token, user_id)`.
 - Bearer-token auth: `POST /api/auth/login`, `POST /api/auth/logout`,
   `GET /api/auth/bootstrap`, `GET/POST /api/auth/users`.
 - Bootstrap: with zero users, an unauthenticated `POST /api/auth/users` creates
   the first user, forced to role `owner`.
-- Guards: any role reads kanban; editor+ mutates cards/agent state;
+- Guards: any role reads task; editor+ mutates cards/agent state;
   admin+ manages users. Passwords: min 8 chars, never returned.
 
 ## Web UI conventions (`web_ui/`)

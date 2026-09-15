@@ -74,7 +74,7 @@ graph TD
 - **External CLI agents** — `/api/chat/codex` and `/api/chat/claude` route the
   same chat shape through Codex/Claude CLI after their respective auth flows.
 
-## Kanban cards: agent, pipeline, schedule
+## Task cards: agent, pipeline, schedule
 
 ```mermaid
 graph TD
@@ -119,11 +119,11 @@ graph TD
     E --> H
 ```
 
-A kanban card is the second way to drive an agent from the web. Cards carry
+A task card is the second way to drive an agent from the web. Cards carry
 per-card agent state (`agent_name` + `agent_state` JSON) and can have a
 pipeline and a cron schedule attached.
 
-### Manual run (Run button / `POST /api/kanban/cards/{id}/run`)
+### Manual run (Run button / `POST /api/task/cards/{id}/run`)
 
 Requires editor+ role. `app/pipeline_run.rs::run_card_pipeline`:
 
@@ -139,7 +139,7 @@ Requires editor+ role. `app/pipeline_run.rs::run_card_pipeline`:
    mutated by a run) and appends a `run_records` row; the card's
    `run_status` / `last_agent` / `last_run_id` record fields are updated
    (`last_agent` = agent chosen by the pipeline's agent node, else
-   `pipeline-runner`). Run history: `GET /api/kanban/cards/{id}/runs`.
+   `pipeline-runner`). Run history: `GET /api/task/cards/{id}/runs`.
 7. The `RunRecord` (status, per-stage log, output, finished_at) is returned to
    the UI.
 
@@ -158,7 +158,7 @@ Requires editor+ role. `app/pipeline_run.rs::run_card_pipeline`:
 - A background task ticks every `TICK_SECS` (started at router build in
   `api.rs::router`).
 - Each tick lists all cards, keeps those with a `cron` field (set via
-  `PUT /api/kanban/cards/{id}/schedule`), and computes the next fire time
+  `PUT /api/task/cards/{id}/schedule`), and computes the next fire time
   (`cron.next_after(now)`); entries for cards that lost their cron are dropped.
 - When a card is due it runs the **same pipeline runner** as a manual run.
   - Success → next fire time advances normally.
@@ -169,9 +169,9 @@ Requires editor+ role. `app/pipeline_run.rs::run_card_pipeline`:
 
 ### Card agent state API
 
-- `GET /api/kanban/cards/{id}/agent` — read the card's agent state
+- `GET /api/task/cards/{id}/agent` — read the card's agent state
   (includes the last `run` record after a run).
-- `PUT /api/kanban/cards/{id}/agent` — set `agent_name` + arbitrary JSON
+- `PUT /api/task/cards/{id}/agent` — set `agent_name` + arbitrary JSON
   `state` (editor+ role).
 
 ## Key constants

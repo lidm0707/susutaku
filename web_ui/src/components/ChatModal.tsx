@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
-import { Bot, Brain, Camera, Check, CircleDot, Code2, Copy, Crosshair, ExternalLink, Eye, Link2, MessageSquarePlus, PanelRight, Send, Square, Wrench, X } from "lucide-react";
+import { Bot, Brain, Camera, Check, CircleDot, Code2, Copy, Crosshair, ExternalLink, Eye, Link2, MessageSquarePlus, PanelRight, Send, Wrench, X } from "lucide-react";
 import {
   API_BASE,
+  ApiError,
   cancel_chat_run,
   chat_codex,
   chat_zai,
@@ -43,6 +44,10 @@ import { use_card_created, type CardEvent } from "../features/card_bus.js";
 
 const MAX_TOKENS = 512;
 
+const RATE_LIMIT_STATUS = 429;
+
+const ERR_DETAIL_LEN = 200;
+
 const THINK_OPEN = "<think>";
 const THINK_CLOSE = "</think>";
 
@@ -53,6 +58,19 @@ const THREAD_TITLE_LEN = 24;
 const SCROLL_STICK_PX = 48;
 
 const CARD_MIME = "application/x-susutaku-card";
+
+// human-readable failure reason for a chat run: rate limits, usage/quota
+// errors and backend bodies otherwise just look like "run failed"
+function describe_error(e: unknown): string {
+  if (e instanceof ApiError) {
+    if (e.status === RATE_LIMIT_STATUS) return "rate limited — wait for the window to reset and retry";
+    const body = e.message.slice(String(e.status).length).trim();
+    const detail = body ? `: ${body.slice(0, ERR_DETAIL_LEN)}` : "";
+    return `failed (${e.status})${detail}`;
+  }
+  const msg = String((e as Error)?.message ?? e);
+  return msg ? msg.slice(0, ERR_DETAIL_LEN) : "run failed";
+}
 
 // crypto.randomUUID exists only in secure contexts; the UI is also served
 // over plain http on the docker network, so fall back to a random id
@@ -96,6 +114,27 @@ function write_draft(key: string | null, text: string) {
   } catch {}
 }
 
+// per-project last active thread key, so switching project and coming back
+// reopens the ongoing conversation instead of a blank "thread 1"
+const LAST_THREAD_KEY = "chat_last_threads_v1";
+
+function read_last_key(project: number | null): string | null {
+  try {
+    return JSON.parse(localStorage.getItem(LAST_THREAD_KEY) ?? "{}")[`p${project ?? 0}`] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function write_last_key(project: number | null, key: string | null) {
+  if (!key) return;
+  try {
+    const all = JSON.parse(localStorage.getItem(LAST_THREAD_KEY) ?? "{}");
+    all[`p${project ?? 0}`] = key;
+    localStorage.setItem(LAST_THREAD_KEY, JSON.stringify(all));
+  } catch {}
+}
+
 // url query param that opens the chat docked on a shared thread (?chat=<server id>)
 export const CHAT_PARAM = "chat";
 const DOCK_RIGHT = "right";
@@ -132,8 +171,7 @@ export function use_chat_docked(): boolean {
 }
 
 const PAGE_LABELS: Record<string, string> = {
-  "/kanban": "kanban",
-  "/pipelines": "pipelines",
+  "/task": "task",
   "/routine": "routine",
   "/attachments": "attachments",
   "/agents": "agents",
@@ -143,7 +181,7 @@ const PAGE_LABELS: Record<string, string> = {
 };
 
 export function page_label(pathname: string): string {
-  return PAGE_LABELS[pathname] ?? "kanban";
+  return PAGE_LABELS[pathname] ?? "task";
 }
 
 const ROUTINE_CONTEXT_MAX = 20;
@@ -164,7 +202,6 @@ async function page_data(pathname: string): Promise<string> {
   const lines = jobs.slice(0, ROUTINE_CONTEXT_MAX).map(
     (j) =>
       `- card #${j.card_id} "${j.title}": schedule "${j.cron}"` +
-      (j.pipeline_name ? `, pipeline "${j.pipeline_name}"` : "") +
       (j.next_run ? `, next run ${fmt_run(j.next_run)}` : ", not scheduled in queue"),
   );
   return `routines (card schedules):\n${lines.join("\n")}`;
@@ -183,6 +220,88 @@ function split_thinking(text: string): { thinking: string; reply: string } {
 
 const FENCE_RE = /```([a-zA-Z0-9_-]*)\n?([\s\S]*?)(?:```|$)/g;
 const INLINE_CODE_RE = /`([^`\n]+)`/g;
+const TABLE_LINE_RE = /^\s*\|.*\|\s*$/;
+const TABLE_SEP_RE = /^\s*\|(\s*:?-+:?\s*\|)+\s*$/;
+
+interface TableBlock {
+  kind: "table";
+  rows: string[][];
+}
+
+interface PlainBlock {
+  kind: "plain";
+  body: string;
+}
+
+function split_cells(line: string): string[] {
+  const t = line.trim();
+  const inner = t.startsWith("|") ? t.slice(1) : t;
+  const core = inner.endsWith("|") ? inner.slice(0, -1) : inner;
+  return core.split("|").map((c) => c.trim());
+}
+
+function split_table_blocks(body: string): (TableBlock | PlainBlock)[] {
+  const lines = body.split("\n");
+  const blocks: (TableBlock | PlainBlock)[] = [];
+  let plain: string[] = [];
+  const flush = () => {
+    if (plain.length) {
+      blocks.push({ kind: "plain", body: plain.join("\n") });
+      plain = [];
+    }
+  };
+  let i = 0;
+  while (i < lines.length) {
+    const sep = lines[i + 1];
+    if (TABLE_LINE_RE.test(lines[i]) && sep !== undefined && TABLE_SEP_RE.test(sep)) {
+      flush();
+      const rows: string[][] = [split_cells(lines[i])];
+      i += 2;
+      while (i < lines.length && TABLE_LINE_RE.test(lines[i])) {
+        rows.push(split_cells(lines[i]));
+        i += 1;
+      }
+      blocks.push({ kind: "table", rows });
+    } else {
+      plain.push(lines[i]);
+      i += 1;
+    }
+  }
+  flush();
+  return blocks;
+}
+
+function MsgTable({ rows }: { rows: string[][] }) {
+  const [head, ...body] = rows;
+  return (
+    <div className="msg-table-wrap">
+      <table className="msg-table">
+        <thead>
+          <tr>{head.map((c, j) => <th key={j}>{c}</th>)}</tr>
+        </thead>
+        <tbody>
+          {body.map((r, j) => (
+            <tr key={j}>{r.map((c, k) => <td key={k}>{c}</td>)}</tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function TextBody({ body }: { body: string }) {
+  return (
+    <>
+      {split_table_blocks(body).map((b, i) =>
+        b.kind === "table" ? (
+          <MsgTable key={i} rows={b.rows} />
+        ) : (
+          <InlineText key={i} body={b.body} />
+        )
+      )}
+    </>
+  );
+}
 const COPY_RESET_MS = 1500;
 
 interface CodeSegment {
@@ -290,11 +409,11 @@ function HtmlFence({ body }: { body: string }) {
 function CardChip({ card }: { card: CardEvent }) {
   const open = () =>
     window.open(
-      `/kanban?${PARAM_PROJECT}=${card.project_id ?? ""}&${PARAM_CARD}=${card.id}`,
+      `/task?${PARAM_PROJECT}=${card.project_id ?? ""}&${PARAM_CARD}=${card.id}`,
       "_blank"
     );
   return (
-    <button type="button" className="card-chip" onClick={open} title="open card on the kanban board">
+    <button type="button" className="card-chip" onClick={open} title="open card on the task board">
       <ExternalLink size={12} />
       card #{card.id} · {card.title}
     </button>
@@ -315,11 +434,17 @@ function MessageText({ text }: { text: string }) {
             <CodeBlock key={i} lang={s.lang} body={s.body} />
           )
         ) : (
-          <InlineText key={i} body={s.body} />
+          <TextBody key={i} body={s.body} />
         ),
       )}
     </div>
   );
+}
+
+// a message parked while the thread is still generating
+interface QueuedMsg {
+  text: string;
+  images: string[];
 }
 
 interface Msg {
@@ -328,6 +453,7 @@ interface Msg {
   text: string;
   pending?: boolean;
   failed?: boolean;
+  error?: string;
   thinking?: string;
   agent_name?: string;
   model?: string;
@@ -335,7 +461,7 @@ interface Msg {
   tps?: number;
   /// annotated screenshot attached to this message
   image?: string;
-  /// kanban card created in this turn (agent tool call or board action)
+  /// task card created in this turn (agent tool call or board action)
   card?: CardEvent;
   tools?: ChatToolUse[];
   memories?: string[];
@@ -348,6 +474,8 @@ interface Thread {
   server_id: number | null;
   loaded: boolean;
   updated_at: number;
+  // run finished (or failed) while another thread was on screen
+  unread?: boolean;
 }
 
 export default function ChatModal({ open, on_close }: { open: boolean; on_close: () => void }) {
@@ -392,6 +520,11 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
   // per-thread in-flight run counter: runs can overlap when a send interrupts
   // the current reply and starts a new one right away
   const busyCount = useRef(new Map<number, number>());
+  // per-thread queued message: sending while busy parks the text here instead
+  // of interrupting — Send Now interrupts, run completion auto-flushes
+  const [queued, setQueued] = useState<Record<number, QueuedMsg | undefined>>({});
+  const queuedRef = useRef(queued);
+  queuedRef.current = queued;
   function bump_busy(tid: number, d: number) {
     const c = (busyCount.current.get(tid) ?? 0) + d;
     if (c <= 0) busyCount.current.delete(tid);
@@ -420,6 +553,12 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
     const el = inputRef.current;
     if (el) el.style.height = "auto";
   }, [activeKey]);
+
+  // remember the last active thread per project so a project switch and back
+  // reopens the ongoing conversation instead of a blank thread
+  useEffect(() => {
+    if (activeKey) write_last_key(project_id, activeKey);
+  }, [activeKey, project_id]);
 
   useEffect(() => {
     if (!toast) return;
@@ -454,30 +593,57 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
           const locals = ts.filter((t) => t.server_id === null);
           const nextLocalId = Math.max(0, ...locals.map((t) => t.id)) + 1;
           nextThreadId.current = Math.max(nextThreadId.current, nextLocalId);
-          const server: Thread[] = rows.map((r) => ({
-            id: nextThreadId.current++,
-            title: r.title || `thread ${r.id}`,
-            messages: [],
-            server_id: r.id,
-            loaded: false,
-            updated_at: Date.parse(r.updated_at) || 0,
-          }));
+          // reuse the existing thread object when one already tracks this
+          // server row: keeps its local id valid so in-flight streaming
+          // (patch_thread/patch_msg by id) survives a project switch and back
+          const server: Thread[] = rows.map((r) => {
+            const known = ts.find((t) => t.server_id === r.id);
+            if (known)
+              return {
+                ...known,
+                title: known.title || r.title || `thread ${r.id}`,
+                updated_at: Math.max(known.updated_at, Date.parse(r.updated_at) || 0),
+              };
+            return {
+              id: nextThreadId.current++,
+              title: r.title || `thread ${r.id}`,
+              messages: [],
+              server_id: r.id,
+              loaded: false,
+              updated_at: Date.parse(r.updated_at) || 0,
+            };
+          });
           return [...server, ...locals];
         })
       )
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => setThreadsLoadedFor(project_id));
   }, [open, project_id]);
+
+  const [threadsLoadedFor, setThreadsLoadedFor] = useState<number | null | undefined>(undefined);
 
   // switching project resets to a fresh thread of the new project scope,
   // but threads with in-flight replies are kept so runs are not lost
   useEffect(() => {
     if (!open) return;
+    setThreadsLoadedFor(undefined);
     setActiveId(0);
     setThreads((ts) => [
       { id: nextThreadId.current++, title: "thread 1", messages: [], server_id: null, loaded: true, updated_at: Date.now() },
       ...ts.filter((t) => t.messages.some((m) => m.pending)),
     ]);
   }, [project_id]);
+
+  // once the project's threads are loaded, jump back to the thread that was
+  // active the last time this project was open (no-op if it was deleted)
+  useEffect(() => {
+    if (!open || threadsLoadedFor !== project_id) return;
+    const want = read_last_key(project_id);
+    if (!want || threads.find((t) => t.id === activeId && thread_key(t, project_id) === want)) return;
+    const t = threads.find((x) => thread_key(x, project_id) === want);
+    if (t) setActiveId(t.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, project_id, threadsLoadedFor, threads]);
 
   // re-opening the chat (or the panel re-gaining focus after a page change)
   // pulls fresh messages for the active thread so replies that finished while
@@ -814,14 +980,40 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
     setInput("");
     write_draft(thread_key(threads.find((t) => t.id === tid), project_id), "");
     setPendingImages([]);
-    // steer: while the thread is busy, interrupt the current reply and send
-    // this one immediately instead of queueing behind it
+    await dispatch(text, images, tid);
+  }
+
+  async function dispatch(text: string, images: string[], tid: number) {
+    // while the thread is busy the message queues instead of interrupting:
+    // it flushes automatically when the run ends, or immediately via Send Now
     if (busyTidsRef.current.includes(tid)) {
-      await stop_thread(tid);
-      setToast("interrupted — sending your message now");
+      setQueued((q) => ({ ...q, [tid]: { text, images } }));
+      setToast("queued — send now to interrupt the current reply");
+      return;
     }
     await run_send(text, images[0] ?? null, tid);
     for (const img of images.slice(1)) {
+      await run_send("", img, tid);
+    }
+  }
+
+  function clear_queued(tid: number) {
+    setQueued((q) => {
+      const { [tid]: _drop, ...rest } = q;
+      return rest;
+    });
+  }
+
+  // interrupt the current reply and send the queued message right away
+  async function send_now(tid: number) {
+    const q = queuedRef.current[tid];
+    if (!q) return;
+    clear_queued(tid);
+    await stop_thread(tid);
+    // bypass dispatch: the interrupted run is still winding down so the thread
+    // still reads busy — overlapping here is safe (per-run cancel ids)
+    await run_send(q.text, q.images[0] ?? null, tid);
+    for (const img of q.images.slice(1)) {
       await run_send("", img, tid);
     }
   }
@@ -830,8 +1022,10 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
     const thread = threads.find((t) => t.id === tid);
     setError("");
     bump_busy(tid, +1);
-    runIdsRef.current[tid] = [];
-    stickBottom.current = true;
+    // cancel ids of this run only — an overlapping run on the same thread
+    // keeps its own ids so a later interrupt still reaches the right stream
+    const myRunIds: string[] = [];
+    if (tid === activeIdRef.current) stickBottom.current = true;
     set_title_from(tid, text || "image");
     const userId = nextId.current++;
     const replyIds = selected.map(() => nextId.current++);
@@ -876,6 +1070,7 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
         let streamed = "";
         let liveTools: ChatToolUse[] = [];
         const run_id = make_run_id();
+        myRunIds.push(run_id);
         runIdsRef.current[tid] = [...(runIdsRef.current[tid] ?? []), run_id];
         return send_agent(a, contexted, serverThreadId, image ?? undefined, (ev: ChatStreamEvent) => {
           if (ev.type === "turn") {
@@ -908,7 +1103,13 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
         );
       if (out.status === "rejected" || out.value.reply === undefined) {
         failures += 1;
-        patch({ failed: true });
+        patch({
+          failed: true,
+          error:
+            out.status === "rejected"
+              ? describe_error(out.reason)
+              : "agent returned an empty reply",
+        });
         return;
       }
       const data = out.value;
@@ -943,13 +1144,27 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
       // run failed and surface the error
       patch_thread(tid, (m) =>
         m.map((msg) =>
-          replyIds.includes(msg.id) ? { ...msg, pending: false, failed: true } : msg
+          replyIds.includes(msg.id) ? { ...msg, pending: false, failed: true, error: describe_error(e) } : msg
         )
       );
       setError(String((e as Error)?.message ?? e));
     } finally {
-      delete runIdsRef.current[tid];
+      const rest = (runIdsRef.current[tid] ?? []).filter((id) => !myRunIds.includes(id));
+      if (rest.length) runIdsRef.current[tid] = rest;
+      else delete runIdsRef.current[tid];
       bump_busy(tid, -1);
+      // the queue flushes on its own once the thread goes idle (Zed-style:
+      // queued messages send themselves when the reply finishes)
+      const next = queuedRef.current[tid];
+      if (next && !busyCount.current.has(tid)) {
+        clear_queued(tid);
+        void dispatch(next.text, next.images, tid);
+      }
+      // run ended while another thread was on screen: mark it so the user sees
+      // the completion instead of finding out only after switching back
+      if (tid !== activeIdRef.current) {
+        setThreads((ts) => ts.map((t) => (t.id === tid ? { ...t, unread: true } : t)));
+      }
     }
   }
 
@@ -1092,7 +1307,7 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
                     <span /><span /><span />
                   </span>
                 ) : m.failed ? (
-                  <p className="error">run failed</p>
+                  <p className="error">{m.error ?? "run failed"}</p>
                 ) : (
                   <>
                     {m.text ? <MessageText text={m.text} /> : null}
@@ -1108,6 +1323,27 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
           )}
           {error && <p className="error">{error}</p>}
           <form className="chat-composer" onSubmit={send}>
+            {queued[activeId] && (
+              <div className="chat-queued" role="status">
+                <span className="chat-queued-text">queued: {queued[activeId]!.text || "image"}</span>
+                <button
+                  type="button"
+                  className="chat-queued-send"
+                  onClick={() => send_now(activeId)}
+                  title="interrupt the current reply and send this now"
+                >
+                  Send Now
+                </button>
+                <button
+                  type="button"
+                  className="chat-queued-drop"
+                  onClick={() => clear_queued(activeId)}
+                  aria-label="discard queued message"
+                >
+                  <X size={12} />
+                </button>
+              </div>
+            )}
             {pendingImages.length > 0 && (
               <div className="chat-composer-attachments">
                 {pendingImages.map((img, i) => (
@@ -1189,7 +1425,7 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
                 messages.length === 0
                   ? "Message the agent — ⏎ to send, drop / paste an image to attach"
                   : threadBusy
-                    ? "generating…"
+                    ? "generating — ⏎ queues your message"
                     : "Message the agent — drop or paste an image, or drop a card"
               }
             />
@@ -1271,12 +1507,12 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
                 disabled={!selected.length || (!input.trim() && !pendingImages.length)}
                 title={
                   threadBusy
-                    ? "interrupt the current reply and send this now"
+                    ? "queue this message — it sends when the reply finishes"
                     : "send"
                 }
-                aria-label={threadBusy ? "interrupt and send now" : "send message"}
+                aria-label={threadBusy ? "queue message" : "send message"}
               >
-                {threadBusy ? <Square size={16} /> : <Send size={16} />}
+                <Send size={16} />
               </button>
             </div>
           </form>
@@ -1307,9 +1543,13 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
               <button
                 type="button"
                 className="chat-thread-btn"
-                onClick={() => setActiveId(t.id)}
+                onClick={() => {
+                  setActiveId(t.id);
+                  setThreads((ts) => ts.map((x) => (x.id === t.id ? { ...x, unread: false } : x)));
+                }}
                 title={t.title}
               >
+                {t.unread ? "● " : ""}
                 {t.title}
               </button>
               {t.server_id !== null && (

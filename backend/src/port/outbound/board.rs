@@ -1,4 +1,4 @@
-//! Outbound port: kanban board operations callable from the chat tool loop.
+//! Outbound port: task board operations callable from the chat tool loop.
 //! Implementations enforce authentication/authorization (bearer token, editor
 //! role).
 

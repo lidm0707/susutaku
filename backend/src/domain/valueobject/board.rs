@@ -3,23 +3,21 @@
 /// One board operation requested by the model.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BoardOp {
-    /// Create a pipeline; the spec is the optional graph JSON
-    /// `{nodes: [{id, stage, params}], links: [{from, to}]}` — without it an
-    /// empty (valid) pipeline is created. Returns the new pipeline id.
-    CreatePipeline { name: String, spec: Option<String> },
     /// Create a card in the default todo column; returns the new card id.
     CreateCard {
         project_id: i64,
         title: String,
         description: Option<String>,
     },
-    /// Attach a pipeline to a card.
-    LinkPipeline { card_id: i64, pipeline_id: i64 },
+    /// Pin an agent to a card: the card runs this agent.
+    AssignAgent { card_id: i64, agent: String },
+    /// Set (or clear with None) the card's sandbox image.
+    SetImage { card_id: i64, image: Option<String> },
     /// Set (or clear with None) a 5-field UTC cron on a card.
     SetCron { card_id: i64, cron: Option<String> },
-    /// Run the card's attached pipeline once, right now.
+    /// Run the card's assigned agent once, right now.
     RunCard { card_id: i64 },
-    /// Projects/pipelines/cards summary with ids.
+    /// Projects/cards summary with ids.
     Summary,
     /// Cards whose title or description contains the query (case-insensitive).
     FindCards { query: String },

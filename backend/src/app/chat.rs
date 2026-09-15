@@ -11,10 +11,11 @@ use crate::domain::{
 };
 use crate::port::inbound::ChatHandling;
 use crate::port::outbound::{
-    AgentConfigRepo, AgentGit, BoardOps, ChatMemory, Fetcher, Inference, ModelSwitch, ProjectGit,
-    Runner, Searcher,
+    AgentConfigRepo, AgentGit, AgentRun, BoardOps, ChatMemory, Fetcher, Inference, ModelSwitch,
+    ProjectGit, Runner, Searcher, ThreadEnvs,
 };
-use kanban_rs::resource::UpsertResource;
+use task_rs::ThinkLevel;
+use task_rs::resource::UpsertResource;
 use susutaku_mlx::stats::GenStats;
 use susutaku_mlx::tok::TokKind;
 
@@ -22,6 +23,21 @@ const MEMORY_RECALL_TOP_K: usize = 5;
 const MEMORY_CONTEXT_HEADER: &str = "Earlier relevant conversation:\n";
 const PROJECT_SKILLS_HEADER: &str =
     "PROJECT SKILLS (how to work in this project; follow when relevant):\n";
+const THINK_HINT_LOW: &str = "THINKING: think briefly before answering; keep reasoning short.\n";
+const THINK_HINT_MEDIUM: &str =
+    "THINKING: reason through the problem step by step before answering.\n";
+const THINK_HINT_HIGH: &str =
+    "THINKING: reason deeply — consider alternatives and edge cases, then answer.\n";
+
+/// Context hint expressing the agent's custom thinking depth; off = none.
+fn think_hint(level: ThinkLevel) -> Option<&'static str> {
+    match level {
+        ThinkLevel::Off => None,
+        ThinkLevel::Low => Some(THINK_HINT_LOW),
+        ThinkLevel::Medium => Some(THINK_HINT_MEDIUM),
+        ThinkLevel::High => Some(THINK_HINT_HIGH),
+    }
+}
 const TOOL_ERROR: &str = "tool failed: ";
 const TOOL_FALLBACK_NOTE: &str = "(the model could not finish this run; try again)";
 const BOARD_ERROR_PREFIX: &str = "error:";
@@ -62,6 +78,12 @@ pub struct ChatUseCase {
     resources: Option<Arc<ResourceService>>,
     /// Per-agent git host; `None` degrades git ops to the shared work tree.
     agent_git: Option<Arc<dyn AgentGit>>,
+    /// Runs commands inside a named agent's own sandbox; `None` disables
+    /// the AGENT_RUN tool.
+    agent_run: Option<Arc<dyn AgentRun>>,
+    /// Per-thread sandbox environments; `None` keeps every thread on the
+    /// shared work tree.
+    thread_envs: Option<Arc<dyn ThreadEnvs>>,
     /// Resolves the repo bound to the chat's project; `None` disables
     /// url-less GIT CLONE.
     project_git: Option<Arc<dyn ProjectGit>>,
@@ -94,6 +116,8 @@ impl ChatUseCase {
             agents,
             resources: None,
             agent_git: None,
+            agent_run: None,
+            thread_envs: None,
             project_git: None,
             skills: None,
             tools_tx: None,
@@ -118,6 +142,30 @@ impl ChatUseCase {
     pub fn with_agent_git(mut self, agent_git: Arc<dyn AgentGit>) -> Self {
         self.agent_git = Some(agent_git);
         self
+    }
+
+    /// Lets AGENT_RUN drive a named agent's own sandbox via the manager.
+    pub fn with_agent_run(mut self, agent_run: Arc<dyn AgentRun>) -> Self {
+        self.agent_run = Some(agent_run);
+        self
+    }
+
+    /// Routes a coding thread's shell/coding/lsp tools into its own sandbox.
+    pub fn with_thread_envs(mut self, thread_envs: Arc<dyn ThreadEnvs>) -> Self {
+        self.thread_envs = Some(thread_envs);
+        self
+    }
+
+    /// The runner this turn's tools use: the thread's own environment when
+    /// one exists (or can be created), else the shared work tree.
+    fn turn_runner(&self, thread_id: Option<&str>, agent: Option<&str>) -> Arc<dyn Runner> {
+        if let Some(envs) = self.thread_envs.as_ref()
+            && let Some(tid) = thread_id
+            && let Ok(runner) = envs.runner_for(tid, agent)
+        {
+            return runner;
+        }
+        Arc::clone(&self.runner)
     }
 
     /// Lets a url-less GIT CLONE resolve the repo bound to the chat's
@@ -172,6 +220,17 @@ impl ChatUseCase {
         }
     }
 
+    /// Custom reasoning depth configured on the named agent; off/unknown = Off.
+    async fn agent_think_level(&self, agent: Option<&str>) -> ThinkLevel {
+        let Some(name) = agent.map(str::trim).filter(|n| !n.is_empty()) else {
+            return ThinkLevel::default();
+        };
+        match self.agents.by_name(name).await {
+            Ok(Some(cfg)) => cfg.think_level(),
+            _ => ThinkLevel::default(),
+        }
+    }
+
     fn next_call(&self, reply: &GenReply, allow_tools: bool, rounds: usize) -> Option<ToolCall> {
         if !allow_tools || rounds >= TOOL_ROUNDS_MAX {
             return None;
@@ -210,8 +269,11 @@ impl ChatUseCase {
             .map_err(|_| "fetch task panicked".to_string())?
     }
 
-    async fn shell_blocking(&self, cmd: &str) -> Result<String, String> {
-        let runner = Arc::clone(&self.runner);
+    async fn shell_blocking_on(
+        &self,
+        runner: Arc<dyn Runner>,
+        cmd: &str,
+    ) -> Result<String, String> {
         let owned = cmd.to_string();
         tokio::task::spawn_blocking(move || runner.run(&owned))
             .await
@@ -222,12 +284,12 @@ impl ChatUseCase {
     /// rust-analyzer rooted at the work tree. One-shot session per call.
     async fn lsp_blocking(
         &self,
+        runner: Arc<dyn Runner>,
         op: LspOp,
         path: &str,
         line: u32,
         col: usize,
     ) -> Result<String, String> {
-        let runner = Arc::clone(&self.runner);
         let path = path.to_string();
         tokio::task::spawn_blocking(move || {
             let text = runner.read_file(&path)?;
@@ -255,6 +317,7 @@ impl ChatUseCase {
     /// target card (no-op without card id or resource store).
     async fn finish(
         &self,
+        runner: &Arc<dyn Runner>,
         cmd: &ChatCmd,
         last_good: (String, String, GenStats),
         searched: bool,
@@ -262,15 +325,15 @@ impl ChatUseCase {
         memories: Vec<String>,
     ) -> ChatOutcome {
         if let Some(card_id) = cmd.card_id {
-            self.persist_artifacts(card_id, &tools).await;
+            self.persist_artifacts(runner, card_id, &tools).await;
         }
         self.outcome(last_good, searched, tools, memories)
     }
 
     /// Files a successful shell call left behind: tokens in its output that
     /// exist under the workspace root with a known image/text extension.
-    fn scan_artifacts(&self, output: &str) -> Vec<String> {
-        let root = self.runner.workspace_root();
+    fn scan_artifacts(&self, runner: &Arc<dyn Runner>, output: &str) -> Vec<String> {
+        let root = runner.workspace_root();
         let mut found: Vec<String> = Vec::new();
         for token in output.split(|c: char| c.is_whitespace() || c == '"' || c == '\'') {
             if token.is_empty()
@@ -291,11 +354,11 @@ impl ChatUseCase {
 
     /// Upsert every tool artifact as a card resource: images inline as data
     /// URLs (size-capped), text truncated, other files stored by path.
-    async fn persist_artifacts(&self, card_id: i64, tools: &[ToolUse]) {
+    async fn persist_artifacts(&self, runner: &Arc<dyn Runner>, card_id: i64, tools: &[ToolUse]) {
         let Some(resources) = self.resources.as_ref() else {
             return;
         };
-        let root = self.runner.workspace_root();
+        let root = runner.workspace_root();
         for artifact in tools.iter().flat_map(|t| &t.artifacts) {
             let full = root.join(&artifact.path);
             let Some(name) = full.file_name().and_then(|n| n.to_str()) else {
@@ -447,10 +510,6 @@ impl ChatUseCase {
 
     fn board_op(call: &ToolCall) -> Option<BoardOp> {
         match call {
-            ToolCall::PipelineCreate { name, spec } => Some(BoardOp::CreatePipeline {
-                name: name.clone(),
-                spec: spec.clone(),
-            }),
             ToolCall::CardCreate {
                 project_id,
                 title,
@@ -460,12 +519,13 @@ impl ChatUseCase {
                 title: title.clone(),
                 description: description.clone(),
             }),
-            ToolCall::CardLink {
-                card_id,
-                pipeline_id,
-            } => Some(BoardOp::LinkPipeline {
+            ToolCall::CardAgent { card_id, agent } => Some(BoardOp::AssignAgent {
                 card_id: *card_id,
-                pipeline_id: *pipeline_id,
+                agent: agent.clone(),
+            }),
+            ToolCall::CardImage { card_id, image } => Some(BoardOp::SetImage {
+                card_id: *card_id,
+                image: image.clone(),
             }),
             ToolCall::CardSchedule { card_id, cron } => Some(BoardOp::SetCron {
                 card_id: *card_id,
@@ -488,12 +548,13 @@ impl ChatUseCase {
     fn board_kind(call: &ToolCall) -> Option<ToolKind> {
         match call {
             ToolCall::BoardList | ToolCall::CardFind { .. } => Some(ToolKind::Board),
-            ToolCall::CardCreate { .. } | ToolCall::CardLink { .. } => Some(ToolKind::Card),
-            ToolCall::PipelineCreate { .. } => Some(ToolKind::Pipeline),
+            ToolCall::CardCreate { .. }
+            | ToolCall::CardAgent { .. }
+            | ToolCall::CardImage { .. }
+            | ToolCall::CardRun { .. } => Some(ToolKind::Card),
             ToolCall::CardSchedule { .. } | ToolCall::CardRoutineClear { .. } => {
                 Some(ToolKind::Routine)
             }
-            ToolCall::CardRun { .. } => Some(ToolKind::Card),
             _ => None,
         }
     }
@@ -542,10 +603,16 @@ impl ChatHandling for ChatUseCase {
     /// Zed-style agentic loop: the model may call tools before answering.
     async fn execute(&self, cmd: ChatCmd) -> Result<ChatOutcome, String> {
         let allow_tools = cmd.mode == SearchMode::Auto;
+        let think_level = self.agent_think_level(cmd.agent.as_deref()).await;
+        // Agent-configured thinking joins the per-request toggle: either one
+        // turns the reasoning block on.
+        let think = cmd.think || think_level.on();
         let mut tools = self.agent_tools(cmd.agent.as_deref()).await;
+        // Per-thread sandbox: coding threads get their own environment.
+        let base_runner = self.turn_runner(cmd.thread_id.as_deref(), cmd.agent.as_deref());
         // Auto-select coding only when the work tree fits: a git repo must
         // exist, otherwise file writes have no project to belong to.
-        if !self.runner.has_git_repo() {
+        if !base_runner.has_git_repo() {
             tools = tools.without_coding();
         }
 
@@ -577,6 +644,10 @@ impl ChatHandling for ChatUseCase {
         if !agent_skills.is_empty() {
             context.push_str(PROJECT_SKILLS_HEADER);
             context.push_str(&agent_skills);
+        }
+        if let Some(hint) = think_hint(think_level) {
+            context.push_str(hint);
+            context.push('\n');
         }
         let mut trace: Vec<ToolUse> = Vec::new();
         // stream every finished tool call to the UI as it happens
@@ -611,7 +682,7 @@ impl ChatHandling for ChatUseCase {
                 cmd.image.clone(),
                 cmd.max_tokens,
                 cmd.tokenizer,
-                cmd.think,
+                think,
             )
             .await?;
         let mut last_good = (reply.text.clone(), reply.model.clone(), reply.stats);
@@ -619,6 +690,7 @@ impl ChatHandling for ChatUseCase {
         let mut rounds = 0usize;
         while let Some(call) = self.next_call(&reply, allow_tools, rounds) {
             rounds += 1;
+            let runner = base_runner.clone();
             match call {
                 ToolCall::Search(query) if tools.allows(ToolKind::Search) => {
                     searched = true;
@@ -641,10 +713,10 @@ impl ChatHandling for ChatUseCase {
                     context.push_str(&page);
                 }
                 ToolCall::Shell(shell_cmd) if tools.allows(ToolKind::Shell) => {
-                    let result = self.shell_blocking(&shell_cmd).await;
+                    let result = self.shell_blocking_on(Arc::clone(&runner), &shell_cmd).await;
                     let mut use_ = ToolUse::new(ToolKind::Shell, &shell_cmd, &result);
                     if result.is_ok() {
-                        for path in self.scan_artifacts(result.as_deref().unwrap_or_default()) {
+                        for path in self.scan_artifacts(&runner, result.as_deref().unwrap_or_default()) {
                             use_ = use_.with_artifact(&path);
                         }
                     }
@@ -658,7 +730,6 @@ impl ChatHandling for ChatUseCase {
                     let bytes = code.len();
                     let label = format!("write {path} ({bytes} bytes)");
                     let label_path = path.clone();
-                    let runner = Arc::clone(&self.runner);
                     let result =
                         tokio::task::spawn_blocking(move || runner.write_file(&path, &code))
                             .await
@@ -670,6 +741,24 @@ impl ChatHandling for ChatUseCase {
                         use_ = use_.with_artifact(&label_path);
                     }
                     trace.push(use_);
+                    emit_tool(trace.last().expect("just pushed"));
+                    let out = result.unwrap_or_else(|e| format!("{TOOL_ERROR}{e}"));
+                    context.push_str(TOOL_RESULT_HEADER);
+                    context.push_str(&out);
+                }
+                ToolCall::AgentRun { agent, cmd } if tools.allows(ToolKind::Agent) => {
+                    let label = format!("run {agent}: {cmd}");
+                    let result = match self.agent_run.as_ref() {
+                        Some(run) => {
+                            let run = Arc::clone(run);
+                            tokio::task::spawn_blocking(move || run.run_for(&agent, &cmd))
+                                .await
+                                .map_err(|_| "agent run task panicked".to_string())
+                                .and_then(|inner| inner)
+                        }
+                        None => Err("no agent runner is configured".to_string()),
+                    };
+                    trace.push(ToolUse::new(ToolKind::Agent, &label, &result));
                     emit_tool(trace.last().expect("just pushed"));
                     let out = result.unwrap_or_else(|e| format!("{TOOL_ERROR}{e}"));
                     context.push_str(TOOL_RESULT_HEADER);
@@ -732,7 +821,7 @@ impl ChatHandling for ChatUseCase {
                     col,
                 } if tools.allows(ToolKind::Lsp) => {
                     let input = format!("{} {path}:{line}:{col}", op.as_str().to_lowercase());
-                    let result = self.lsp_blocking(op, &path, line, col).await;
+                    let result = self.lsp_blocking(Arc::clone(&runner), op, &path, line, col).await;
                     trace.push(ToolUse::new(ToolKind::Lsp, &input, &result));
                     emit_tool(trace.last().expect("just pushed"));
                     let out = result.unwrap_or_else(|e| format!("{TOOL_ERROR}{e}"));
@@ -771,7 +860,7 @@ impl ChatHandling for ChatUseCase {
                 &tools,
             );
             reply = match self
-                .infer(prompt, None, cmd.max_tokens, cmd.tokenizer, cmd.think)
+                .infer(prompt, None, cmd.max_tokens, cmd.tokenizer, think)
                 .await
             {
                 Ok(r) => {
@@ -781,7 +870,7 @@ impl ChatHandling for ChatUseCase {
                 Err(e) => {
                     tracing::warn!("chat tool round {rounds} inference failed: {e}");
                     return Ok(self
-                        .finish(&cmd, last_good, searched, trace, memories)
+                        .finish(&base_runner, &cmd, last_good, searched, trace, memories)
                         .await);
                 }
             };
@@ -796,7 +885,7 @@ impl ChatHandling for ChatUseCase {
                     None,
                     cmd.max_tokens,
                     cmd.tokenizer,
-                    cmd.think,
+                    think,
                 )
                 .await
             {
@@ -804,7 +893,7 @@ impl ChatHandling for ChatUseCase {
                 Err(e) => {
                     tracing::warn!("chat final answer inference failed: {e}");
                     return Ok(self
-                        .finish(&cmd, last_good, searched, trace, memories)
+                        .finish(&base_runner, &cmd, last_good, searched, trace, memories)
                         .await);
                 }
             };
@@ -818,6 +907,7 @@ impl ChatHandling for ChatUseCase {
 
         Ok(self
             .finish(
+                &base_runner,
                 &cmd,
                 (reply.text, reply.model, reply.stats),
                 searched,

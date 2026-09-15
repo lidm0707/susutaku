@@ -1,4 +1,4 @@
 //! Infrastructure: Postgres-backed adapters and stores.
 
 pub mod codex_usage;
-pub mod kanban;
+pub mod task;

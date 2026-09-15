@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { GitCommitHorizontal, GitPullRequestArrow, RefreshCw, Upload } from "lucide-react";
 import { SlideOver } from "../ui/Overlay.js";
-import { Button, Field, TextArea, TextInput } from "../ui/controls.js";
+import { Button, Field, TextInput } from "../ui/controls.js";
 import { agent_git, type AgentGitBody } from "../lib.js";
+import DiffView from "./DiffView.js";
 
 const EMPTY_DIFF = "(no changes)";
 
@@ -67,7 +68,7 @@ export default function AgentReview({
       <section className="agent-review">
         <p className="agent-review-status">{status || "…"}</p>
         <Field label="diff" icon={<RefreshCw size={12} />}>
-          <TextArea readOnly value={diff} rows={12} spellCheck={false} />
+          <DiffView diff={diff} rows={12} />
         </Field>
         <Field label="commit message" icon={<GitCommitHorizontal size={12} />}>
           <TextInput

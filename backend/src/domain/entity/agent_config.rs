@@ -11,4 +11,6 @@ pub struct AgentConfigDraft {
     pub allowed_tools: Vec<String>,
     /// False = the agent must never receive images (screenshots, attachments).
     pub receive_images: bool,
+    /// Reasoning depth, one of ThinkLevel::as_str ("off"|"low"|"medium"|"high").
+    pub thinking: String,
 }

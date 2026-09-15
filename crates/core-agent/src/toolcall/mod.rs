@@ -1,6 +1,6 @@
 pub mod fetch;
 pub mod git_in_sandbox;
-pub mod kanban;
+pub mod task;
 pub mod lsp;
 pub mod web_search;
 
@@ -65,10 +65,10 @@ impl Tool {
                 project_id,
                 title,
                 description,
-            } => kanban::create_card(
-                &kanban::base_url(),
-                kanban::token().as_deref(),
-                &kanban::NewCard {
+            } => task::create_card(
+                &task::base_url(),
+                task::token().as_deref(),
+                &task::NewCard {
                     project_id: *project_id,
                     title: title.clone(),
                     description: description.clone(),

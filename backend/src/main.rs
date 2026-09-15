@@ -11,7 +11,7 @@ use backend::infra::codex::auth::codex_home;
 use backend::infra::manager_git::ManagerGit;
 use backend::infra::model_client::RemoteModel;
 use backend::infra::podman::AgentSandbox;
-use backend::infra::postgres::{codex_usage, kanban};
+use backend::infra::postgres::{codex_usage, task};
 use backend::infra::search::{DuckDuckGo, PageFetcher};
 use backend::infra::settings::local;
 use backend::port::outbound::ChatMemory;
@@ -83,22 +83,22 @@ fn spawn_health_log(manager: Arc<Manager>) {
 #[tokio::main]
 async fn main() {
     init_tracing();
-    let kanban_store = Arc::new(kanban::connect().await);
+    let task_store = Arc::new(task::connect().await);
     let model = Arc::new(RemoteModel::new(&local_model_url()));
     let sandbox = Arc::new(AgentSandbox::restore().expect("agent sandbox init"));
     spawn_client_node(sandbox.clone()).await;
     let codex_workspace = sandbox.root();
-    let board = Arc::new(BoardService::new(kanban_store.clone(), Some(model.clone())));
-    api::seed_project_skill(&kanban_store).await;
+    let board = Arc::new(BoardService::new(task_store.clone(), Some(model.clone())));
+    api::seed_project_skill(&task_store).await;
     let skills = Arc::new(backend::domain::SkillService::new(Arc::new(
-        backend::infra::postgres::kanban::PgKanban::new(kanban_store.clone()),
+        backend::infra::postgres::task::PgTask::new(task_store.clone()),
     )));
     let agents: Arc<dyn backend::port::outbound::AgentConfigRepo> = Arc::new(
-        backend::infra::postgres::kanban::PgKanban::new(kanban_store.clone()),
+        backend::infra::postgres::task::PgTask::new(task_store.clone()),
     );
     let manager = Manager::new();
     let resources = std::sync::Arc::new(backend::domain::ResourceService::new(Arc::new(
-        backend::infra::postgres::kanban::PgKanban::new(kanban_store.clone()),
+        backend::infra::postgres::task::PgTask::new(task_store.clone()),
     )));
     let use_case = Arc::new(
         ChatUseCase::new(
@@ -113,8 +113,12 @@ async fn main() {
         )
         .with_resources(resources)
         .with_agent_git(Arc::new(ManagerGit::new(manager.clone())))
+        .with_agent_run(Arc::new(backend::infra::manager_run::ManagerRun::new(
+            manager.clone(),
+        )))
+        .with_thread_envs(Arc::new(backend::infra::thread_env::ThreadEnvManager::new()))
         .with_project_git(Arc::new(
-            backend::infra::project_git::SettingsProjectGit::new(kanban_store.clone()),
+            backend::infra::project_git::SettingsProjectGit::new(task_store.clone()),
         ))
         .with_skills(skills),
     );
@@ -132,7 +136,7 @@ async fn main() {
             model.clone(),
             codex_workspace,
             sandbox.clone(),
-            kanban_store,
+            task_store,
             usage_store,
             manager,
             model.clone(),

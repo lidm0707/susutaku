@@ -12,7 +12,6 @@ const CHANNEL_CAPACITY: usize = 64;
 #[serde(rename_all = "snake_case")]
 pub enum EventKind {
     Card,
-    Pipeline,
     Cron,
     Attachment,
 }

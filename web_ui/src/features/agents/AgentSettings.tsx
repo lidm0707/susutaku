@@ -65,7 +65,6 @@ const TOOL_NAMES = [
   "shell",
   "board",
   "card",
-  "pipeline",
   "routine",
   "coding",
   "math",
@@ -81,7 +80,10 @@ const EMPTY = {
   output: "",
   allowed_tools: [] as string[],
   receive_images: true,
+  thinking: "off",
 };
+
+const THINKING_LEVELS = ["off", "low", "medium", "high"] as const;
 
 type Fields = typeof EMPTY;
 
@@ -259,6 +261,7 @@ export default function AgentSettings() {
       output: a.output || "",
       allowed_tools: a.allowed_tools ?? [],
       receive_images: a.receive_images !== false,
+      thinking: a.thinking || "off",
     });
     if (typeof a.id === "number") load_agent_skills(a.id);
     else setAgentSkills([]);
@@ -337,6 +340,7 @@ export default function AgentSettings() {
       output: fields.output,
       allowed_tools: fields.allowed_tools,
       receive_images: fields.receive_images,
+      thinking: fields.thinking,
     };
     setError("");
     try {
@@ -379,7 +383,7 @@ export default function AgentSettings() {
   const editing = selected != null;
 
   return (
-    <main className="chat kanban-page agents-page">
+    <main className="chat task-page agents-page">
       <header>
         <h1>agents</h1>
         <span className="sub">{agents.length} saved</span>
@@ -574,6 +578,21 @@ export default function AgentSettings() {
                   receive images (screenshots)
                 </label>
               </div>
+            </Field>
+            <Field label="thinking" icon={<Sparkles size={12} />}>
+              <div className="select-wrap">
+                <Select
+                  value={fields.thinking}
+                  onChange={(e) => set("thinking", e.target.value)}
+                  aria-label="thinking level"
+                >
+                  {THINKING_LEVELS.map((l) => (
+                    <option key={l} value={l}>{l}</option>
+                  ))}
+                </Select>
+                <ChevronDown size={13} className="select-arrow" />
+              </div>
+              <p className="agent-tool-hint">reasoning depth for every reply by this agent</p>
             </Field>
             <Field label="skills" icon={<Sparkles size={12} />}>
               {typeof selected === "number" && (

@@ -12,11 +12,11 @@ use crate::infra::zai::settings::SettingsState;
 use crate::port::outbound::ProjectGit;
 
 pub struct SettingsProjectGit {
-    store: Arc<kanban_rs::Store>,
+    store: Arc<task_rs::Store>,
 }
 
 impl SettingsProjectGit {
-    pub fn new(store: Arc<kanban_rs::Store>) -> Self {
+    pub fn new(store: Arc<task_rs::Store>) -> Self {
         Self { store }
     }
 

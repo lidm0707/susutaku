@@ -1,6 +1,6 @@
 ---
 name: susutaku-project
-description: How to work in the susutaku workspace — build/run commands, crate map, docker stacks, e2e tests, kanban/pipeline/chat APIs, and where plans and benchmarks go. Use when doing any task in this repo.
+description: How to work in the susutaku workspace — build/run commands, crate map, docker stacks, e2e tests, task/pipeline/chat APIs, and where plans and benchmarks go. Use when doing any task in this repo.
 ---
 
 # Working in susutaku
@@ -18,7 +18,7 @@ tree layout and rules. This skill is the practical quickstart.
 - No `#[allow(dead_code)]` — use `todo!()`/`unimplemented!()` instead.
 - Constants/enums over magic numbers; prefer enum + `match` over if-chains.
 - sqlx macros compile against the live Postgres — keep it up when touching
-  `kanban-rs`/`backend`.
+  `task-rs`/`backend`.
 
 ## Build & run
 
@@ -28,7 +28,7 @@ cargo clippy --workspace         # must be clean
 make run                         # backend + web (see Makefile for targets)
 ```
 
-Postgres (needed for kanban-rs/backend sqlx macros and the board):
+Postgres (needed for task-rs/backend sqlx macros and the board):
 
 ```sh
 docker compose -f docker/compose/base.yml up -d postgres
@@ -43,9 +43,9 @@ docker compose -f docker/compose/base.yml up -d postgres
 | Board ops exposed to the chat agent | `backend/src/domain/valueobject/board.rs` + `backend/src/app/board.rs`; tool lines parsed in `backend/src/domain/service/tool_call.rs`; prompt text in `backend/src/domain/service/prompt.rs` |
 | Card pipeline execution | `backend/src/app/pipeline_run/` (run_card_pipeline, stages in `nodes.rs`) |
 | Cron scheduler for cards | `backend/src/app/schedule_work.rs` (card.cron, 5-field UTC) |
-| HTTP API | `backend/src/api.rs` (axum; kanban routes, chat routes, cronjobs) |
+| HTTP API | `backend/src/api.rs` (axum; task routes, chat routes, cronjobs) |
 | Pipeline graph/stage engine | `crates/piplines` (PipelineSpec, validate_draft) |
-| Kanban model + Postgres store | `crates/kanban-rs` (`query_as!`, Postgres on 5434) |
+| Task model + Postgres store | `crates/task-rs` (`query_as!`, Postgres on 5434) |
 | Agent sandbox | `crates/core-agent/src/sandbox/{macos,linux,windows}.rs` |
 | Web UI (React TS, vite) | `web_ui/src/` — overlays: SlideOver for heavy content, Modal for light (in `src/ui/Overlay.tsx`) |
 | Inference | remote always: `RemoteModel` from `SUSUTAKU_LOCAL_MODEL_URL` (default 127.0.0.1:8992); MLX never runs in the backend container |

@@ -1,20 +1,19 @@
-//! Schedule service tests over mocked repos: due cards run their pipeline,
-//! future ones wait, unscheduled ones are ignored.
+//! Schedule service tests over mocked repos: due cards get scheduled, future
+//! ones wait, unscheduled ones are ignored.
 
 use std::sync::Arc;
 
-use kanban_rs::CardRow;
+use task_rs::CardRow;
 use mockall::predicate::eq;
 
-use backend::app::kanban::KanbanApp;
+use backend::app::task::TaskApp;
 use backend::app::schedule_work::{self, ScheduleHandle};
 use backend::port::outbound::{
-    MockAgentConfigRepo, MockCardRepo, MockCommentRepo, MockPipelineRepo, MockProjectRepo,
-    MockResourceRepo, MockSkillRepo, MockWorkspaceRepo,
+    MockAgentConfigRepo, MockCardRepo, MockCommentRepo, MockProjectRepo, MockResourceRepo,
+    MockSkillRepo, MockWorkspaceRepo,
 };
 
 const CARD_ID: i64 = 5;
-const PIPE_ID: i64 = 7;
 const EVERY_MINUTE: &str = "* * * * *";
 
 fn card_row(cron: Option<&str>) -> CardRow {
@@ -28,11 +27,11 @@ fn card_row(cron: Option<&str>) -> CardRow {
         position: 0,
         agent_name: None,
         agent_state: None,
-        run_status: kanban_rs::RUN_STATUS_IDLE.into(),
+        run_status: task_rs::RUN_STATUS_IDLE.into(),
         last_agent: None,
         last_run_id: None,
         assignee: None,
-        pipeline_id: Some(PIPE_ID),
+        image: None,
         cron: cron.map(str::to_owned),
         deadline: None,
         labels: None,
@@ -47,11 +46,10 @@ fn empty_cards() -> MockCardRepo {
     cards
 }
 
-fn app(cards: MockCardRepo, pipelines: MockPipelineRepo) -> Arc<KanbanApp> {
-    Arc::new(KanbanApp::new(
+fn app(cards: MockCardRepo) -> Arc<TaskApp> {
+    Arc::new(TaskApp::new(
         Arc::new(cards),
         Arc::new(MockCommentRepo::new()),
-        Arc::new(pipelines),
         Arc::new(MockResourceRepo::new()),
         Arc::new(MockAgentConfigRepo::new()),
         Arc::new(MockSkillRepo::new()),
@@ -64,8 +62,7 @@ fn app(cards: MockCardRepo, pipelines: MockPipelineRepo) -> Arc<KanbanApp> {
 async fn unscheduled_cards_are_ignored() {
     let mut cards = MockCardRepo::new();
     cards.expect_list().returning(|_| Ok(vec![card_row(None)]));
-    // no pipeline lookups, no agent writes
-    let app = app(cards, MockPipelineRepo::new());
+    let app = app(cards);
     let handle = ScheduleHandle::new();
     schedule_work::run_once(&app, None, &handle).await;
     assert!(handle.entries().is_empty());
@@ -77,7 +74,7 @@ async fn scheduled_card_gets_a_next_run() {
     cards
         .expect_list()
         .returning(|_| Ok(vec![card_row(Some(EVERY_MINUTE))]));
-    let app = app(cards, MockPipelineRepo::new());
+    let app = app(cards);
     let handle = ScheduleHandle::new();
     schedule_work::run_once(&app, None, &handle).await;
     let entries = handle.entries();
@@ -93,7 +90,7 @@ async fn bad_cron_is_dropped() {
     cards
         .expect_list()
         .returning(|_| Ok(vec![card_row(Some("not a cron"))]));
-    let app = app(cards, MockPipelineRepo::new());
+    let app = app(cards);
     let handle = ScheduleHandle::new();
     schedule_work::run_once(&app, None, &handle).await;
     assert!(handle.entries().is_empty());
@@ -107,11 +104,11 @@ async fn removed_cron_is_forgotten() {
         .expect_list()
         .times(1)
         .returning(|_| Ok(vec![card_row(Some(EVERY_MINUTE))]));
-    let app_cron = app(with_cron, MockPipelineRepo::new());
+    let app_cron = app(with_cron);
     schedule_work::run_once(&app_cron, None, &handle).await;
     assert_eq!(handle.entries().len(), 1);
     // cron removed -> entry pruned on the next pass
-    let app = app(empty_cards(), MockPipelineRepo::new());
+    let app = app(empty_cards());
     schedule_work::run_once(&app, None, &handle).await;
     assert!(handle.entries().is_empty());
 }
@@ -123,7 +120,7 @@ async fn set_cron_reaches_the_repo() {
         .expect_set_cron()
         .with(eq(CARD_ID), eq(Some("*/5 * * * *".to_owned())))
         .returning(|_, _| Ok(()));
-    let app = app(cards, MockPipelineRepo::new());
+    let app = app(cards);
     app.cards
         .set_cron(CARD_ID, Some("*/5 * * * *".to_owned()))
         .await

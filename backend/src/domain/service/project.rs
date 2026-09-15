@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use kanban_rs::{ProjectRow, StoreError};
+use task_rs::{ProjectRow, StoreError};
 
 use crate::domain::NewProject;
 use crate::port::outbound::ProjectRepo;

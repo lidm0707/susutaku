@@ -19,14 +19,21 @@ impl GitRepo {
         base_commit: Option<&str>,
         message: &str,
     ) -> Result<TaskPatch, GitError> {
+        let unborn = !self.has_commits();
         let commit = if self.is_dirty()? {
             Some(self.commit_all(&format!("{TASK_COMMIT_PREFIX}{message}"))?)
         } else {
             None
         };
+        if unborn && commit.is_none() {
+            return Ok(TaskPatch {
+                patch: String::new(),
+                commit: None,
+            });
+        }
         let head = self.head_oid()?;
         let patch = match base_commit {
-            Some(base) => {
+            Some(base) if !unborn => {
                 let from = git2::Oid::from_str(base)?;
                 if from == head {
                     String::new()
@@ -34,7 +41,7 @@ impl GitRepo {
                     self.patch_range(from, head)?
                 }
             }
-            None => self.patch_empty_to(head)?,
+            _ => self.patch_empty_to(head)?,
         };
         Ok(TaskPatch {
             patch,
@@ -60,6 +67,60 @@ impl GitRepo {
     pub fn patch_workdir(&self) -> Result<String, GitError> {
         let head = self.head_oid()?;
         self.patch_between_tree_and_workdir(head)
+    }
+
+    /// Work-tree patch against the empty tree — the unborn-HEAD case (fresh
+    /// repo, no commits yet).
+    pub fn patch_workdir_empty_base(&self) -> Result<String, GitError> {
+        let empty = self.raw().find_tree(self.empty_tree_oid()?)?;
+        let mut opts = diff_options();
+        let diff = self
+            .raw()
+            .diff_tree_to_workdir_with_index(Some(&empty), Some(&mut opts))?;
+        patch_text(&diff)
+    }
+
+    /// Patch of the commits HEAD is ahead of the base branch
+    /// (`DEFAULT_BRANCH`, local or `origin/`). Empty when HEAD sits on or
+    /// behind the base branch — i.e. nothing committed but unpushed.
+    pub fn patch_unpushed(&self) -> Result<String, GitError> {
+        if !self.has_commits() {
+            return Ok(String::new());
+        }
+        let head = self.head_oid()?;
+        let Some(base) = self.base_branch_commit()? else {
+            return Ok(String::new());
+        };
+        let base = base.id();
+        if base == head {
+            return Ok(String::new());
+        }
+        let merge_base = self.raw().merge_base(base, head)?;
+        if merge_base == head {
+            return Ok(String::new());
+        }
+        self.patch_between_commits(merge_base, head)
+    }
+
+    /// Base branch tip, or `None` when neither `main` nor `origin/main`
+    /// exists (fresh repo, detached HEAD) — callers treat that as "no base".
+    fn base_branch_commit(&self) -> Result<Option<git2::Commit<'_>>, GitError> {
+        let local = self
+            .raw()
+            .find_branch(crate::DEFAULT_BRANCH, git2::BranchType::Local)
+            .ok();
+        if let Some(b) = local {
+            return Ok(Some(b.get().peel_to_commit()?));
+        }
+        let remote_name = format!("{}{}", crate::REMOTE_ORIGIN, crate::DEFAULT_BRANCH);
+        let remote = self
+            .raw()
+            .find_branch(&remote_name, git2::BranchType::Remote)
+            .ok();
+        match remote {
+            Some(b) => Ok(Some(b.get().peel_to_commit()?)),
+            None => Ok(None),
+        }
     }
 }
 
@@ -90,24 +151,19 @@ impl GitRepo {
     fn patch_between_tree_and_workdir(&self, base: git2::Oid) -> Result<String, GitError> {
         let commit = self.raw().find_commit(base)?;
         let mut opts = diff_options();
-        let diff = self.raw().diff_tree_to_workdir_with_index(
-            Some(&commit.tree()?),
-            Some(&mut opts),
-        )?;
+        let diff = self
+            .raw()
+            .diff_tree_to_workdir_with_index(Some(&commit.tree()?), Some(&mut opts))?;
         patch_text(&diff)
     }
 
-    fn patch_between_commits(
-        &self,
-        from: git2::Oid,
-        to: git2::Oid,
-    ) -> Result<String, GitError> {
+    fn patch_between_commits(&self, from: git2::Oid, to: git2::Oid) -> Result<String, GitError> {
         let from_tree = self.raw().find_commit(from)?.tree()?;
         let to_tree = self.raw().find_commit(to)?.tree()?;
         let mut opts = diff_options();
-        let diff = self
-            .raw()
-            .diff_tree_to_tree(Some(&from_tree), Some(&to_tree), Some(&mut opts))?;
+        let diff =
+            self.raw()
+                .diff_tree_to_tree(Some(&from_tree), Some(&to_tree), Some(&mut opts))?;
         patch_text(&diff)
     }
 }

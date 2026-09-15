@@ -58,13 +58,13 @@ pub enum ToolCall {
     CardRun {
         card_id: i64,
     },
-    CardLink {
+    CardAgent {
         card_id: i64,
-        pipeline_id: i64,
+        agent: String,
     },
-    PipelineCreate {
-        name: String,
-        spec: Option<String>,
+    CardImage {
+        card_id: i64,
+        image: Option<String>,
     },
     BoardList,
     CardFind {
@@ -85,6 +85,10 @@ pub enum ToolCall {
         /// 0-based UTF-8 column of the symbol position.
         col: usize,
     },
+    AgentRun {
+        agent: String,
+        cmd: String,
+    },
 }
 
 const TOOL_PREFIX: &str = "TOOL:";
@@ -104,8 +108,8 @@ const XML_CARD_CREATE_ALIAS: &str = "create_card";
 const XML_CARD_ROUTINE: &str = "card_routine";
 const XML_CARD_ROUTINE_CLEAR: &str = "card_routine_clear";
 const XML_CARD_RUN: &str = "card_run";
-const XML_CARD_LINK: &str = "card_link";
-const XML_PIPELINE_CREATE: &str = "pipeline_create";
+const XML_CARD_AGENT: &str = "card_agent";
+const XML_CARD_IMAGE: &str = "card_image";
 const XML_BOARD_LIST: &str = "board_list";
 const XML_CARD_FIND: &str = "card_find";
 const XML_CARD_FIND_ALIAS: &str = "find_card";
@@ -113,6 +117,7 @@ const XML_MATH: &str = "math";
 const XML_MATH_ALIAS: &str = "geomath";
 const XML_GIT: &str = "git";
 const XML_LSP: &str = "lsp";
+const XML_AGENT_RUN: &str = "agent_run";
 const TOOL_SEARCH: &str = "SEARCH";
 const TOOL_FETCH: &str = "FETCH";
 const TOOL_SHELL: &str = "SHELL";
@@ -120,14 +125,15 @@ const TOOL_CARD_CREATE: &str = "CARD_CREATE";
 const TOOL_CARD_ROUTINE: &str = "CARD_ROUTINE";
 const TOOL_CARD_ROUTINE_CLEAR: &str = "CARD_ROUTINE_CLEAR";
 const TOOL_CARD_RUN: &str = "CARD_RUN";
-const TOOL_CARD_LINK: &str = "CARD_LINK";
-const TOOL_PIPELINE_CREATE: &str = "PIPELINE_CREATE";
+const TOOL_CARD_AGENT: &str = "CARD_AGENT";
+const TOOL_CARD_IMAGE: &str = "CARD_IMAGE";
 const TOOL_BOARD_LIST: &str = "BOARD_LIST";
 const TOOL_CARD_FIND: &str = "CARD_FIND";
 const TOOL_MATH: &str = "MATH";
 const TOOL_MATH_ALIAS: &str = "GEOMATH";
 const TOOL_GIT: &str = "GIT";
 const TOOL_LSP: &str = "LSP";
+const TOOL_AGENT_RUN: &str = "AGENT_RUN";
 const LSP_ARGS: usize = 4;
 const GIT_OP_CLONE: &str = "CLONE";
 const AGENT_PREFIX: &str = "@";
@@ -197,25 +203,27 @@ impl ToolCall {
             TOOL_CARD_RUN => Some(Self::CardRun {
                 card_id: arg.parse().ok()?,
             }),
-            TOOL_CARD_LINK => {
-                let (card_id, pipeline_id) = arg.split_once(' ')?;
-                Some(Self::CardLink {
-                    card_id: card_id.parse().ok()?,
-                    pipeline_id: pipeline_id.parse().ok()?,
-                })
-            }
-            TOOL_PIPELINE_CREATE => {
-                let (name, spec) = match arg.split_once(' ') {
-                    Some((name, spec)) => (name, Some(spec.trim())),
-                    None => (arg, None),
-                };
-                if name.is_empty() {
+            TOOL_CARD_AGENT => {
+                let (card_id, agent) = arg.split_once(' ')?;
+                let agent = agent.trim();
+                if agent.is_empty() {
                     return None;
                 }
-                let spec = spec.map(str::trim).filter(|s| !s.is_empty());
-                Some(Self::PipelineCreate {
-                    name: name.to_string(),
-                    spec: spec.map(str::to_string),
+                Some(Self::CardAgent {
+                    card_id: card_id.parse().ok()?,
+                    agent: agent.to_string(),
+                })
+            }
+            TOOL_CARD_IMAGE => {
+                let (card_id, image) = arg.split_once(' ')?;
+                let image = image.trim();
+                let clear = image.eq_ignore_ascii_case(CRON_CLEAR);
+                if image.is_empty() && !clear {
+                    return None;
+                }
+                Some(Self::CardImage {
+                    card_id: card_id.parse().ok()?,
+                    image: (!clear).then(|| image.to_string()),
                 })
             }
             TOOL_BOARD_LIST => Some(Self::BoardList),
@@ -225,6 +233,7 @@ impl ToolCall {
             TOOL_MATH | TOOL_MATH_ALIAS if !arg.is_empty() => Some(Self::Math(arg.to_string())),
             TOOL_GIT => Self::parse_git(arg),
             TOOL_LSP => Self::parse_lsp(arg),
+            TOOL_AGENT_RUN => Self::parse_agent_run(arg),
             _ => None,
         }
     }
@@ -266,23 +275,14 @@ impl ToolCall {
             XML_CARD_RUN => Some(Self::CardRun {
                 card_id: p("card_id")?.trim().parse().ok()?,
             }),
-            XML_CARD_LINK => Some(Self::CardLink {
+            XML_CARD_AGENT => Some(Self::CardAgent {
                 card_id: p("card_id")?.trim().parse().ok()?,
-                pipeline_id: p("pipeline_id")?.trim().parse().ok()?,
+                agent: p("agent")?.trim().to_string(),
             }),
-            XML_PIPELINE_CREATE => {
-                let name = p("name")?;
-                if name.is_empty() {
-                    return None;
-                }
-                let spec = p("spec")
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty());
-                Some(Self::PipelineCreate {
-                    name: name.to_string(),
-                    spec,
-                })
-            }
+            XML_CARD_IMAGE => Some(Self::CardImage {
+                card_id: p("card_id")?.trim().parse().ok()?,
+                image: p("image").map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
+            }),
             XML_BOARD_LIST => Some(Self::BoardList),
             XML_CARD_FIND | XML_CARD_FIND_ALIAS => {
                 let query = p("query")?.trim().to_string();
@@ -304,6 +304,11 @@ impl ToolCall {
                 line: p("line")?.trim().parse().ok()?,
                 col: p("col")?.trim().parse().ok()?,
             }),
+            XML_AGENT_RUN => Self::parse_agent_run(&format!(
+                "{} {}",
+                p("agent")?.trim(),
+                p("command")?.trim()
+            )),
             XML_GIT => {
                 let op = p("op").map(str::trim);
                 let url = p("url").map(|u| u.trim().to_string());
@@ -334,6 +339,20 @@ impl ToolCall {
             }
             _ => None,
         }
+    }
+
+    /// `AGENT_RUN <agent> <cmd...>` — the command may contain spaces.
+    fn parse_agent_run(arg: &str) -> Option<Self> {
+        let (agent, cmd) = arg.split_once(' ')?;
+        let agent = agent.trim();
+        let cmd = cmd.trim();
+        if agent.is_empty() || cmd.is_empty() {
+            return None;
+        }
+        Some(Self::AgentRun {
+            agent: agent.to_string(),
+            cmd: cmd.to_string(),
+        })
     }
 
     /// `LSP <op> <path> <line> <col>` — the path must not contain spaces.

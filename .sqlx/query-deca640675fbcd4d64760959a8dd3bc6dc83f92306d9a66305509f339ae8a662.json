@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT agent_name, agent_state FROM task_cards WHERE id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "agent_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "agent_state",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      true,
+      true
+    ]
+  },
+  "hash": "deca640675fbcd4d64760959a8dd3bc6dc83f92306d9a66305509f339ae8a662"
+}

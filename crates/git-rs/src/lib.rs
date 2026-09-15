@@ -18,3 +18,4 @@ pub const STAGE_PATHSPEC: &str = "*";
 pub const DIFF_CONTEXT_LINES: u32 = 3;
 pub const TASK_COMMIT_PREFIX: &str = "agent task: ";
 pub const DEFAULT_BRANCH: &str = "main";
+pub const REMOTE_ORIGIN: &str = "origin/";

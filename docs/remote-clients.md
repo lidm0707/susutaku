@@ -119,7 +119,7 @@ sequenceDiagram
 - Stale non-empty work trees (crashed run, backend restart) are reclaimed on
   the next spawn of the same agent name.
 - `state` returned on finish carries the cwd + full transcript, ready to be
-  persisted (e.g. into the kanban card's `agent_state`).
+  persisted (e.g. into the task card's `agent_state`).
 
 ## 5. Commands
 

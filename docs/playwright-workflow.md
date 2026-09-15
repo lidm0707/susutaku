@@ -33,9 +33,9 @@ host: cargo run -p backend        # MLX needs macOS Metal, stays on host :8991
 | `playwright/setup.ts` / `playwright/teardown.ts` | globalSetup / globalTeardown hooks |
 | `playwright/tests/helpers.ts` | Seeds the e2e user (bootstrap or admin-created) |
 | `playwright/tests/fixtures.ts` | `login` fixture: fresh logged-in page per test |
-| `crates/kanban-rs/examples/hash_password.rs` | Prints an argon2 hash to seed the e2e admin (one-time) |
+| `crates/task-rs/examples/hash_password.rs` | Prints an argon2 hash to seed the e2e admin (one-time) |
 | `playwright/tests/auth.spec.ts` | Login redirect / bad-credential flows |
-| `playwright/tests/kanban.spec.ts` | Board loads; workspace+project API round-trip |
+| `playwright/tests/task.spec.ts` | Board loads; workspace+project API round-trip |
 | `playwright/tests/card-detail.spec.ts` | Card detail: two-pane layout, priority/deadline, tabs, agent mention chat, run history |
 | `playwright/tests/ux-snapshots.spec.ts` | Full-page screenshots of every route |
 | `playwright/screenshots/` | UX review images (bind-mounted from the container) |
@@ -70,7 +70,7 @@ host dev DB needs an admin whose credentials the suite knows. Default env:
 `e2e-admin` / `e2e-admin-e2e-admin` (role `admin`, no forced password change).
 
 ```sh
-HASH=$(cargo run -q -p kanban-rs --example hash_password -- 'e2e-admin-e2e-admin')
+HASH=$(cargo run -q -p task-rs --example hash_password -- 'e2e-admin-e2e-admin')
 docker exec susutaku-postgres-1 psql -U susutaku -d susutaku -c \
   "INSERT INTO users (username, password_hash, role, must_change_password) \
    VALUES ('e2e-admin', '$HASH', 'admin', FALSE) \
@@ -128,4 +128,4 @@ docker compose -f docker/compose/playwright.yml run --rm \
   host backend binary is stale (its OpenAPI lacks the path) — rebuild/restart
   `cargo run -p backend` to fix; consider a friendlier inline error state too.
 - `login` page renders the form high on the page; could be vertically centered.
-- `kanban` empty columns (e.g. `Done 0`) have no drop affordance/hint.
+- `task` empty columns (e.g. `Done 0`) have no drop affordance/hint.

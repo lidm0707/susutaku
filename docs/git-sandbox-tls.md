@@ -1,5 +1,8 @@
 # Git toolcalls: "there is no TLS stream available" and how agent git works
 
+For the user-facing review flow built on these ops (diff fallbacks, artifact
+capture, review page e2e) see `docs/review-flow.md`.
+
 ## Symptom
 
 The agent's `GIT CLONE` failed instantly with:

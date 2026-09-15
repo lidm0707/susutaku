@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use backend::api::{PROJECT_SKILL_NAME, seed_project_skill};
-use kanban_rs::{AgentConfigRow, Store};
+use task_rs::{AgentConfigRow, Store};
 
 fn unique_name(tag: &str) -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -25,6 +25,7 @@ fn agent_cfg(name: String) -> AgentConfigRow {
         output: String::new(),
         allowed_tools: vec!["board".into()],
         receive_images: false,
+        thinking: "off".into(),
     }
 }
 

@@ -1,6 +1,5 @@
-//! Agent board flow: a model asking for scheduled work must be able to create
-//! a pipeline WITH a valid spec (not just an empty shell), a card, and have
-//! the ops reach the board in order.
+//! Agent board flow: a model asked to do scheduled work must create a card,
+//! assign an agent to it, and have the ops reach the board in order.
 
 use std::sync::{Arc, Mutex};
 
@@ -13,10 +12,8 @@ use backend::port::outbound::{BoardOps, Fetcher, Inference, ModelSwitch, Runner,
 use susutaku_mlx::stats::GenStats;
 use susutaku_mlx::tok::TokKind;
 
-const SPEC_SEARCH: &str =
-    r#"{"nodes":[{"id":"a","stage":"search","params":{"query":"donald trump"}}],"links":[]}"#;
-const MARK_PIPELINE_CREATED: &str = "pipeline 1 created";
 const MARK_CARD_CREATED: &str = "card 2 created";
+const MARK_AGENT_ASSIGNED: &str = "agent nightly assigned";
 const MARK_TOOL_OFFER: &str = "TOOL:";
 
 struct NoSearch;
@@ -55,8 +52,8 @@ impl Runner for NoShell {
     }
 }
 
-/// Round 1: create a pipeline with a spec. Round 2 (sees the creation note in
-/// the tool results): create a card. After that: final answer.
+/// Round 1: create a card. Round 2 (sees the creation note in the tool
+/// results): assign an agent. After that: final answer.
 struct BoardFlowEngine;
 impl Inference for BoardFlowEngine {
     fn submit(
@@ -67,16 +64,16 @@ impl Inference for BoardFlowEngine {
         _think: bool,
     ) -> Result<tokio::sync::oneshot::Receiver<Result<GenReply, String>>, String> {
         let (tx, rx) = tokio::sync::oneshot::channel();
-        let saw_pipeline = prompt.contains(MARK_PIPELINE_CREATED);
+        let saw_agent = prompt.contains(MARK_AGENT_ASSIGNED);
         let saw_card = prompt.contains(MARK_CARD_CREATED);
         let saw_offer = prompt.contains(MARK_TOOL_OFFER);
         std::thread::spawn(move || {
-            let text = if saw_card {
+            let text = if saw_agent {
                 "done".to_string()
-            } else if saw_pipeline {
-                "TOOL: CARD_CREATE 1 trump-card".to_string()
+            } else if saw_card {
+                "TOOL: CARD_AGENT 2 nightly".to_string()
             } else if saw_offer {
-                format!(r"TOOL: PIPELINE_CREATE nightly {SPEC_SEARCH}")
+                "TOOL: CARD_CREATE 1 trump-card".to_string()
             } else {
                 "done".to_string()
             };
@@ -105,9 +102,11 @@ struct RecordingBoard(Mutex<Vec<BoardOp>>);
 #[async_trait::async_trait]
 impl BoardOps for RecordingBoard {
     async fn exec(&self, req: BoardRequest) -> BoardResult {
-        let reply = match req.op {
-            BoardOp::CreatePipeline { .. } => MARK_PIPELINE_CREATED.to_string() + ": nightly",
-            BoardOp::CreateCard { .. } => "card 2 created".to_string(),
+        let reply = match &req.op {
+            BoardOp::CreateCard { .. } => MARK_CARD_CREATED.to_string(),
+            BoardOp::AssignAgent { card_id, agent } => {
+                format!("{MARK_AGENT_ASSIGNED} to card {card_id}: {agent}")
+            }
             _ => "ok".to_string(),
         };
         self.0.lock().expect("lock").push(req.op);
@@ -116,7 +115,7 @@ impl BoardOps for RecordingBoard {
 }
 
 #[tokio::test]
-async fn agent_creates_pipeline_with_spec_then_card() {
+async fn agent_creates_card_then_assigns_agent() {
     let board = Arc::new(RecordingBoard(Mutex::new(Vec::new())));
     let use_case = ChatUseCase::new(
         Arc::new(NoSearch),
@@ -147,13 +146,13 @@ async fn agent_creates_pipeline_with_spec_then_card() {
 
     assert_eq!(outcome.text, "done");
     let ops = board.0.lock().expect("lock");
-    assert_eq!(ops.len(), 2, "pipeline + card must both reach the board");
+    assert_eq!(ops.len(), 2, "card + agent must both reach the board");
     assert!(matches!(
         &ops[0],
-        BoardOp::CreatePipeline { name, spec } if name == "nightly" && spec.as_deref() == Some(SPEC_SEARCH)
+        BoardOp::CreateCard { project_id: 1, title, description: None } if title == "trump-card"
     ));
     assert!(matches!(
         &ops[1],
-        BoardOp::CreateCard { project_id: 1, title, description: None } if title == "trump-card"
+        BoardOp::AssignAgent { card_id: 2, agent } if agent == "nightly"
     ));
 }

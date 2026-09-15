@@ -74,6 +74,10 @@ allow-list, `--network=none` by default, rlimits, timeout kill).
   apt steps inside the build).
 - The compose volume `podman-storage` (`/var/lib/containers/storage`)
   persists podman's storage, so redeploys skip the rebuild.
+- The compose volume `work` (`/app/work`) persists agent work trees
+  (`AGENTS_ROOT = "work/agents"`, relative to the backend CWD) — without it
+  every container recreate silently destroyed them. See
+  `docs/review-flow.md`.
 - nftables is installed in the image because podman *builds* use netavark
   + nftables for the build network (`podman run --network=none` does not
   need it).
