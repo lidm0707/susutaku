@@ -177,7 +177,7 @@ function InstallCmd() {
           <code>susutaku-agent-sandbox-&lt;pid&gt;</code>
         </li>
         <li>
-          once running, the machine appears in the <strong>machines</strong> dialog
+          once running, the machine appears in the <strong>runtime</strong> dialog
           (sidebar) — its per-agent sandboxes are listed under <strong>agent sandboxes</strong>,
           and stale entries (dead clients) can be removed there anytime
         </li>

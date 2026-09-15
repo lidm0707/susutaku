@@ -102,7 +102,7 @@ test.describe("chat against the mock model (backend in container)", () => {
     await selectAgent(page, agentName);
     // Plain chat (tools off): the mock echoes the contexted first line back.
     await dialog.locator('select[title="web search mode"]').selectOption("off");
-    await dialog.getByPlaceholder(/type a message/).fill("hello mock");
+    await dialog.getByPlaceholder(/message the agent/i).fill("hello mock");
     await dialog.locator('form button[type="submit"]').click();
 
     const reply = page.locator(".bubble.assistant p", {
@@ -124,7 +124,7 @@ test.describe("chat against the mock model (backend in container)", () => {
     // backend runs it inside its sandbox and the mock then answers with the
     // marker.
     await dialog.locator('select[title="web search mode"]').selectOption("auto");
-    await dialog.getByPlaceholder(/type a message/).fill("what can you do?");
+    await dialog.getByPlaceholder(/message the agent/i).fill("what can you do?");
     await dialog.locator('form button[type="submit"]').click();
 
     const reply = page.locator(".bubble.assistant p", {
@@ -162,7 +162,7 @@ test.describe("chat against the mock model (backend in container)", () => {
     const topic = `moon harvest ${Date.now()}`;
     // Auto mode: the tool loop only runs when the mode allows tools.
     await dialog.locator('select[title="web search mode"]').selectOption("auto");
-    await dialog.getByPlaceholder(/type a message/).fill(`please do task: ${topic}`);
+    await dialog.getByPlaceholder(/message the agent/i).fill(`please do task: ${topic}`);
     await dialog.locator('form button[type="submit"]').click();
 
     // The mock model walks BOARD_LIST -> CARD_FIND -> CARD_CREATE ->
@@ -193,7 +193,7 @@ test.describe("chat against the mock model (backend in container)", () => {
     expect(mine[0].cron).toBe(TASK_CRON);
 
     // Saying the same task again must reuse the card, not duplicate it.
-    await dialog.getByPlaceholder(/type a message/).fill(`please do task: ${topic}`);
+    await dialog.getByPlaceholder(/message the agent/i).fill(`please do task: ${topic}`);
     await dialog.locator('form button[type="submit"]').click();
     await expect(page.locator(".bubble.assistant p", { hasText: TASK_OK_MARKER }).last()).toBeVisible({
       timeout: CHAT_TIMEOUT_MS,

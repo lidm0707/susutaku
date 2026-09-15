@@ -112,6 +112,10 @@ impl BoardOps for RecordingBoard {
         self.0.lock().expect("lock").push(req.op);
         Ok(reply)
     }
+
+    async fn card_context(&self, _card_id: i64) -> Option<String> {
+        None
+    }
 }
 
 #[tokio::test]

@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO routines (name, cron, agent, instruction, enabled)\n               VALUES ($1, $2, $3, $4, $5) RETURNING id AS \"id!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Bool"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "5b47f7266968e41764050a6b5cdba74e2836ac63791bb43b85ae3f2998294a6d"
+}

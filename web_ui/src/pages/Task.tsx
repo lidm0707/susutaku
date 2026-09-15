@@ -1,16 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ArrowLeft, ArrowRight, Bot, CalendarClock, CheckCircle2, Clock, Eye, EyeOff, Flag, Hash, Image, LayoutGrid, List, ListChecks, Loader2, Play, Plus, Save, Tag, Trash2, User, X, XCircle, Zap } from "lucide-react";
+import { ArrowLeft, ArrowRight, Bot, CalendarClock, CheckCircle2, Eye, EyeOff, Flag, Hash, Image, LayoutGrid, List, ListChecks, Loader2, Play, Plus, Save, Tag, Trash2, User, X, XCircle, Zap } from "lucide-react";
 import {
   clear_token,
   connect_events,
   add_comment,
   chat,
-  create_card,
+  create_task,
   fetch_agents,
-  fetch_cards,
+  fetch_tasks,
   fetch_comments,
-  fetch_cronjobs,
   fetch_projects,
   fetch_users,
   fetch_agent_machine,
@@ -18,20 +17,19 @@ import {
   set_query_param,
   PARAM_CARD,
   PARAM_PROJECT,
-  move_card,
   remove_card,
   set_agent,
   set_card_image,
   set_card_schedule,
   run_card,
   run_of,
+  set_task_status,
   update_card,
   type Agent,
   type Card,
   type CardRun,
   type ChecklistItem,
   type Comment,
-  type CronJob,
   type UserInfo,
 } from "../lib.js";
 import { Modal, SlideOver } from "../ui/Overlay.js";
@@ -39,11 +37,12 @@ import { toast } from "../ui/Toast.js";
 import { use_projects } from "../components/ProjectContext.tsx";
 import { emit_card_created } from "../features/card_bus.js";
 import { use_workspaces } from "../components/WorkspaceContext.tsx";
-import { RoutineEditor, cron_label } from "../components/RoutineEditor.js";
 
 const COLUMNS = [
   { id: "todo", title: "To Do" },
-  { id: "doing", title: "Doing" },
+  { id: "doing", title: "In Progress" },
+  { id: "review", title: "Review" },
+  { id: "conflict", title: "Conflict" },
   { id: "done", title: "Done" },
   { id: "failed", title: "Failed" },
 ] as const;
@@ -63,10 +62,6 @@ const DUE_SOON_DAYS = 2;
 const ESTIMATE_MAX = 99;
 
 type DueState = "overdue" | "soon" | null;
-
-function next_run_for(card_id: number, jobs: CronJob[]): number | null {
-  return jobs.find((j) => j.card_id === card_id)?.next_run ?? null;
-}
 
 function parse_labels(card: Card): string[] {
   if (!card.labels) return [];
@@ -122,6 +117,7 @@ export default function Task() {
   const [cards, setCards] = useState<Card[]>([]);
   const [, setError] = useState("");
   const [title, setTitle] = useState("");
+  const [desc, setDesc] = useState("");
   const [priority, setPriority] = useState<Priority>(PRIORITIES[1]);
   const [agentFor, setAgentFor] = useState<Card | null>(null);
   const [agentName, setAgentName] = useState("");
@@ -152,7 +148,6 @@ export default function Task() {
   const [showDone, setShowDone] = useState(false);
   const [draggingId, setDraggingId] = useState<number | null>(null);
   const [runningId, setRunningId] = useState<number | null>(null);
-  const [cronjobs, setCronjobs] = useState<CronJob[]>([]);
   const [addOpen, setAddOpen] = useState(false);
 
   async function handle(err: unknown) {
@@ -223,7 +218,7 @@ export default function Task() {
 
   async function refresh() {
     try {
-      setCards(await fetch_cards(project_id as number));
+      setCards(await fetch_tasks(project_id as number));
     } catch (err) {
       handle(err);
     }
@@ -234,12 +229,13 @@ export default function Task() {
     if (!title.trim() || project_id == null) return;
     setError("");
     try {
-      const res = await create_card(project_id, COLUMNS[0].id, title.trim(), "", priority);
+      const res = await create_task(project_id ?? null, title.trim(), desc.trim(), priority);
       if (res.ok) {
         const card = (await res.json()) as { id: number; title: string; project_id: number | null };
         emit_card_created({ id: card.id, title: card.title, project_id: card.project_id });
       }
       setTitle("");
+      setDesc("");
       setAddOpen(false);
       await refresh();
       toast("task created", "success");
@@ -254,7 +250,7 @@ export default function Task() {
     if (!next) return;
     setError("");
     try {
-      await move_card(card.id, next, 0);
+      await set_task_status(card.id, next);
       await refresh();
     } catch (err) {
       handle(err);
@@ -265,7 +261,7 @@ export default function Task() {
     if (card.column_id === column_id) return;
     setError("");
     try {
-      await move_card(card.id, column_id, 0);
+      await set_task_status(card.id, column_id);
       await refresh();
     } catch (err) {
       handle(err);
@@ -314,7 +310,6 @@ export default function Task() {
     setDThinking(false);
     fetch_agents().then(setSavedAgents).catch(() => setSavedAgents([]));
     fetch_users().then(setUsers).catch(() => setUsers([]));
-    fetch_cronjobs().then(setCronjobs).catch(() => setCronjobs([]));
     try {
       setDComments(await fetch_comments(card.id));
     } catch (err) {
@@ -382,10 +377,11 @@ export default function Task() {
       if (agent) {
         setDThinking(true);
         try {
-          const reply = await chat(`Card "${detail.title}": ${body.replace(new RegExp(`@${agent}`, "gi"), "").trim()}`);
-          const text = String(reply.reply || "").trim();
-          if (text) {
-            await add_comment(detail.id, `${agent}: ${text}`);
+          const text = body.replace(new RegExp(`@${agent}`, "gi"), "").trim();
+          const reply = await chat(text, detail.id, agent);
+          const out = String(reply.reply || "").trim();
+          if (out) {
+            await add_comment(detail.id, `${agent}: ${out}`);
           }
         } finally {
           setDThinking(false);
@@ -551,13 +547,8 @@ export default function Task() {
     if (updated) setDetail({ ...detail!, image: value.trim() || null });
   }
 
-  async function pick_detail_schedule(expr: string) {
-    const updated = await patch_detail({ cron: expr || null });
-    if (updated) setDetail({ ...detail!, cron: expr || null });
-  }
-
   function card_chips(card: Card) {
-    if (!card.agent_name && card.image == null && !card.cron) return null;
+    if (!card.agent_name && card.image == null) return null;
     return (
       <span className="task-chips">
         {card.agent_name && (
@@ -578,16 +569,6 @@ export default function Task() {
             title="image — click to change"
           >
             <Image size={11} /> {card.image}
-          </button>
-        )}
-        {card.cron && (
-          <button
-            type="button"
-            className="task-chip"
-            onClick={() => open_detail(card)}
-            title={`schedule — ${cron_label(card.cron)}`}
-          >
-            <Clock size={11} /> {cron_label(card.cron)}
           </button>
         )}
       </span>
@@ -1087,13 +1068,6 @@ export default function Task() {
                   {runningId === detail.id ? <Loader2 size={13} className="spin" /> : <Play size={13} />} run now
                 </button>
               )}
-              <RoutineEditor
-                cron={detail?.cron ?? null}
-                on_save={(expr) => {
-                  if (detail) pick_detail_schedule(expr || "");
-                }}
-                next_run={detail ? next_run_for(detail.id, cronjobs) : null}
-              />
             </div>
             <div className="task-detail-field">
               <label htmlFor="task-detail-person"><User size={13} /> assignee</label>
@@ -1219,21 +1193,32 @@ export default function Task() {
           </section>
         </div>
       </SlideOver>
-      <Modal open={addOpen} title="new task" on_close={() => setAddOpen(false)}>
+      <Modal open={addOpen} title="Create Task" on_close={() => setAddOpen(false)}>
         <form className="modal-form" onSubmit={add}>
+          <label htmlFor="task-add-title">Title</label>
           <input
+            id="task-add-title"
             autoFocus
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             placeholder="task title…"
             required
           />
-          <select value={priority} onChange={(e) => setPriority(e.target.value as Priority)}>
+          <label htmlFor="task-add-desc">Description</label>
+          <textarea
+            id="task-add-desc"
+            value={desc}
+            onChange={(e) => setDesc(e.target.value)}
+            placeholder="what needs doing?"
+            rows={3}
+          />
+          <label htmlFor="task-add-priority">Priority</label>
+          <select id="task-add-priority" value={priority} onChange={(e) => setPriority(e.target.value as Priority)}>
             {PRIORITIES.map((p) => (
               <option key={p} value={p}>{p}</option>
             ))}
           </select>
-          <button type="submit">add</button>
+          <button type="submit">Create Task</button>
         </form>
       </Modal>
     </main>

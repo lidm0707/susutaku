@@ -48,7 +48,7 @@ async fn board_service_card_agent_path_against_live_db() {
         .expect("login")
         .expect("token");
 
-    let board = BoardService::new(Arc::clone(&store), None);
+    let board = BoardService::new(Arc::clone(&store), None, None);
 
     // Create a card, assign an agent, set an image, run it (fails without an
     // engine — deterministic), and clear the image again.

@@ -97,6 +97,10 @@ impl BoardOps for DenyBoard {
     async fn exec(&self, _req: backend::domain::BoardRequest) -> BoardResult {
         Err(TOOL_DENIED.to_string())
     }
+
+    async fn card_context(&self, _card_id: i64) -> Option<String> {
+        None
+    }
 }
 
 #[tokio::test]

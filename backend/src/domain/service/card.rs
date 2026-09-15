@@ -2,7 +2,9 @@
 
 use std::sync::Arc;
 
-use task_rs::{AgentState, CardRow, RunRecordNew, RunRecordRow, StoreError};
+use task_rs::{
+    AgentState, CardRow, RunRecordNew, RunRecordRow, StoreError, TaskStatus, transition_allowed,
+};
 
 use crate::domain::{CardMove, CardPatch, NewCard};
 use crate::port::outbound::CardRepo;
@@ -10,6 +12,8 @@ use crate::port::outbound::CardRepo;
 pub struct CardService {
     repo: Arc<dyn CardRepo>,
 }
+
+pub const MOVE_STATUS_TOP: i32 = 0;
 
 impl CardService {
     pub fn new(repo: Arc<dyn CardRepo>) -> Self {
@@ -45,6 +49,30 @@ impl CardService {
 
     pub async fn move_card(&self, mv: CardMove) -> Result<(), StoreError> {
         self.repo.move_card(mv).await
+    }
+
+    /// Move a task to a new workflow status, validating the transition
+    /// server-side. Reuses move/get — no new SQL.
+    pub async fn set_status(&self, id: i64, to: TaskStatus) -> Result<CardRow, StoreError> {
+        let row = self.repo.get(id).await?.ok_or(StoreError::NoSuchCard)?;
+        let from = TaskStatus::parse(&row.column_id);
+        if from != to {
+            if !transition_allowed(from, to) {
+                return Err(StoreError::BadSpec(format!(
+                    "illegal task status transition {} -> {}",
+                    from.as_str(),
+                    to.as_str()
+                )));
+            }
+            self.repo
+                .move_card(CardMove {
+                    id,
+                    column_id: to.column().to_owned(),
+                    position: MOVE_STATUS_TOP,
+                })
+                .await?;
+        }
+        self.repo.get(id).await?.ok_or(StoreError::NoSuchCard)
     }
 
     pub async fn remove(&self, id: i64) -> Result<(), StoreError> {

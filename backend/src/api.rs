@@ -13,7 +13,7 @@ use axum::{
         IntoResponse, Response,
         sse::{Event, Sse},
     },
-    routing::{delete, get, post, put},
+    routing::{delete, get, patch, post, put},
 };
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
@@ -40,7 +40,7 @@ use crate::infra::zai::settings::{SettingsState, ZaiSettings};
 use crate::port::inbound::ChatHandling;
 use crate::port::outbound::{
     AgentConfigRepo, AgentGit, AgentRun, BoardOps, ChatMemory, Fetcher, Inference, ModelEndpoint,
-    ModelSwitch, ProjectGit, Runner, Searcher, ThreadEnvs,
+    ModelEngines, ModelSwitch, ProjectGit, Runner, Searcher, ThreadEnvs,
 };
 use prompt_sys::{MAX_PROMPT_CHARS, PromptBuilder, Role as PromptRole};
 use proto_rs::AgentBrief;
@@ -148,7 +148,13 @@ fn zai_chat_deps<T: ChatHandling + ModelSwitch + 'static>(
         runner,
         models: models as Arc<dyn ModelSwitch>,
         memory: crate::infra::chat_memory::from_env().map(|m| Arc::new(m) as Arc<dyn ChatMemory>),
-        board: Arc::new(BoardService::new(task_store.clone(), engine)),
+        board: Arc::new(BoardService::new(
+            task_store.clone(),
+            engine,
+            Some(Arc::new(crate::infra::zai::router::ZaiRouter::new(
+                settings.clone(),
+            ))),
+        )),
         agents: Arc::new(crate::infra::postgres::task::PgTask::new(
             task_store.clone(),
         )),
@@ -313,9 +319,13 @@ pub fn router<T: ChatHandling + ModelSwitch + 'static>(
     let quota = Router::new()
         .route("/api/quota", get(quota_board))
         .with_state((settings_state.clone(), usage_store));
+    let engines = std::sync::Arc::new(crate::infra::zai::router::ZaiRouter::new(
+        settings_state.clone(),
+    ));
     let sched = std::sync::Arc::new(crate::app::schedule_work::spawn(
         std::sync::Arc::new(crate::app::task::build(task_store_for_sched)),
         use_case.inference(),
+        Some(engines.clone()),
     ));
     let engine = use_case.inference();
     core.merge(auth)
@@ -324,7 +334,12 @@ pub fn router<T: ChatHandling + ModelSwitch + 'static>(
         .merge(local_settings_router)
         .merge(usage)
         .merge(quota)
-        .merge(task_router(task_state(task_store, sched, engine)))
+        .merge(task_router(task_state(
+            task_store,
+            sched,
+            engine,
+            Some(engines),
+        )))
         .layer(tower_http::trace::TraceLayer::new_for_http())
         .layer(Extension(manager))
 }
@@ -349,25 +364,28 @@ fn task_router(state: TaskStore) -> Router {
         .route("/api/projects/{id}/agents", get(project_agents))
         .route("/api/agent-results", post(agent_results))
         .route("/api/task/cards", get(list_cards).post(create_card))
-        .route(
-            "/api/task/cards/{id}",
-            delete(remove_card).put(update_card),
-        )
+        .route("/api/tasks", get(list_tasks).post(create_task))
+        .route("/api/tasks/{id}/status", patch(set_task_status))
+        .route("/api/task/cards/{id}", delete(remove_card).put(update_card))
         .route("/api/task/cards/{id}/move", post(move_card))
         .route(
             "/api/task/cards/{id}/comments",
             get(list_comments).post(add_comment),
         )
-        .route(
-            "/api/task/cards/{id}/agent",
-            get(get_agent).put(set_agent),
-        )
+        .route("/api/task/cards/{id}/agent", get(get_agent).put(set_agent))
         .route("/api/task/cards/{id}/runs", get(list_card_runs))
         .route("/api/task/cards/{id}/resources", get(list_card_resources))
         .route("/api/task/cards/{id}/image", put(set_card_image))
         .route("/api/task/cards/{id}/run", post(run_card))
         .route("/api/task/cards/{id}/schedule", put(set_card_schedule))
         .route("/api/cronjobs", get(list_cronjobs))
+        .route("/api/routines", get(list_routines).post(create_routine))
+        .route(
+            "/api/routines/{id}",
+            axum::routing::put(update_routine).delete(delete_routine),
+        )
+        .route("/api/routines/{id}/run", post(run_routine_now))
+        .route("/api/routines/{id}/runs", get(list_routine_runs))
         .route("/api/activity", get(list_activity))
         .route("/api/events", get(events_ws))
         .route(
@@ -394,7 +412,10 @@ fn task_router(state: TaskStore) -> Router {
             delete(detach_agent_skill),
         )
         .route("/api/agent-outputs", get(list_agent_outputs_handler))
-        .route("/api/agent-outputs/{id}", get(get_agent_output_handler))
+        .route(
+            "/api/agent-outputs/{id}",
+            get(get_agent_output_handler).delete(remove_agent_output_handler),
+        )
         .route(
             "/api/agent-outputs/{id}/status",
             post(set_agent_output_status_handler),
@@ -751,6 +772,17 @@ fn require_edit(user: &AuthUser) -> Result<(), ApiError> {
     role.can_edit()
         .then_some(())
         .ok_or_else(|| ApiError(FORBIDDEN_MSG.to_string(), StatusCode::FORBIDDEN))
+}
+
+/// Routines are owner-handled: create/edit/run/delete need the owner role;
+/// viewers may list.
+fn require_owner(user: &AuthUser) -> Result<(), ApiError> {
+    let role = parse_role(&user.0.role)?;
+    if role == task_rs::Role::Owner {
+        Ok(())
+    } else {
+        Err(ApiError(FORBIDDEN_MSG.to_string(), StatusCode::FORBIDDEN))
+    }
 }
 
 /// Bearer-token auth extractor for agents: resolves a run ticket.
@@ -2168,6 +2200,7 @@ struct TaskState {
     store: std::sync::Arc<task_rs::Store>,
     sched: std::sync::Arc<crate::app::schedule_work::ScheduleHandle>,
     engine: Option<std::sync::Arc<dyn Inference>>,
+    engines: Option<std::sync::Arc<dyn ModelEngines>>,
 }
 
 type TaskStore = std::sync::Arc<TaskState>;
@@ -2185,12 +2218,14 @@ fn task_state(
     store: std::sync::Arc<task_rs::Store>,
     sched: std::sync::Arc<crate::app::schedule_work::ScheduleHandle>,
     engine: Option<std::sync::Arc<dyn Inference>>,
+    engines: Option<std::sync::Arc<dyn ModelEngines>>,
 ) -> TaskStore {
     std::sync::Arc::new(TaskState {
         app: crate::app::task::build(store.clone()),
         store,
         sched,
         engine,
+        engines,
     })
 }
 
@@ -2383,6 +2418,88 @@ async fn move_card(
     Ok("ok")
 }
 
+#[utoipa::path(get, path = "/api/tasks", responses((status = 200, body = [CardDto])))]
+async fn list_tasks(
+    State(state): State<TaskStore>,
+    axum::extract::Query(query): axum::extract::Query<ListCardsQuery>,
+    user: AuthUser,
+) -> Result<Json<Vec<CardDto>>, ApiError> {
+    list_cards(State(state), axum::extract::Query(query), user).await
+}
+
+/// Create a Task from the Board (or chat, or any external source).
+/// Status defaults to TODO; the new task lands in the board's first column.
+#[utoipa::path(
+    post,
+    path = "/api/tasks",
+    request_body = CreateTaskRequest,
+    responses((status = 200, body = CardDto), (status = 400, body = str))
+)]
+async fn create_task(
+    State(state): State<TaskStore>,
+    user: AuthUser,
+    Json(req): Json<CreateTaskRequest>,
+) -> Result<Json<CardDto>, ApiError> {
+    require_edit(&user)?;
+    let status = match req.status.as_deref() {
+        None => task_rs::TaskStatus::Todo,
+        Some(raw) => task_rs::TaskStatus::parse(raw),
+    };
+    let priority = req
+        .priority
+        .unwrap_or_else(|| task_rs::PRIORITY_NORMAL.to_string());
+    let row = state
+        .app
+        .cards
+        .create(NewCard {
+            project_id: req.project_id,
+            column_id: status.column().to_owned(),
+            title: req.title,
+            description: req.description.unwrap_or_default(),
+            priority,
+            labels: None,
+            checklist: None,
+            estimate: None,
+        })
+        .await
+        .map_err(task_err)?;
+    record_activity(
+        &state.store,
+        "card",
+        format!("created task \"{}\"", row.title),
+    )
+    .await;
+    crate::app::events::publish(crate::app::events::EventKind::Card);
+    Ok(Json(CardDto::from(row)))
+}
+
+/// Move a task between workflow statuses. The backend validates the
+/// transition; the frontend is never the authority.
+#[utoipa::path(
+    patch,
+    path = "/api/tasks/{id}/status",
+    request_body = SetTaskStatusRequest,
+    responses((status = 200, body = CardDto), (status = 400, body = str), (status = 404, body = str))
+)]
+async fn set_task_status(
+    State(state): State<TaskStore>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+    user: AuthUser,
+    Json(req): Json<SetTaskStatusRequest>,
+) -> Result<Json<CardDto>, ApiError> {
+    require_edit(&user)?;
+    let to = task_rs::TaskStatus::parse(&req.status);
+    let row = state.app.cards.set_status(id, to).await.map_err(task_err)?;
+    record_activity(
+        &state.store,
+        "card",
+        format!("moved task {id} to {}", to.as_str()),
+    )
+    .await;
+    crate::app::events::publish(crate::app::events::EventKind::Card);
+    Ok(Json(CardDto::from(row)))
+}
+
 #[utoipa::path(delete, path = "/api/task/cards/{id}", responses((status = 200, body = str), (status = 404, body = str)))]
 async fn remove_card(
     State(state): State<TaskStore>,
@@ -2526,6 +2643,7 @@ async fn run_card(
     let record = crate::app::card_run::run_card(
         &state.app,
         state.engine.clone(),
+        state.engines.as_deref(),
         id,
         task_rs::TRIGGER_MANUAL,
     )
@@ -3024,6 +3142,221 @@ async fn set_agent_output_status_handler(
     )
     .await;
     Ok("ok")
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/agent-outputs/{id}",
+    responses((status = 200, body = str), (status = 404, body = str))
+)]
+async fn remove_agent_output_handler(
+    State(state): State<TaskStore>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+    user: AuthUser,
+) -> Result<&'static str, ApiError> {
+    require_edit(&user)?;
+    state
+        .store
+        .remove_agent_output(id)
+        .await
+        .map_err(task_err)?;
+    record_activity(
+        &state.store,
+        "agent-output",
+        format!("output #{id} deleted by {}", user.0.username),
+    )
+    .await;
+    Ok("ok")
+}
+
+// ---- Routines: recurring automation, separate from tasks (owner-handled) ----
+
+#[derive(Serialize, utoipa::ToSchema)]
+struct RoutineDto {
+    id: i64,
+    name: String,
+    cron: String,
+    agent: String,
+    instruction: String,
+    enabled: bool,
+    created_at: String,
+}
+
+impl From<task_rs::RoutineRow> for RoutineDto {
+    fn from(r: task_rs::RoutineRow) -> Self {
+        Self {
+            id: r.id,
+            name: r.name,
+            cron: r.cron,
+            agent: r.agent,
+            instruction: r.instruction,
+            enabled: r.enabled,
+            created_at: r.created_at,
+        }
+    }
+}
+
+#[derive(Serialize, utoipa::ToSchema)]
+struct RoutineRunDto {
+    id: i64,
+    routine_id: i64,
+    trigger: String,
+    started_at: String,
+    finished_at: Option<String>,
+    ok: bool,
+    summary: String,
+}
+
+impl From<task_rs::RoutineRunRow> for RoutineRunDto {
+    fn from(r: task_rs::RoutineRunRow) -> Self {
+        Self {
+            id: r.id,
+            routine_id: r.routine_id,
+            trigger: r.trigger,
+            started_at: r.started_at,
+            finished_at: r.finished_at,
+            ok: r.ok,
+            summary: r.summary,
+        }
+    }
+}
+
+#[derive(Deserialize, utoipa::ToSchema)]
+struct RoutineRequest {
+    name: String,
+    /// 5-field UTC cron expression.
+    cron: String,
+    /// Agent persona to run with; empty = default engine.
+    #[serde(default)]
+    agent: String,
+    #[serde(default)]
+    instruction: String,
+    #[serde(default = "default_true")]
+    enabled: bool,
+}
+
+impl RoutineRequest {
+    fn draft(&self) -> task_rs::RoutineDraft {
+        task_rs::RoutineDraft {
+            name: self.name.clone(),
+            cron: self.cron.clone(),
+            agent: self.agent.clone(),
+            instruction: self.instruction.clone(),
+            enabled: self.enabled,
+        }
+    }
+}
+
+async fn list_routines(
+    State(state): State<TaskStore>,
+    _user: AuthUser,
+) -> Result<Json<Vec<RoutineDto>>, ApiError> {
+    let rows = state.store.list_routines().await.map_err(store_err)?;
+    Ok(Json(rows.into_iter().map(RoutineDto::from).collect()))
+}
+
+async fn create_routine(
+    State(state): State<TaskStore>,
+    user: AuthUser,
+    Json(req): Json<RoutineRequest>,
+) -> Result<Json<RoutineDto>, ApiError> {
+    require_owner(&user)?;
+    validate_routine_cron(&req.cron)?;
+    let id = state
+        .store
+        .add_routine(&req.draft())
+        .await
+        .map_err(store_err)?;
+    let row = state
+        .store
+        .get_routine(id)
+        .await
+        .map_err(store_err)?
+        .ok_or_else(routine_not_found)?;
+    record_activity(
+        &state.store,
+        "routine",
+        format!("created routine \"{}\"", req.name),
+    )
+    .await;
+    Ok(Json(RoutineDto::from(row)))
+}
+
+async fn update_routine(
+    State(state): State<TaskStore>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+    user: AuthUser,
+    Json(req): Json<RoutineRequest>,
+) -> Result<Json<RoutineDto>, ApiError> {
+    require_owner(&user)?;
+    validate_routine_cron(&req.cron)?;
+    state
+        .store
+        .update_routine(id, &req.draft())
+        .await
+        .map_err(store_err)?;
+    let row = state
+        .store
+        .get_routine(id)
+        .await
+        .map_err(store_err)?
+        .ok_or_else(routine_not_found)?;
+    Ok(Json(RoutineDto::from(row)))
+}
+
+async fn delete_routine(
+    State(state): State<TaskStore>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+    user: AuthUser,
+) -> Result<&'static str, ApiError> {
+    require_owner(&user)?;
+    state.store.remove_routine(id).await.map_err(store_err)?;
+    record_activity(&state.store, "routine", format!("deleted routine #{id}")).await;
+    Ok("ok")
+}
+
+/// Run a routine right now; the run record is stored for owner review.
+async fn run_routine_now(
+    State(state): State<TaskStore>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+    user: AuthUser,
+) -> Result<Json<RoutineRunDto>, ApiError> {
+    require_owner(&user)?;
+    let routine = state
+        .store
+        .get_routine(id)
+        .await
+        .map_err(store_err)?
+        .ok_or_else(routine_not_found)?;
+    let (_, row) = crate::app::routine_run::run_routine_manual(
+        &state.app,
+        &state.store,
+        state.engine.as_ref(),
+        state.engines.as_deref(),
+        &routine,
+    )
+    .await
+    .map_err(task_err)?;
+    Ok(Json(RoutineRunDto::from(row)))
+}
+
+async fn list_routine_runs(
+    State(state): State<TaskStore>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+    _user: AuthUser,
+) -> Result<Json<Vec<RoutineRunDto>>, ApiError> {
+    let rows = state.store.routine_runs(id).await.map_err(store_err)?;
+    Ok(Json(rows.into_iter().map(RoutineRunDto::from).collect()))
+}
+
+fn validate_routine_cron(expr: &str) -> Result<(), ApiError> {
+    work::services::cron::Cron::parse(expr)
+        .map(|_| ())
+        .map_err(|e| ApiError::bad_request(format!("invalid cron: {e}")))
+}
+
+fn routine_not_found() -> ApiError {
+    ApiError(ApiError::NOT_FOUND_MSG.to_string(), StatusCode::NOT_FOUND)
 }
 
 #[derive(Deserialize)]
@@ -4634,6 +4967,26 @@ struct MoveCardRequest {
     position: i32,
 }
 
+/// Create-task body for `POST /api/tasks`; `status` defaults to todo.
+#[derive(Deserialize, utoipa::ToSchema)]
+struct CreateTaskRequest {
+    title: String,
+    description: Option<String>,
+    /// "low" | "normal" | "high" | "critical" (default: normal).
+    priority: Option<String>,
+    /// Owning project — a task lives in exactly one project.
+    project_id: Option<i64>,
+    /// todo | in_progress | review | conflict | done | failed (default: todo).
+    status: Option<String>,
+}
+
+/// Body of `PATCH /api/tasks/{id}/status`.
+#[derive(Deserialize, utoipa::ToSchema)]
+struct SetTaskStatusRequest {
+    /// todo | in_progress | review | conflict | done | failed.
+    status: String,
+}
+
 #[derive(Deserialize, utoipa::ToSchema)]
 struct SetAgentRequest {
     name: String,
@@ -4667,10 +5020,13 @@ struct CardDto {
     /// JSON array of {text, done} objects.
     checklist: Option<String>,
     estimate: Option<i32>,
+    /// Canonical workflow status (todo | in_progress | review | conflict | done | failed).
+    status: String,
 }
 
 impl From<task_rs::CardRow> for CardDto {
     fn from(r: task_rs::CardRow) -> Self {
+        let status = task_rs::TaskStatus::parse(&r.column_id);
         Self {
             id: r.id,
             column_id: r.column_id,
@@ -4690,6 +5046,7 @@ impl From<task_rs::CardRow> for CardDto {
             labels: r.labels,
             checklist: r.checklist,
             estimate: r.estimate,
+            status: status.as_str().to_owned(),
         }
     }
 }

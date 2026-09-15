@@ -1,0 +1,56 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, name, cron, agent, instruction, enabled,\n                      to_char(created_at, 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS \"created_at!\"\n               FROM routines ORDER BY id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "cron",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "agent",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "instruction",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "enabled",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 6,
+        "name": "created_at!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "a8e8f3021114bf386d29340864aea41928b0a7ea5d064b67b881eddd295d297a"
+}

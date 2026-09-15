@@ -3,7 +3,7 @@ import { FileDiff, GitCommitHorizontal, GitPullRequestArrow, RefreshCw, Upload, 
 import { Button, Field, TextInput } from "../ui/controls.js";
 import { Modal } from "../ui/Overlay.js";
 import { use_projects } from "../components/ProjectContext.js";
-import { agent_git, fetch_agents, fetch_cards, fetch_manager_agents, type AgentGitBody, type Card, type ManagerAgent } from "../lib.js";
+import { agent_git, fetch_agents, fetch_cards, fetch_manager_agents, finish_manager_agent, type AgentGitBody, type Card, type ManagerAgent } from "../lib.js";
 import DiffView, { DiffFileList, DiffStats, type DiffFile } from "../components/DiffView.js";
 
 const TASK_COMMIT_PREFIX = "agent task: ";
@@ -131,6 +131,20 @@ export default function Review() {
     try {
       const out = await agent_git(agent, body, projectId);
       setOutput(`$ ${body.op}\n${out.trim() || "(ok)"}`);
+      // The PR is the end of a work tree's life: the branch is on the remote,
+      // so tear the tree down instead of keeping it listed here. Refreshing
+      // git status would auto-spawn a fresh slot, so just drop the agent.
+      if (body.op === "pr") {
+        try {
+          await finish_manager_agent(agent);
+          setAgents((cur) => cur.filter((a) => a.agent !== agent));
+          setStatus("");
+          setDiff("");
+          return;
+        } catch {
+          // tree stays alive (e.g. agent on another machine) — keep reviewing
+        }
+      }
       await refresh();
     } finally {
       setBusy(false);

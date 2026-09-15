@@ -10,11 +10,7 @@ fn board_tool_permissions_are_per_kind() {
     assert!(!set.allows(ToolKind::Card));
     assert!(!set.allows(ToolKind::Routine));
 
-    let set = ToolSet::from_names(&[
-        "card".to_string(),
-        "routine".to_string(),
-    ])
-    .unwrap();
+    let set = ToolSet::from_names(&["card".to_string(), "routine".to_string()]).unwrap();
     assert!(!set.allows(ToolKind::Board));
     assert!(set.allows(ToolKind::Card));
     assert!(set.allows(ToolKind::Routine));
@@ -27,11 +23,7 @@ fn board_tool_permissions_are_per_kind() {
 
 #[test]
 fn legacy_pipeline_tool_name_is_ignored() {
-    let set = ToolSet::from_names(&[
-        "card".to_string(),
-        "pipeline".to_string(),
-    ])
-    .unwrap();
+    let set = ToolSet::from_names(&["card".to_string(), "pipeline".to_string()]).unwrap();
     assert!(set.allows(ToolKind::Card));
     assert!(!set.allows(ToolKind::Routine));
 }
@@ -187,7 +179,9 @@ fn parses_xml_invoke_fallback() {
         Some(ToolCall::BoardList)
     );
     assert_eq!(
-        ToolCall::parse("<invoke name=\"pipeline_create\"><parameter name=\"name\">nightly</parameter></invoke>"),
+        ToolCall::parse(
+            "<invoke name=\"pipeline_create\"><parameter name=\"name\">nightly</parameter></invoke>"
+        ),
         None
     );
     assert_eq!(
@@ -220,6 +214,10 @@ impl BoardOps for FakeBoard {
             }
             _ => Ok("ok".into()),
         }
+    }
+
+    async fn card_context(&self, _card_id: i64) -> Option<String> {
+        None
     }
 }
 

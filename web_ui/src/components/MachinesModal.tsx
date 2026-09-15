@@ -422,8 +422,8 @@ export function MachinesModal({ open, on_close, on_monitor }: Props) {
   }, [open]);
 
   return (
-    <Modal open={open} title="machines" on_close={on_close} wide docked_left className="machines-modal">
-      <div className="machines-tabs" role="tablist" aria-label="machine views">
+    <Modal open={open} title="runtime" on_close={on_close} wide docked_left className="machines-modal">
+      <div className="machines-tabs" role="tablist" aria-label="runtime views">
         {TABS.map((t) => (
           <button
             key={t.id}
@@ -437,7 +437,7 @@ export function MachinesModal({ open, on_close, on_monitor }: Props) {
         ))}
       </div>
       <div className="machines-layout">
-        <section className="machines-register" aria-label="machine register">
+        <section className="machines-register" aria-label="runtime register">
           <div className="dock-machines-head">
             <span>{tab === "users_machines" ? "users" : "sandboxes by host"}</span>
             {tab === "agents_sandbox" && machines !== null && (
@@ -445,7 +445,7 @@ export function MachinesModal({ open, on_close, on_monitor }: Props) {
                 {machines.length} machine{machines.length === 1 ? "" : "s"}
               </small>
             )}
-            <button onClick={() => void load()} title="refresh" aria-label="refresh machines">
+            <button onClick={() => void load()} title="refresh" aria-label="refresh runtime">
               <RefreshCw size={13} />
             </button>
           </div>
@@ -467,7 +467,7 @@ export function MachinesModal({ open, on_close, on_monitor }: Props) {
                 <div className="machine-group">
                   <div className="machine-group-head" role="presentation">
                     <span className="dot remote" aria-hidden="true" />
-                    <span className="dock-machine-name">machines</span>
+                    <span className="dock-machine-name">hosts</span>
                   </div>
                   {machines.map((m) => <MachineRow key={m.hostname} m={m} on_kick_done={() => void load()} />)}
                 </div>

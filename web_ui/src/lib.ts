@@ -929,6 +929,32 @@ export async function create_project(workspace_id: number, name: string): Promis
   });
 }
 
+export async function fetch_tasks(project_id: number | null): Promise<Card[]> {
+  const qs = project_id == null ? "" : `?project_id=${project_id}`;
+  return (await api(`/api/tasks${qs}`)).json();
+}
+
+export async function set_task_status(id: number, status: string): Promise<Response> {
+  return api(`/api/tasks/${id}/status`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ status }),
+  });
+}
+
+export async function create_task(
+  project_id: number | null,
+  title: string,
+  description: string,
+  priority: string
+): Promise<Response> {
+  return api("/api/tasks", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ project_id, title, description, priority }),
+  });
+}
+
 export async function fetch_cards(project_id: number | null): Promise<Card[]> {
   const qs = project_id == null ? "" : `?project_id=${project_id}`;
   return (await api(`/api/task/cards${qs}`)).json();
@@ -1017,7 +1043,11 @@ const CHAT_MAX_TOKENS = 1024;
 
 /// Ask the agent engine a question (same backend as the Chat page).
 /// `card_id` targets a task card: tool artifacts attach to it as resources.
-export async function chat(message: string, card_id?: number): Promise<ChatReply> {
+export async function chat(
+  message: string,
+  card_id?: number,
+  agent?: string
+): Promise<ChatReply> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
   };
@@ -1026,7 +1056,13 @@ export async function chat(message: string, card_id?: number): Promise<ChatReply
   const res = await fetch(`${API_BASE}/api/chat`, {
     method: "POST",
     headers,
-    body: JSON.stringify({ message, max_tokens: CHAT_MAX_TOKENS, search: "auto", card_id }),
+    body: JSON.stringify({
+      message,
+      max_tokens: CHAT_MAX_TOKENS,
+      search: "auto",
+      card_id,
+      agent,
+    }),
   });
   if (!res.ok) throw new ApiError(res.status, await res.text());
   return res.json();
@@ -1236,6 +1272,93 @@ export async function set_agent_output_status(id: number, status: AgentOutput["s
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ status }),
   });
+}
+
+export async function delete_agent_output(id: number): Promise<void> {
+  await api(`/api/agent-outputs/${id}`, { method: "DELETE" });
+}
+
+// ---- Routines: recurring automation, separate entity from tasks ----
+
+export interface Routine {
+  id: number;
+  name: string;
+  cron: string;
+  agent: string;
+  instruction: string;
+  enabled: boolean;
+  created_at: string;
+}
+
+export interface RoutineRun {
+  id: number;
+  routine_id: number;
+  trigger: string;
+  started_at: string;
+  finished_at: string | null;
+  ok: boolean;
+  summary: string;
+}
+
+export async function fetch_routines(): Promise<Routine[]> {
+  return (await api("/api/routines")).json();
+}
+
+function routine_body(
+  name: string,
+  cron: string,
+  agent: string,
+  instruction: string,
+  enabled: boolean
+): string {
+  return JSON.stringify({ name, cron, agent, instruction, enabled });
+}
+
+export async function create_routine(
+  name: string,
+  cron: string,
+  agent: string,
+  instruction: string,
+  enabled: boolean
+): Promise<Routine> {
+  return (
+    await api("/api/routines", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: routine_body(name, cron, agent, instruction, enabled),
+    })
+  ).json();
+}
+
+export async function update_routine(
+  id: number,
+  name: string,
+  cron: string,
+  agent: string,
+  instruction: string,
+  enabled: boolean
+): Promise<Routine> {
+  return (
+    await api(`/api/routines/${id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: routine_body(name, cron, agent, instruction, enabled),
+    })
+  ).json();
+}
+
+export async function delete_routine(id: number): Promise<void> {
+  await api(`/api/routines/${id}`, { method: "DELETE" });
+}
+
+export async function run_routine(id: number): Promise<RoutineRun> {
+  return (
+    await api(`/api/routines/${id}/run`, { method: "POST" })
+  ).json();
+}
+
+export async function fetch_routine_runs(id: number): Promise<RoutineRun[]> {
+  return (await api(`/api/routines/${id}/runs`)).json();
 }
 
 export async function fetch_card_resources(

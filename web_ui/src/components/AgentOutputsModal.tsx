@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, FileDiff, Play, Square, Upload, X } from "lucide-react";
+import { Check, FileDiff, Play, Square, Trash2, Upload, X } from "lucide-react";
 import {
+  delete_agent_output,
   fetch_agent_logs,
   fetch_agent_outputs,
   fetch_manager_agents,
@@ -29,10 +30,12 @@ function OutputDetail({
   output,
   on_close,
   on_decide,
+  on_delete,
 }: {
   output: AgentOutput | null;
   on_close: () => void;
   on_decide: (id: number, status: AgentOutput["status"]) => void;
+  on_delete: (id: number) => void;
 }) {
   return (
     <SlideOver open={output != null} title={`output #${output?.id ?? ""} — ${output?.agent ?? ""}`} on_close={on_close}>
@@ -79,6 +82,11 @@ function OutputDetail({
               </button>
             </footer>
           )}
+          <footer className="output-actions">
+            <button className="danger" onClick={() => on_delete(output.id)}>
+              <Trash2 size={14} /> delete output
+            </button>
+          </footer>
         </article>
       )}
     </SlideOver>
@@ -243,6 +251,17 @@ export function AgentOutputsModal({ open, on_close }: { open: boolean; on_close:
     }
   }
 
+  async function remove(id: number) {
+    try {
+      await delete_agent_output(id);
+      set_outputs((prev) => (prev ?? []).filter((o) => o.id !== id));
+      set_selected((prev) => (prev && prev.id === id ? null : prev));
+      toast(`output #${id} deleted`);
+    } catch (err: unknown) {
+      toast(err instanceof Error ? err.message : String(err));
+    }
+  }
+
   const visible = (outputs ?? []).filter((o) => filter === "all" || o.status === filter);
 
   return (
@@ -285,19 +304,34 @@ export function AgentOutputsModal({ open, on_close }: { open: boolean; on_close:
                 <p className="empty">no outputs yet — finish an agent task first</p>
               ) : (
                 visible.map((o) => (
-                  <button key={o.id} className="output-row" onClick={() => set_selected(o)}>
-                    <span className="output-id">#{o.id}</span>
-                    <span className="output-agent">{o.agent}</span>
-                    <span className="output-patch-size">{o.patch ? `${o.patch.split("\n").length} lines` : "no diff"}</span>
-                    <span className={status_badge_class(o.status)}>{o.status}</span>
-                  </button>
+                  <div key={o.id} className="output-row output-row-compact">
+                    <button className="output-row-main" onClick={() => set_selected(o)}>
+                      <span className="output-id">#{o.id}</span>
+                      <span className="output-agent">{o.agent}</span>
+                      <span className="output-patch-size">{o.patch ? `${o.patch.split("\n").length} lines` : "no diff"}</span>
+                      <span className={status_badge_class(o.status)}>{o.status}</span>
+                    </button>
+                    <button
+                      className="output-row-delete"
+                      onClick={() => remove(o.id)}
+                      aria-label={`delete output #${o.id}`}
+                      title="delete output"
+                    >
+                      <X size={12} />
+                    </button>
+                  </div>
                 ))
               )}
             </div>
           )}
         </section>
       </Modal>
-      <OutputDetail output={selected} on_close={() => set_selected(null)} on_decide={decide} />
+      <OutputDetail
+        output={selected}
+        on_close={() => set_selected(null)}
+        on_decide={decide}
+        on_delete={remove}
+      />
     </>
   );
 }

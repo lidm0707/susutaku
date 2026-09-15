@@ -3,16 +3,16 @@
 
 use std::sync::Arc;
 
-use task_rs::{COLUMN_DONE, COLUMN_FAILED, CardRow, RunRecordNew, StoreError};
 use mockall::predicate::eq;
+use task_rs::{COLUMN_DONE, COLUMN_FAILED, CardRow, RunRecordNew, StoreError};
 
 use backend::app::card_run;
 use backend::app::task::TaskApp;
+use backend::domain::GenReply;
 use backend::domain::{CardService, CommentService, NewCard};
-use backend::domain::{GenReply};
 use backend::port::outbound::{
-    MockAgentConfigRepo, MockCardRepo, MockCardTx, MockCommentRepo, MockCommentTx,
-    MockProjectRepo, MockResourceRepo, MockSkillRepo, MockWorkspaceRepo,
+    MockAgentConfigRepo, MockCardRepo, MockCardTx, MockCommentRepo, MockCommentTx, MockProjectRepo,
+    MockResourceRepo, MockSkillRepo, MockWorkspaceRepo,
 };
 use susutaku_mlx::stats::GenStats;
 use susutaku_mlx::tok::TokKind;
@@ -135,7 +135,7 @@ fn expect_run_moves_todo_to(cards: &mut MockCardRepo, target: &str) {
         .returning(|_| Ok(()));
 }
 
-fn runner_app(cards: MockCardRepo) -> TaskApp {
+async fn runner_app(cards: MockCardRepo) -> TaskApp {
     let mut agents = MockAgentConfigRepo::new();
     agents.expect_by_name().returning(|_| {
         Ok(Some(task_rs::AgentConfigRow {
@@ -150,11 +150,24 @@ fn runner_app(cards: MockCardRepo) -> TaskApp {
             thinking: "off".into(),
         }))
     });
-    runner_app_with(cards, agents)
+    runner_app_with(test_store().await, cards, agents).await
 }
 
-fn runner_app_with(cards: MockCardRepo, agents: MockAgentConfigRepo) -> TaskApp {
+async fn test_store() -> Arc<task_rs::Store> {
+    Arc::new(
+        task_rs::Store::connect(&task_rs::Store::default_url())
+            .await
+            .expect("test store"),
+    )
+}
+
+async fn runner_app_with(
+    store: Arc<task_rs::Store>,
+    cards: MockCardRepo,
+    agents: MockAgentConfigRepo,
+) -> TaskApp {
     TaskApp::new(
+        store,
         Arc::new(cards),
         Arc::new(MockCommentRepo::new()),
         Arc::new(MockResourceRepo::new()),
@@ -200,7 +213,9 @@ async fn run_card_records_ok_and_persists_state() {
         .withf(|_, s: &str| {
             serde_json::from_str::<serde_json::Value>(s).is_ok_and(|v| {
                 v["run"]["status"] == "ok"
-                    && v["run"]["output"].as_str().is_some_and(|o| o.contains("reply-to"))
+                    && v["run"]["output"]
+                        .as_str()
+                        .is_some_and(|o| o.contains("reply-to"))
             })
         })
         .returning(|_, _| Ok(()));
@@ -212,8 +227,9 @@ async fn run_card_records_ok_and_persists_state() {
         .returning(|_| Ok(1));
 
     let record = card_run::run_card(
-        &runner_app(cards),
+        &runner_app(cards).await,
         Some(Arc::new(FixedEngine)),
+        None,
         CARD_ID,
         task_rs::TRIGGER_MANUAL,
     )
@@ -244,7 +260,8 @@ async fn run_card_without_engine_fails_run_with_note() {
         .returning(|_| Ok(1));
 
     let record = card_run::run_card(
-        &runner_app(cards),
+        &runner_app(cards).await,
+        None,
         None,
         CARD_ID,
         task_rs::TRIGGER_MANUAL,
@@ -252,7 +269,12 @@ async fn run_card_without_engine_fails_run_with_note() {
     .await
     .expect("run record persisted");
     assert_eq!(record.status, card_run::RunStatus::Failed);
-    assert!(record.output.as_deref().is_some_and(|n| n.contains("no inference engine")));
+    assert!(
+        record
+            .output
+            .as_deref()
+            .is_some_and(|n| n.contains("no inference engine"))
+    );
 }
 
 #[tokio::test]
@@ -282,7 +304,8 @@ async fn run_card_without_agent_persists_failed_run() {
         .returning(|_| Ok(1));
 
     let record = card_run::run_card(
-        &runner_app(cards),
+        &runner_app(cards).await,
+        None,
         None,
         CARD_ID,
         task_rs::TRIGGER_MANUAL,
@@ -290,4 +313,72 @@ async fn run_card_without_agent_persists_failed_run() {
     .await
     .expect("failed run persisted");
     assert_eq!(record.status, card_run::RunStatus::Failed);
+}
+
+/// Router that serves a distinct engine for the configured cloud model.
+struct RoutedEngine(&'static str);
+impl backend::port::outbound::ModelEngines for RoutedEngine {
+    fn engine_for(
+        &self,
+        model: &str,
+    ) -> Option<std::sync::Arc<dyn backend::port::outbound::Inference>> {
+        (model == self.0).then(|| std::sync::Arc::new(FixedEngine) as _)
+    }
+}
+
+/// Regression: a manual run must go through the agent's configured model —
+/// the router takes precedence over the shared engine when it knows the model.
+#[tokio::test]
+async fn run_card_routes_through_agent_model() {
+    const CLOUD_MODEL: &str = "glm-test";
+    let mut cards = MockCardRepo::new();
+    cards
+        .expect_get()
+        .with(eq(CARD_ID))
+        .returning(|id| Ok(Some(card_row(id, Some(AGENT_NAME)))));
+    expect_run_moves_todo_to(&mut cards, COLUMN_DONE);
+    cards.expect_set_agent_state().returning(|_, _| Ok(()));
+    cards
+        .expect_record_run()
+        .withf(|r: &RunRecordNew| r.ok && r.agent == AGENT_NAME)
+        .returning(|_| Ok(1));
+
+    let mut agents = MockAgentConfigRepo::new();
+    agents.expect_by_name().returning(move |_| {
+        Ok(Some(task_rs::AgentConfigRow {
+            id: 1,
+            name: AGENT_NAME.into(),
+            model: CLOUD_MODEL.into(),
+            persona: String::new(),
+            prompt: String::new(),
+            output: String::new(),
+            allowed_tools: Vec::new(),
+            receive_images: false,
+            thinking: "off".into(),
+        }))
+    });
+
+    struct NoEngine;
+    impl backend::port::outbound::Inference for NoEngine {
+        fn submit(
+            &self,
+            _: String,
+            _: usize,
+            _: TokKind,
+            _: bool,
+        ) -> Result<tokio::sync::oneshot::Receiver<Result<GenReply, String>>, String> {
+            Err("shared engine must not be used".to_string())
+        }
+    }
+
+    let record = card_run::run_card(
+        &runner_app_with(test_store().await, cards, agents).await,
+        Some(Arc::new(NoEngine)),
+        Some(&RoutedEngine(CLOUD_MODEL)),
+        CARD_ID,
+        task_rs::TRIGGER_MANUAL,
+    )
+    .await
+    .expect("ran");
+    assert_eq!(record.status, card_run::RunStatus::Ok);
 }

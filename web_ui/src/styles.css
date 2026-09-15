@@ -4709,6 +4709,43 @@ select.agent-multi {
   border-color: #3d3d4a;
 }
 
+.output-row-compact {
+  padding: 0.25rem 0.45rem;
+  gap: 0.4rem;
+  font-size: 0.75rem;
+}
+
+.output-row-main {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  padding: 0;
+}
+
+.output-row-delete {
+  background: transparent;
+  border: none;
+  color: #6f6f7a;
+  cursor: pointer;
+  padding: 0.15rem;
+  border-radius: 6px;
+  display: inline-flex;
+  line-height: 0;
+}
+
+.output-row-delete:hover {
+  color: #ff6b6b;
+  background: #2a2a33;
+}
+
 .output-id {
   color: #6f6f7a;
   font-family: monospace;
@@ -5301,4 +5338,124 @@ select.agent-multi {
   width: 5.5rem;
   flex: 0 1 auto;
   padding: 0.4rem 0.6rem;
+}
+
+/* ---- routines page (compact) ---- */
+.routine-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.routine-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  border: 1px solid #2a2a33;
+  border-radius: 8px;
+  padding: 0.4rem 0.6rem;
+  font-size: 0.8rem;
+}
+
+.routine-row.disabled {
+  opacity: 0.55;
+}
+
+.routine-main {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  min-width: 0;
+}
+
+.routine-name {
+  font-weight: 600;
+}
+
+.routine-cron,
+.routine-agent {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  color: #a8a8b3;
+}
+
+.routine-off {
+  color: #e3b341;
+  font-size: 0.7rem;
+  border: 1px solid #e3b341;
+  border-radius: 999px;
+  padding: 0 0.4rem;
+}
+
+.routine-actions {
+  display: flex;
+  gap: 0.3rem;
+}
+
+.routine-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  background: transparent;
+  border: 1px solid #2a2a33;
+  color: #c8c8d0;
+  border-radius: 6px;
+  padding: 0.2rem 0.5rem;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.routine-actions button:hover {
+  border-color: #3d3d4a;
+}
+
+.routine-actions button.danger:hover {
+  color: #ff6b6b;
+}
+
+.routine-runs {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  max-height: 60vh;
+  overflow: auto;
+}
+
+.routine-run-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.75rem;
+  border-bottom: 1px solid #23232b;
+  padding: 0.25rem 0;
+}
+
+.routine-run-time {
+  color: #6f6f7a;
+  font-family: monospace;
+}
+
+.routine-run-trigger {
+  color: #a8a8b3;
+  text-transform: uppercase;
+  font-size: 0.65rem;
+}
+
+.routine-run-summary {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #c8c8d0;
+}
+
+.routine-enabled {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.8rem;
+  color: #a8a8b3;
 }

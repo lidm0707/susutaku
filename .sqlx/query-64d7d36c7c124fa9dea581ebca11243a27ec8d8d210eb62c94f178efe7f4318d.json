@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE routines\n               SET name = $2, cron = $3, agent = $4, instruction = $5, enabled = $6\n               WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "64d7d36c7c124fa9dea581ebca11243a27ec8d8d210eb62c94f178efe7f4318d"
+}

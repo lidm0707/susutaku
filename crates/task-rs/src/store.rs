@@ -3,6 +3,7 @@
 use sqlx::PgPool;
 
 use crate::card::{RUN_STATUS_ERROR, RUN_STATUS_FINISHED};
+use crate::routine::{RoutineDraft, RoutineRow, RoutineRunRow};
 
 pub const DEFAULT_DATABASE_URL: &str = "postgres://susutaku:susutaku@localhost:5434/susutaku";
 
@@ -44,6 +45,8 @@ pub enum StoreError {
     SkillTaken,
     #[error("no such agent output")]
     NoSuchAgentOutput,
+    #[error("no such routine")]
+    NoSuchRoutine,
     #[error("no such chat thread")]
     NoSuchChatThread,
     #[error("bad spec: {0}")]
@@ -430,6 +433,31 @@ CREATE TABLE IF NOT EXISTS agent_run_tokens (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     expires_at TIMESTAMPTZ NOT NULL
 );
+"#,
+    r#"
+CREATE TABLE IF NOT EXISTS routines (
+    id          BIGSERIAL PRIMARY KEY,
+    name        TEXT NOT NULL,
+    cron        TEXT NOT NULL,
+    agent       TEXT NOT NULL DEFAULT '',
+    instruction TEXT NOT NULL DEFAULT '',
+    enabled     BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+"#,
+    r#"
+CREATE TABLE IF NOT EXISTS routine_runs (
+    id          BIGSERIAL PRIMARY KEY,
+    routine_id  BIGINT NOT NULL REFERENCES routines(id) ON DELETE CASCADE,
+    trigger     TEXT NOT NULL DEFAULT 'cron',
+    started_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    finished_at TIMESTAMPTZ,
+    ok          BOOLEAN NOT NULL DEFAULT FALSE,
+    summary     TEXT NOT NULL DEFAULT ''
+);
+"#,
+    r#"
+CREATE INDEX IF NOT EXISTS routine_runs_routine_idx ON routine_runs (routine_id, id DESC);
 "#,
 ];
 
@@ -855,12 +883,9 @@ impl Store {
     }
 
     pub async fn move_card_tx(&self, tx: &mut DbTx, mv: &MoveCard<'_>) -> Result<(), StoreError> {
-        let found = sqlx::query!(
-            r#"SELECT 1 AS "one!" FROM task_cards WHERE id = $1"#,
-            mv.id
-        )
-        .fetch_optional(&mut **tx)
-        .await?;
+        let found = sqlx::query!(r#"SELECT 1 AS "one!" FROM task_cards WHERE id = $1"#, mv.id)
+            .fetch_optional(&mut **tx)
+            .await?;
         if found.is_none() {
             return Err(StoreError::NoSuchCard);
         }
@@ -974,8 +999,141 @@ impl Store {
         .execute(&self.pool)
         .await?;
         if res.rows_affected() == 0 {
-            return Err(StoreError::NoSuchAgentOutput);
+            return Err(StoreError::NoSuchRoutine);
         }
         Ok(())
+    }
+
+    pub async fn remove_agent_output(&self, id: i64) -> Result<(), StoreError> {
+        let res = sqlx::query!(r#"DELETE FROM agent_outputs WHERE id = $1"#, id)
+            .execute(&self.pool)
+            .await?;
+        if res.rows_affected() == 0 {
+            return Err(StoreError::NoSuchRoutine);
+        }
+        Ok(())
+    }
+}
+
+/// Storage errors reused for the routine CRUD (no dedicated variants:
+/// `NoSuchRoutine` maps onto the existing missing-row error kind).
+impl Store {
+    pub async fn list_routines(&self) -> Result<Vec<RoutineRow>, StoreError> {
+        let rows = sqlx::query!(
+            r#"SELECT id, name, cron, agent, instruction, enabled,
+                      to_char(created_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS "created_at!"
+               FROM routines ORDER BY id"#
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| RoutineRow {
+                id: r.id,
+                name: r.name,
+                cron: r.cron,
+                agent: r.agent,
+                instruction: r.instruction,
+                enabled: r.enabled,
+                created_at: r.created_at,
+            })
+            .collect())
+    }
+
+    pub async fn get_routine(&self, id: i64) -> Result<Option<RoutineRow>, StoreError> {
+        let rows = self.list_routines().await?;
+        Ok(rows.into_iter().find(|r| r.id == id))
+    }
+
+    pub async fn add_routine(&self, d: &RoutineDraft) -> Result<i64, StoreError> {
+        let rec = sqlx::query!(
+            r#"INSERT INTO routines (name, cron, agent, instruction, enabled)
+               VALUES ($1, $2, $3, $4, $5) RETURNING id AS "id!""#,
+            d.name,
+            d.cron,
+            d.agent,
+            d.instruction,
+            d.enabled,
+        )
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(rec.id)
+    }
+
+    pub async fn update_routine(&self, id: i64, d: &RoutineDraft) -> Result<(), StoreError> {
+        let res = sqlx::query!(
+            r#"UPDATE routines
+               SET name = $2, cron = $3, agent = $4, instruction = $5, enabled = $6
+               WHERE id = $1"#,
+            id,
+            d.name,
+            d.cron,
+            d.agent,
+            d.instruction,
+            d.enabled,
+        )
+        .execute(&self.pool)
+        .await?;
+        if res.rows_affected() == 0 {
+            return Err(StoreError::NoSuchRoutine);
+        }
+        Ok(())
+    }
+
+    pub async fn remove_routine(&self, id: i64) -> Result<(), StoreError> {
+        let res = sqlx::query!(r#"DELETE FROM routines WHERE id = $1"#, id)
+            .execute(&self.pool)
+            .await?;
+        if res.rows_affected() == 0 {
+            return Err(StoreError::NoSuchRoutine);
+        }
+        Ok(())
+    }
+
+    pub async fn record_routine_run(
+        &self,
+        routine_id: i64,
+        trigger: &str,
+        ok: bool,
+        summary: &str,
+    ) -> Result<i64, StoreError> {
+        const SUMMARY_CHARS: usize = 400;
+        let summary: String = summary.chars().take(SUMMARY_CHARS).collect();
+        let rec = sqlx::query!(
+            r#"INSERT INTO routine_runs (routine_id, "trigger", finished_at, ok, summary)
+               VALUES ($1, $2, now(), $3, $4) RETURNING id AS "id!""#,
+            routine_id,
+            trigger,
+            ok,
+            summary,
+        )
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(rec.id)
+    }
+
+    pub async fn routine_runs(&self, routine_id: i64) -> Result<Vec<RoutineRunRow>, StoreError> {
+        let rows = sqlx::query!(
+            r#"SELECT id, routine_id, "trigger",
+                      to_char(started_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS "started_at!",
+                      to_char(finished_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS finished_at,
+                      ok, summary
+               FROM routine_runs WHERE routine_id = $1 ORDER BY id DESC"#,
+            routine_id
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| RoutineRunRow {
+                id: r.id,
+                routine_id: r.routine_id,
+                trigger: r.trigger,
+                started_at: r.started_at,
+                finished_at: r.finished_at,
+                ok: r.ok,
+                summary: r.summary,
+            })
+            .collect())
     }
 }

@@ -1,128 +1,102 @@
-//! Schedule service tests over mocked repos: due cards get scheduled, future
-//! ones wait, unscheduled ones are ignored.
+//! Schedule service tests: routines are the only scheduled entity. Due
+//! routines get a next-run slot, disabled/bad-cron ones are dropped, and
+//! removed routines are pruned. Card cron is gone — tasks never recur.
+//! One serial test: all scenarios share the live routines table.
 
 use std::sync::Arc;
 
-use task_rs::CardRow;
-use mockall::predicate::eq;
+use task_rs::RoutineRow;
 
-use backend::app::task::TaskApp;
 use backend::app::schedule_work::{self, ScheduleHandle};
+use backend::app::task::TaskApp;
 use backend::port::outbound::{
     MockAgentConfigRepo, MockCardRepo, MockCommentRepo, MockProjectRepo, MockResourceRepo,
     MockSkillRepo, MockWorkspaceRepo,
 };
 
-const CARD_ID: i64 = 5;
 const EVERY_MINUTE: &str = "* * * * *";
 
-fn card_row(cron: Option<&str>) -> CardRow {
-    CardRow {
-        id: CARD_ID,
-        column_id: "todo".into(),
-        project_id: None,
-        title: "t".into(),
-        description: String::new(),
-        priority: "normal".into(),
-        position: 0,
-        agent_name: None,
-        agent_state: None,
-        run_status: task_rs::RUN_STATUS_IDLE.into(),
-        last_agent: None,
-        last_run_id: None,
-        assignee: None,
-        image: None,
-        cron: cron.map(str::to_owned),
-        deadline: None,
-        labels: None,
-        checklist: None,
-        estimate: None,
+fn routine_row(cron: &str, enabled: bool) -> RoutineRow {
+    RoutineRow {
+        id: 0,
+        name: "news digest".into(),
+        cron: cron.into(),
+        agent: String::new(),
+        instruction: "summarize".into(),
+        enabled,
+        created_at: "2026-01-01T00:00:00Z".into(),
     }
 }
 
-fn empty_cards() -> MockCardRepo {
-    let mut cards = MockCardRepo::new();
-    cards.expect_list().returning(|_| Ok(vec![]));
-    cards
-}
-
-fn app(cards: MockCardRepo) -> Arc<TaskApp> {
-    Arc::new(TaskApp::new(
-        Arc::new(cards),
+fn app(store: Arc<task_rs::Store>) -> Arc<TaskApp> {
+    TaskApp::new(
+        store,
+        Arc::new(MockCardRepo::new()),
         Arc::new(MockCommentRepo::new()),
         Arc::new(MockResourceRepo::new()),
         Arc::new(MockAgentConfigRepo::new()),
         Arc::new(MockSkillRepo::new()),
         Arc::new(MockWorkspaceRepo::new()),
         Arc::new(MockProjectRepo::new()),
-    ))
+    )
+    .into()
 }
 
 #[tokio::test]
-async fn unscheduled_cards_are_ignored() {
-    let mut cards = MockCardRepo::new();
-    cards.expect_list().returning(|_| Ok(vec![card_row(None)]));
-    let app = app(cards);
-    let handle = ScheduleHandle::new();
-    schedule_work::run_once(&app, None, &handle).await;
-    assert!(handle.entries().is_empty());
-}
+async fn routine_scheduling_scenarios() {
+    let url = task_rs::Store::default_url();
+    let store = Arc::new(task_rs::Store::connect(&url).await.expect("connect"));
+    // the test owns the table: drop leftovers from earlier runs first
+    for stale in store.list_routines().await.expect("list") {
+        store.remove_routine(stale.id).await.expect("cleanup");
+    }
+    let app = app(Arc::clone(&store));
 
-#[tokio::test]
-async fn scheduled_card_gets_a_next_run() {
-    let mut cards = MockCardRepo::new();
-    cards
-        .expect_list()
-        .returning(|_| Ok(vec![card_row(Some(EVERY_MINUTE))]));
-    let app = app(cards);
+    // due routine gets a next-run slot
+    let id = store
+        .add_routine(&task_rs::RoutineDraft {
+            name: "digest".into(),
+            cron: EVERY_MINUTE.into(),
+            enabled: true,
+            ..Default::default()
+        })
+        .await
+        .expect("add");
     let handle = ScheduleHandle::new();
-    schedule_work::run_once(&app, None, &handle).await;
+    schedule_work::run_once(&app, None, None, &handle).await;
     let entries = handle.entries();
     assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0].card_id, CARD_ID);
+    assert_eq!(entries[0].card_id, id);
     // first sighting schedules the next minute boundary
     assert!(entries[0].next_run > schedule_work::unix_now());
-}
 
-#[tokio::test]
-async fn bad_cron_is_dropped() {
-    let mut cards = MockCardRepo::new();
-    cards
-        .expect_list()
-        .returning(|_| Ok(vec![card_row(Some("not a cron"))]));
-    let app = app(cards);
-    let handle = ScheduleHandle::new();
-    schedule_work::run_once(&app, None, &handle).await;
+    // removed routine -> entry pruned on the next pass
+    store.remove_routine(id).await.expect("remove");
+    schedule_work::run_once(&app, None, None, &handle).await;
     assert!(handle.entries().is_empty());
-}
 
-#[tokio::test]
-async fn removed_cron_is_forgotten() {
-    let handle = ScheduleHandle::new();
-    let mut with_cron = MockCardRepo::new();
-    with_cron
-        .expect_list()
-        .times(1)
-        .returning(|_| Ok(vec![card_row(Some(EVERY_MINUTE))]));
-    let app_cron = app(with_cron);
-    schedule_work::run_once(&app_cron, None, &handle).await;
-    assert_eq!(handle.entries().len(), 1);
-    // cron removed -> entry pruned on the next pass
-    let app = app(empty_cards());
-    schedule_work::run_once(&app, None, &handle).await;
-    assert!(handle.entries().is_empty());
-}
-
-#[tokio::test]
-async fn set_cron_reaches_the_repo() {
-    let mut cards = MockCardRepo::new();
-    cards
-        .expect_set_cron()
-        .with(eq(CARD_ID), eq(Some("*/5 * * * *".to_owned())))
-        .returning(|_, _| Ok(()));
-    let app = app(cards);
-    app.cards
-        .set_cron(CARD_ID, Some("*/5 * * * *".to_owned()))
+    // disabled or bad-cron routines never schedule
+    let bad = store
+        .add_routine(&task_rs::RoutineDraft {
+            name: "bad cron".into(),
+            cron: "not a cron".into(),
+            ..Default::default()
+        })
         .await
-        .expect("set cron");
+        .expect("add bad");
+    let paused = store
+        .add_routine(&task_rs::RoutineDraft {
+            name: "paused".into(),
+            cron: EVERY_MINUTE.into(),
+            enabled: false,
+            ..Default::default()
+        })
+        .await
+        .expect("add paused");
+    schedule_work::run_once(&app, None, None, &handle).await;
+    assert!(handle.entries().is_empty());
+
+    // cleanup
+    store.remove_routine(bad).await.expect("cleanup bad");
+    store.remove_routine(paused).await.expect("cleanup paused");
 }

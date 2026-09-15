@@ -8,6 +8,7 @@ import {
   FileDiff,
   Inbox,
   KanbanSquare,
+  CalendarClock,
   KeyRound,
   LogOut,
   Monitor,
@@ -40,6 +41,7 @@ import QuotaBoard from "./QuotaBoard.tsx";
 
 const ITEMS = [
   { to: "/task", title: "task", Icon: KanbanSquare },
+  { to: "/routines", title: "routines", Icon: CalendarClock },
   { to: "/agents", title: "agents", Icon: Bot },
   { to: "/review", title: "review", Icon: FileDiff },
   { to: "/settings", title: "settings", Icon: Settings },
@@ -204,12 +206,12 @@ export default function SideNav({ on_chat, shifted }: { on_chat: () => void; shi
           <button
             className={`dock-profile-btn ${machines_open ? "open" : ""}`}
             onClick={toggle_machines}
-            title="machines"
+            title="runtime"
             aria-haspopup="dialog"
             aria-expanded={machines_open}
           >
             <Monitor size={16} />
-            <span className="dock-label">machines</span>
+            <span className="dock-label">runtime</span>
           </button>
         </div>
         <div className="dock-profile">

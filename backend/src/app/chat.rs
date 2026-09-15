@@ -14,10 +14,10 @@ use crate::port::outbound::{
     AgentConfigRepo, AgentGit, AgentRun, BoardOps, ChatMemory, Fetcher, Inference, ModelSwitch,
     ProjectGit, Runner, Searcher, ThreadEnvs,
 };
-use task_rs::ThinkLevel;
-use task_rs::resource::UpsertResource;
 use susutaku_mlx::stats::GenStats;
 use susutaku_mlx::tok::TokKind;
+use task_rs::ThinkLevel;
+use task_rs::resource::UpsertResource;
 
 const MEMORY_RECALL_TOP_K: usize = 5;
 const MEMORY_CONTEXT_HEADER: &str = "Earlier relevant conversation:\n";
@@ -645,6 +645,14 @@ impl ChatHandling for ChatUseCase {
             context.push_str(PROJECT_SKILLS_HEADER);
             context.push_str(&agent_skills);
         }
+        // Task snapshot: ground the turn on the card's state + comment
+        // thread, so a mention reply continues where the last one left off.
+        if let Some(card_id) = cmd.card_id {
+            if let Some(snap) = self.board.card_context(card_id).await {
+                context.push_str(&snap);
+                context.push('\n');
+            }
+        }
         if let Some(hint) = think_hint(think_level) {
             context.push_str(hint);
             context.push('\n');
@@ -713,10 +721,14 @@ impl ChatHandling for ChatUseCase {
                     context.push_str(&page);
                 }
                 ToolCall::Shell(shell_cmd) if tools.allows(ToolKind::Shell) => {
-                    let result = self.shell_blocking_on(Arc::clone(&runner), &shell_cmd).await;
+                    let result = self
+                        .shell_blocking_on(Arc::clone(&runner), &shell_cmd)
+                        .await;
                     let mut use_ = ToolUse::new(ToolKind::Shell, &shell_cmd, &result);
                     if result.is_ok() {
-                        for path in self.scan_artifacts(&runner, result.as_deref().unwrap_or_default()) {
+                        for path in
+                            self.scan_artifacts(&runner, result.as_deref().unwrap_or_default())
+                        {
                             use_ = use_.with_artifact(&path);
                         }
                     }
@@ -821,7 +833,9 @@ impl ChatHandling for ChatUseCase {
                     col,
                 } if tools.allows(ToolKind::Lsp) => {
                     let input = format!("{} {path}:{line}:{col}", op.as_str().to_lowercase());
-                    let result = self.lsp_blocking(Arc::clone(&runner), op, &path, line, col).await;
+                    let result = self
+                        .lsp_blocking(Arc::clone(&runner), op, &path, line, col)
+                        .await;
                     trace.push(ToolUse::new(ToolKind::Lsp, &input, &result));
                     emit_tool(trace.last().expect("just pushed"));
                     let out = result.unwrap_or_else(|e| format!("{TOOL_ERROR}{e}"));

@@ -26,6 +26,74 @@ pub const TRIGGER_CRON: &str = "cron";
 pub const RUNNER_HUMAN: &str = "human";
 pub const RUNNER_PINNED: &str = "pinned";
 
+/// Canonical workflow status of a Task (= Board Card column).
+pub const STATUS_TODO: &str = "todo";
+pub const STATUS_IN_PROGRESS: &str = "in_progress";
+pub const STATUS_REVIEW: &str = "review";
+pub const STATUS_CONFLICT: &str = "conflict";
+pub const STATUS_DONE: &str = "done";
+pub const STATUS_FAILED: &str = "failed";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TaskStatus {
+    Todo,
+    InProgress,
+    Review,
+    Conflict,
+    Done,
+    Failed,
+}
+
+impl TaskStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TaskStatus::Todo => STATUS_TODO,
+            TaskStatus::InProgress => STATUS_IN_PROGRESS,
+            TaskStatus::Review => STATUS_REVIEW,
+            TaskStatus::Conflict => STATUS_CONFLICT,
+            TaskStatus::Done => STATUS_DONE,
+            TaskStatus::Failed => STATUS_FAILED,
+        }
+    }
+
+    /// Parse from a status string or a legacy column id (`doing` = in progress).
+    pub fn parse(raw: &str) -> Self {
+        match raw {
+            STATUS_IN_PROGRESS | crate::COLUMN_DOING => TaskStatus::InProgress,
+            STATUS_REVIEW => TaskStatus::Review,
+            STATUS_CONFLICT => TaskStatus::Conflict,
+            STATUS_DONE => TaskStatus::Done,
+            STATUS_FAILED => TaskStatus::Failed,
+            _ => TaskStatus::Todo,
+        }
+    }
+
+    /// The board column this status is stored as (`column_id`).
+    pub fn column(self) -> &'static str {
+        match self {
+            TaskStatus::Todo => crate::COLUMN_TODO,
+            TaskStatus::InProgress => crate::COLUMN_DOING,
+            TaskStatus::Review => STATUS_REVIEW,
+            TaskStatus::Conflict => STATUS_CONFLICT,
+            TaskStatus::Done => crate::COLUMN_DONE,
+            TaskStatus::Failed => crate::COLUMN_FAILED,
+        }
+    }
+}
+
+/// Server-side transition authority for `PATCH /api/tasks/{id}/status`.
+pub fn transition_allowed(from: TaskStatus, to: TaskStatus) -> bool {
+    use TaskStatus::*;
+    match from {
+        Todo => matches!(to, InProgress | Done | Failed),
+        InProgress => matches!(to, Review | Conflict | Done | Failed | Todo),
+        Review => matches!(to, Done | Conflict | InProgress),
+        Conflict => matches!(to, Review | InProgress | Done),
+        Done => matches!(to, Todo | InProgress),
+        Failed => matches!(to, Todo | InProgress),
+    }
+}
+
 /// Who runs a card: a preference, never mutated by a run.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Runner {

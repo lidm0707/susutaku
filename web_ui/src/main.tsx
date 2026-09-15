@@ -10,6 +10,7 @@ import Settings from "./pages/Settings.jsx";
 import Sandbox from "./pages/Sandbox.jsx";
 import Attachments from "./pages/Attachments.jsx";
 import Review from "./pages/Review.tsx";
+import Routines from "./pages/Routines.tsx";
 import { get_token } from "./lib.js";
 import { Toaster } from "./ui/Toast.jsx";
 import SideNav from "./components/SideNav.tsx";
@@ -46,7 +47,8 @@ function App() {
         <Route path="/chat" element={<Navigate to={`/task${window.location.search}`} replace />} />
         <Route path="/models" element={<Navigate to="/task" replace />} />
         <Route path="/task" element={<RequireAuth><Task /></RequireAuth>} />
-        <Route path="/routine" element={<Navigate to="/task" replace />} />
+        <Route path="/routine" element={<Navigate to="/routines" replace />} />
+        <Route path="/routines" element={<RequireAuth><Routines /></RequireAuth>} />
         <Route path="/attachments" element={<RequireAuth><Attachments /></RequireAuth>} />
         <Route path="/agents" element={<RequireAuth><AgentSettings /></RequireAuth>} />
         <Route path="/review" element={<RequireAuth><Review /></RequireAuth>} />

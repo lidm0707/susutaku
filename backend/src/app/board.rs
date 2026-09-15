@@ -8,18 +8,28 @@ use async_trait::async_trait;
 use task_rs::Role;
 
 use crate::domain::{BoardOp, BoardRequest, BoardResult};
-use crate::port::outbound::{BoardOps, Inference};
+use crate::port::outbound::{BoardOps, Inference, ModelEngines};
 
 pub struct BoardService {
     store: Arc<task_rs::Store>,
     app: super::task::TaskApp,
     engine: Option<Arc<dyn Inference>>,
+    engines: Option<Arc<dyn ModelEngines>>,
 }
 
 impl BoardService {
-    pub fn new(store: Arc<task_rs::Store>, engine: Option<Arc<dyn Inference>>) -> Self {
+    pub fn new(
+        store: Arc<task_rs::Store>,
+        engine: Option<Arc<dyn Inference>>,
+        engines: Option<Arc<dyn ModelEngines>>,
+    ) -> Self {
         let app = super::task::build(store.clone());
-        Self { store, app, engine }
+        Self {
+            store,
+            app,
+            engine,
+            engines,
+        }
     }
 
     async fn editor(&self, token: &Option<String>) -> Result<Role, String> {
@@ -48,6 +58,8 @@ const NO_CRON: &str = "none";
 const FIND_HITS_MAX: usize = 8;
 const TITLE_WEIGHT: u32 = 3;
 const EXACT_SUBSTR_SCORE: u32 = 100;
+const SNAPSHOT_COMMENTS_MAX: i64 = 20;
+const SNAPSHOT_COMMENT_CHARS: usize = 400;
 
 fn card_line(card: &task_rs::CardRow) -> String {
     let cron = card.cron.as_deref().unwrap_or(NO_CRON);
@@ -185,6 +197,7 @@ impl BoardOps for BoardService {
                 let record = super::card_run::run_card(
                     &self.app,
                     self.engine.clone(),
+                    self.engines.as_deref(),
                     card_id,
                     task_rs::TRIGGER_MANUAL,
                 )
@@ -233,6 +246,35 @@ impl BoardOps for BoardService {
                     .join("\n"))
             }
         }
+    }
+
+    /// Compact task snapshot: identity, state, description and the recent
+    /// comment thread. Read-only — any role may read, so no editor check.
+    async fn card_context(&self, card_id: i64) -> Option<String> {
+        const SNAPSHOT_HEADER: &str = "TASK CONTEXT";
+        let card = self.app.cards.get(card_id).await.ok()??;
+        let status = task_rs::TaskStatus::parse(&card.column_id);
+        let mut snap = format!(
+            "{SNAPSHOT_HEADER}: #{} `{}` status {} priority {}",
+            card.id,
+            card.title,
+            status.as_str(),
+            card.priority
+        );
+        if !card.description.is_empty() {
+            snap.push_str("\ndescription: ");
+            snap.push_str(&card.description);
+        }
+        if let Ok(comments) = self.app.comments.list(card_id).await {
+            let from = comments
+                .len()
+                .saturating_sub(SNAPSHOT_COMMENTS_MAX as usize);
+            for c in &comments[from..] {
+                let body: String = c.body.chars().take(SNAPSHOT_COMMENT_CHARS).collect();
+                snap.push_str(&format!("\n- {}: {}", c.author, body));
+            }
+        }
+        Some(snap)
     }
 }
 
