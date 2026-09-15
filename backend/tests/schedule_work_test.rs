@@ -5,8 +5,6 @@
 
 use std::sync::Arc;
 
-use task_rs::RoutineRow;
-
 use backend::app::schedule_work::{self, ScheduleHandle};
 use backend::app::task::TaskApp;
 use backend::port::outbound::{
@@ -15,18 +13,6 @@ use backend::port::outbound::{
 };
 
 const EVERY_MINUTE: &str = "* * * * *";
-
-fn routine_row(cron: &str, enabled: bool) -> RoutineRow {
-    RoutineRow {
-        id: 0,
-        name: "news digest".into(),
-        cron: cron.into(),
-        agent: String::new(),
-        instruction: "summarize".into(),
-        enabled,
-        created_at: "2026-01-01T00:00:00Z".into(),
-    }
-}
 
 fn app(store: Arc<task_rs::Store>) -> Arc<TaskApp> {
     TaskApp::new(
