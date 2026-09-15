@@ -147,13 +147,17 @@ impl Manager {
         repo: Option<&RemoteRepo>,
     ) -> Result<PathBuf, String> {
         let key = slot_key(agent, task);
-        let mut agents = self
+        if let Some(slot) = self
             .agents
-            .write()
-            .map_err(|_| "agent map poisoned".to_string())?;
-        if let Some(slot) = agents.get(&key) {
+            .read()
+            .map_err(|_| "agent map poisoned".to_string())?
+            .get(&key)
+        {
             return Ok(slot.work_tree.clone());
         }
+        // Heavy setup (sandbox create, repo seed — a clone can block on the
+        // network) runs WITHOUT the agents write lock held; a snapshot()
+        // must never wait on it.
         let work_tree = PathBuf::from(AGENTS_ROOT).join(sanitize(&key));
         reclaim_stale(&work_tree);
         // Run from the agent's cached image when one exists (installs from a
@@ -174,6 +178,13 @@ impl Manager {
             .ok()
             .and_then(|repo| repo.head_oid().ok())
             .map(|oid| oid.to_string());
+        let mut agents = self
+            .agents
+            .write()
+            .map_err(|_| "agent map poisoned".to_string())?;
+        if let Some(slot) = agents.get(&key) {
+            return Ok(slot.work_tree.clone());
+        }
         agents.insert(
             key,
             Arc::new(AgentSlot {
@@ -213,22 +224,26 @@ impl Manager {
     /// pr run inside the agent's own container with network + run-scoped
     /// token env.
     pub fn git_tool(&self, agent: &str, tool: &GitTool) -> Result<String, String> {
-        let slot = self
+        // The first read guard must drop before spawning: re-entering the
+        // lock while a queued writer waits deadlocks on itself.
+        let cached = self
             .agents
             .read()
             .map_err(|_| "agent map poisoned".to_string())?
             .get(agent)
-            .cloned()
-            .map(Ok)
-            .unwrap_or_else(|| {
+            .cloned();
+        let slot = match cached {
+            Some(slot) => slot,
+            None => {
                 self.spawn(agent)?;
                 self.agents
                     .read()
                     .map_err(|_| "agent map poisoned".to_string())?
                     .get(agent)
                     .cloned()
-                    .ok_or_else(|| format!("agent {agent} failed to spawn"))
-            })?;
+                    .ok_or_else(|| format!("agent {agent} failed to spawn"))?
+            }
+        };
         match tool {
             GitTool::Branch { .. }
             | GitTool::Commit { .. }

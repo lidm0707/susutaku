@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use kanban_rs::resource::UpsertResource;
-use kanban_rs::store::{AgentState, CardRow, StoreError};
+use kanban_rs::store::{CardRow, RunRecordNew, StoreError};
 use kanban_rs::{AgentConfigRow, COLUMN_DOING, COLUMN_DONE, COLUMN_FAILED};
 use piplines::agent::META_AGENT;
 use piplines::graph::{NodeDef, PipelineSpec};
@@ -35,6 +35,7 @@ pub async fn run_card_pipeline(
     app: &KanbanApp,
     engine: Option<Arc<dyn Inference>>,
     card_id: i64,
+    trigger: &'static str,
 ) -> Result<RunRecord, StoreError> {
     let card = app
         .cards
@@ -75,7 +76,7 @@ pub async fn run_card_pipeline(
             resources: Vec::new(),
         },
     };
-    persist(app, card_id, &card, outcome).await
+    persist(app, card_id, &card, outcome, trigger).await
 }
 
 /// Load and validate the spec attached to the card, if any.
@@ -277,6 +278,7 @@ async fn persist(
     card_id: i64,
     card: &CardRow,
     outcome: RunOutcome,
+    trigger: &'static str,
 ) -> Result<RunRecord, StoreError> {
     for (name, content) in &outcome.resources {
         app.resources
@@ -299,13 +301,24 @@ async fn persist(
         RUN_KEY.to_owned(),
         serde_json::to_value(&outcome.record).map_err(|e| StoreError::BadSpec(e.to_string()))?,
     );
-    let name = if card.agent_name.is_some() {
-        card.agent_name.clone().expect("checked above")
-    } else {
-        outcome.agent_name
-    };
+    // Preference (`agent_name`) is never mutated by a run: the state write
+    // touches only the ledger; the run's agent goes to the record fields.
     app.cards
-        .set_agent(card_id, &AgentState { name, state })
+        .set_agent_state(
+            card_id,
+            &serde_json::to_string(&state).map_err(|e| StoreError::BadSpec(e.to_string()))?,
+        )
+        .await?;
+    let ok = outcome.record.status == StageStatus::Ok;
+    let summary = outcome.record.output.clone().unwrap_or_default();
+    app.cards
+        .record_run(RunRecordNew {
+            card_id,
+            trigger: trigger.to_owned(),
+            agent: outcome.agent_name.clone(),
+            ok,
+            summary,
+        })
         .await?;
     let target = match outcome.record.status {
         StageStatus::Ok => COLUMN_DONE,

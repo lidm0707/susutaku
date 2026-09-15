@@ -2,6 +2,8 @@
 
 use sqlx::PgPool;
 
+use crate::card::{RUN_STATUS_ERROR, RUN_STATUS_FINISHED};
+
 pub const DEFAULT_DATABASE_URL: &str = "postgres://susutaku:susutaku@localhost:5434/susutaku";
 
 pub const TABLE_NAME: &str = "kanban_cards";
@@ -73,6 +75,11 @@ pub struct CardRow {
     pub position: i32,
     pub agent_name: Option<String>,
     pub agent_state: Option<String>,
+    /// Last recorded run status (see `RunStatus`); never a runner preference.
+    pub run_status: String,
+    /// Agent that executed the most recent run; the run *record* role.
+    pub last_agent: Option<String>,
+    pub last_run_id: Option<i64>,
     pub assignee: Option<String>,
     pub pipeline_id: Option<i64>,
     pub cron: Option<String>,
@@ -82,6 +89,24 @@ pub struct CardRow {
     /// JSON array of {text, done} objects; empty string clears, NULL/None unset.
     pub checklist: Option<String>,
     pub estimate: Option<i32>,
+}
+
+impl CardRow {
+    /// The runner preference: pipeline wins over a pinned agent; a run never
+    /// mutates what this returns.
+    pub fn runner(&self) -> crate::Runner {
+        if self.pipeline_id.is_some() {
+            crate::Runner::Pipeline
+        } else if let Some(agent) = &self.agent_name {
+            crate::Runner::Pinned(agent.clone())
+        } else {
+            crate::Runner::Human
+        }
+    }
+
+    pub fn run_status(&self) -> crate::RunStatus {
+        crate::RunStatus::parse(&self.run_status)
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -347,6 +372,30 @@ CREATE TABLE IF NOT EXISTS chat_messages (
 CREATE INDEX IF NOT EXISTS chat_messages_thread_idx ON chat_messages (thread_id, id);
 "#,
     r#"
+ALTER TABLE kanban_cards ADD COLUMN IF NOT EXISTS run_status TEXT NOT NULL DEFAULT 'idle';
+"#,
+    r#"
+ALTER TABLE kanban_cards ADD COLUMN IF NOT EXISTS last_agent TEXT;
+"#,
+    r#"
+ALTER TABLE kanban_cards ADD COLUMN IF NOT EXISTS last_run_id BIGINT;
+"#,
+    r#"
+CREATE TABLE IF NOT EXISTS run_records (
+    id          BIGSERIAL PRIMARY KEY,
+    card_id     BIGINT NOT NULL REFERENCES kanban_cards(id) ON DELETE CASCADE,
+    "trigger"   TEXT NOT NULL,
+    agent       TEXT NOT NULL DEFAULT '',
+    started_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    finished_at TIMESTAMPTZ,
+    ok          BOOLEAN NOT NULL DEFAULT FALSE,
+    summary     TEXT NOT NULL DEFAULT ''
+);
+"#,
+    r#"
+CREATE INDEX IF NOT EXISTS run_records_card_idx ON run_records (card_id, id DESC);
+"#,
+    r#"
 ALTER TABLE chat_threads ADD COLUMN IF NOT EXISTS project_id BIGINT REFERENCES projects(id) ON DELETE CASCADE;
 "#,
     r#"
@@ -397,7 +446,8 @@ impl Store {
         let rows = sqlx::query_as!(
             CardRow,
             r#"SELECT id, column_id, project_id, title, description,
-                      priority, position, agent_name, agent_state, assignee, pipeline_id, cron, deadline,
+                      priority, position, agent_name, agent_state, run_status, last_agent, last_run_id,
+                      assignee, pipeline_id, cron, deadline,
                       labels, checklist, estimate
                FROM kanban_cards
                WHERE ($1::bigint IS NULL OR project_id = $1)
@@ -436,7 +486,8 @@ impl Store {
         let row = sqlx::query_as!(
             CardRow,
             r#"SELECT id, column_id, project_id, title, description,
-                      priority, position, agent_name, agent_state, assignee, pipeline_id, cron, deadline,
+                      priority, position, agent_name, agent_state, run_status, last_agent, last_run_id,
+                      assignee, pipeline_id, cron, deadline,
                       labels, checklist, estimate
                FROM kanban_cards WHERE id = $1"#,
             id
@@ -493,10 +544,79 @@ impl Store {
         .ok_or(StoreError::NoSuchCard)?;
         let (name, state) = match (row.agent_name, row.agent_state) {
             (Some(n), Some(s)) => (n, s),
+            // A run history without a pinned agent is still readable
+            // (pinned agent is a preference; the state is a run ledger).
+            (None, Some(s)) => (String::new(), s),
             _ => return Ok(None),
         };
         let state = serde_json::from_str(&state).unwrap_or(serde_json::Value::Null);
         Ok(Some(AgentState { name, state }))
+    }
+
+    /// Write only the run ledger (`agent_state`); the pinned agent
+    /// (`agent_name`) is a preference and stays untouched.
+    pub async fn set_agent_state(&self, id: i64, state_json: &str) -> Result<(), StoreError> {
+        let res = sqlx::query!(
+            r#"UPDATE kanban_cards SET agent_state = $2 WHERE id = $1"#,
+            id,
+            state_json,
+        )
+        .execute(&self.pool)
+        .await?;
+        if res.rows_affected() == 0 {
+            return Err(StoreError::NoSuchCard);
+        }
+        Ok(())
+    }
+
+    /// Append a finished run: one `run_records` row plus the card's
+    /// `run_status` / `last_agent` / `last_run_id` record fields.
+    pub async fn record_run(&self, r: RunRecordNew) -> Result<i64, StoreError> {
+        let status = if r.ok {
+            RUN_STATUS_FINISHED
+        } else {
+            RUN_STATUS_ERROR
+        };
+        let mut tx = self.begin().await?;
+        let row = sqlx::query_as!(
+            NewId,
+            r#"INSERT INTO run_records (card_id, "trigger", agent, ok, summary, finished_at)
+               VALUES ($1, $2, $3, $4, $5, now())
+               RETURNING id AS "id: i64""#,
+            r.card_id,
+            r.trigger.as_str(),
+            r.agent.as_str(),
+            r.ok,
+            r.summary.as_str(),
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        sqlx::query!(
+            r#"UPDATE kanban_cards
+               SET run_status = $2, last_agent = $3, last_run_id = $4
+               WHERE id = $1"#,
+            r.card_id,
+            status,
+            r.agent,
+            row.id,
+        )
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(row.id)
+    }
+
+    /// Run history for a card, newest first.
+    pub async fn card_runs(&self, card_id: i64) -> Result<Vec<RunRecordRow>, StoreError> {
+        let rows = sqlx::query_as!(
+            RunRecordRow,
+            r#"SELECT id, card_id, "trigger", agent, started_at, finished_at, ok, summary
+               FROM run_records WHERE card_id = $1 ORDER BY id DESC"#,
+            card_id
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
     }
 
     pub async fn set_card_pipeline(
@@ -648,7 +768,8 @@ impl Store {
         let row = sqlx::query_as!(
             CardRow,
             r#"SELECT id, column_id, project_id, title, description,
-                      priority, position, agent_name, agent_state, assignee, pipeline_id, cron, deadline,
+                      priority, position, agent_name, agent_state, run_status, last_agent, last_run_id,
+                      assignee, pipeline_id, cron, deadline,
                       labels, checklist, estimate
                FROM kanban_cards WHERE id = $1"#,
             id
@@ -737,6 +858,26 @@ impl Store {
         .await?;
         Ok(())
     }
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RunRecordRow {
+    pub id: i64,
+    pub card_id: i64,
+    pub trigger: String,
+    pub agent: String,
+    pub started_at: chrono::DateTime<chrono::Utc>,
+    pub finished_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub ok: bool,
+    pub summary: String,
+}
+
+pub struct RunRecordNew {
+    pub card_id: i64,
+    pub trigger: String,
+    pub agent: String,
+    pub ok: bool,
+    pub summary: String,
 }
 
 #[derive(Debug)]

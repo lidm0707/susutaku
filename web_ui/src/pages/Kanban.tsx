@@ -831,7 +831,7 @@ export default function Kanban() {
                 )}
                 {card_chips(card)}
                 <CardMeta card={card} />
-                <RunBadge run={run_of(card)} on_open={() => open_detail(card)} />
+                <RunBadge run={run_of(card)} card={card} on_open={() => open_detail(card)} />
                 <span className="kanban-move">
                   <button onClick={() => shift(card, -1)} disabled={card.column_id === COLUMNS[0].id}>
                     <ArrowLeft size={13} />
@@ -868,7 +868,7 @@ export default function Kanban() {
                 </span>
                 <CardMeta card={card} />
                 {card_chips(card)}
-                <RunBadge run={run_of(card)} on_open={() => open_detail(card)} />
+                <RunBadge run={run_of(card)} card={card} on_open={() => open_detail(card)} />
                 <span className="kanban-card-actions">
                   {card.pipeline_id != null && (
                     <button
@@ -1294,8 +1294,27 @@ const STAGE_LABEL: Record<string, string> = {
   failed: "failed",
 };
 
-function RunBadge({ run, on_open }: { run: CardRun | null; on_open: () => void }) {
-  if (!run) return null;
+function RunBadge({
+  run,
+  card,
+  on_open,
+}: {
+  run: CardRun | null;
+  card: Card;
+  on_open: () => void;
+}) {
+  if (!run) {
+    // Live/failed state straight off the run record fields (no run log yet).
+    if (card.run_status === "running" || card.run_status === "error") {
+      return (
+        <button className={`run-badge run-${card.run_status === "running" ? "ok" : "failed"}`} onClick={on_open}>
+          {card.run_status === "running" ? <Workflow size={11} /> : <XCircle size={11} />}
+          {card.run_status === "running" ? `running${card.last_agent ? ` · ${card.last_agent}` : ""}` : "run error"}
+        </button>
+      );
+    }
+    return null;
+  }
   const failed_note = run.stages.find((s) => s.status === "failed")?.note ?? "";
   return (
     <button

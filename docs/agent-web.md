@@ -135,8 +135,11 @@ Requires editor+ role. `app/pipeline_run.rs::run_card_pipeline`:
 5. Each node transforms the payload; the first failing node marks the run
    failed and every later node is recorded as "skipped".
 6. `persist` merges the `RunRecord` into the card's `agent_state` under the
-   `"run"` key and sets `agent_name` (keeps an existing one, else takes the
-   agent chosen by the pipeline's agent node, else `pipeline-runner`).
+   `"run"` key (ledger only — the pinned `agent_name` preference is never
+   mutated by a run) and appends a `run_records` row; the card's
+   `run_status` / `last_agent` / `last_run_id` record fields are updated
+   (`last_agent` = agent chosen by the pipeline's agent node, else
+   `pipeline-runner`). Run history: `GET /api/kanban/cards/{id}/runs`.
 7. The `RunRecord` (status, per-stage log, output, finished_at) is returned to
    the UI.
 

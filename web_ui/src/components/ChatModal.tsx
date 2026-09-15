@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
-import { Bot, Brain, Camera, Check, Code2, Copy, Crosshair, ExternalLink, Eye, Link2, MessageSquarePlus, PanelRight, Send, Square, Wrench, X } from "lucide-react";
+import { Bot, Brain, Camera, Check, CircleDot, Code2, Copy, Crosshair, ExternalLink, Eye, Link2, MessageSquarePlus, PanelRight, Send, Square, Wrench, X } from "lucide-react";
 import {
   API_BASE,
   cancel_chat_run,
@@ -33,6 +33,7 @@ import {
   type PromptSection,
 } from "../lib.js";
 import { Modal } from "../ui/Overlay.js";
+import AgentReview from "./AgentReview.js";
 import { use_projects } from "./ProjectContext.js";
 import GraphView from "./GraphView.tsx";
 import { parse_plot_spec } from "../features/graph.js";
@@ -66,6 +67,34 @@ const HTML_LANG = "html";
 const HTML_FRAME_HEIGHT = "220px";
 
 const DOCK_KEY = "chat_dock";
+
+// per-thread composer drafts survive a page refresh (local threads have no
+// server side store, so localStorage is the only persistence they get)
+const DRAFT_KEY = "chat_drafts_v1";
+
+function thread_key(t: Thread | undefined, project: number | null): string | null {
+  if (!t) return null;
+  return t.server_id === null ? `l${project ?? 0}:${t.id}` : `s${t.server_id}`;
+}
+
+function read_draft(key: string | null): string {
+  if (!key) return "";
+  try {
+    return JSON.parse(localStorage.getItem(DRAFT_KEY) ?? "{}")[key] ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function write_draft(key: string | null, text: string) {
+  if (!key) return;
+  try {
+    const all = JSON.parse(localStorage.getItem(DRAFT_KEY) ?? "{}");
+    if (text) all[key] = text;
+    else delete all[key];
+    localStorage.setItem(DRAFT_KEY, JSON.stringify(all));
+  } catch {}
+}
 
 // url query param that opens the chat docked on a shared thread (?chat=<server id>)
 export const CHAT_PARAM = "chat";
@@ -329,6 +358,7 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
   ]);
   const [activeId, setActiveId] = useState(0);
   const [input, setInput] = useState("");
+  const inputRef = useRef<HTMLTextAreaElement | null>(null);
   // runs are isolated per thread: several threads can generate at once
   const [busyTids, setBusyTids] = useState<number[]>([]);
   const busyTidsRef = useRef<number[]>([]);
@@ -381,6 +411,15 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
     (a, b) => b.updated_at - a.updated_at || b.id - a.id
   );
   const selected = agents.filter((a) => selectedIds.includes(a.id as number));
+  const activeKey = thread_key(threads.find((t) => t.id === activeId), project_id);
+
+  // restore the draft of the active thread (covers refresh on local threads,
+  // which have no server side storage to reload from)
+  useEffect(() => {
+    setInput(read_draft(activeKey));
+    const el = inputRef.current;
+    if (el) el.style.height = "auto";
+  }, [activeKey]);
 
   useEffect(() => {
     if (!toast) return;
@@ -525,8 +564,20 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
     if (!t) return;
     setActiveId(t.id);
     setSharedId(0);
-    window.history.replaceState(null, "", window.location.pathname);
   }, [sharedId, threads]);
+
+  // keep ?chat=<server id> in the url pointing at the active thread so a
+  // page refresh reopens the same chat instead of falling back to a new one
+  useEffect(() => {
+    const t = threads.find((x) => x.id === activeId);
+    const sid = t?.server_id ?? null;
+    const params = new URLSearchParams(window.location.search);
+    if (String(sid ?? "") === params.get(CHAT_PARAM)) return;
+    if (sid === null) params.delete(CHAT_PARAM);
+    else params.set(CHAT_PARAM, String(sid));
+    const q = params.toString();
+    window.history.replaceState(null, "", window.location.pathname + (q ? `?${q}` : ""));
+  }, [activeId, threads]);
 
   function toggle_dock() {
     setDocked((d) => {
@@ -761,6 +812,7 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
     // rest go out sequentially as image-only follow-ups
     const images = [...pendingImages];
     setInput("");
+    write_draft(thread_key(threads.find((t) => t.id === tid), project_id), "");
     setPendingImages([]);
     // steer: while the thread is busy, interrupt the current reply and send
     // this one immediately instead of queueing behind it
@@ -927,6 +979,8 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
           .map((a) => `${a.name}${a.model ? ` · ${pretty_name(a.model)}` : ""}`)
           .join(", ");
 
+  const [reviewOpen, setReviewOpen] = useState(false);
+
   return (
     <Modal
       open={open}
@@ -938,6 +992,16 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
           <img className="title-icon" src="/susutaku_jibi.png" alt="" />
           susutaku
           <span className="sub">{sub}</span>
+          <button
+            type="button"
+            className="title-circle-btn"
+            onClick={() => setReviewOpen(true)}
+            title="review agent work (diff · commit · push · pr)"
+            aria-label="review agent work"
+            disabled={selected.length === 0}
+          >
+            <CircleDot size={14} />
+          </button>
           <button
             type="button"
             onClick={toggle_dock}
@@ -1043,75 +1107,36 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
           </section>
           )}
           {error && <p className="error">{error}</p>}
-          <form onSubmit={send}>
-            <select
-              className="search-toggle"
-              value={searchMode}
-              onChange={(e) => setSearchMode(e.target.value as "off" | "auto" | "on")}
-              title="web search mode"
-              aria-label="web search mode"
-            >
-              <option value="off">off</option>
-              <option value="auto">auto</option>
-              <option value="on">on</option>
-            </select>
-            <div className="chat-agent-pick" ref={pickerRef}>
-              <button
-                type="button"
-                className="chat-agent-pick-btn"
-                onClick={() => setPickerOpen((v) => !v)}
-                title="choose agent(s)"
-                aria-label="choose agents"
-                aria-haspopup="menu"
-                aria-expanded={pickerOpen}
-              >
-                <Bot size={16} />
-                {selected.length > 0 && (
-                  <span className="chat-agent-count" aria-hidden="true">
-                    {selected.length}
-                  </span>
-                )}
-              </button>
-              {pickerOpen && (
-                <div className="chat-agent-menu" role="menu" aria-label="agents">
-                  {agents.length === 0 && <span className="dock-ws-empty">no agents yet</span>}
-                  {agents.map((a) => (
+          <form className="chat-composer" onSubmit={send}>
+            {pendingImages.length > 0 && (
+              <div className="chat-composer-attachments">
+                {pendingImages.map((img, i) => (
+                  <span className="chat-attach-chip" key={`${i}-${img.slice(-16)}`}>
+                    <img src={img} alt="attached screenshot preview" />
                     <button
                       type="button"
-                      key={a.id}
-                      role="menuitemcheckbox"
-                      aria-checked={selectedIds.includes(a.id as number)}
-                      className={selectedIds.includes(a.id as number) ? "on" : ""}
-                      onClick={() => toggle_agent(a.id as number)}
+                      onClick={() => setPendingImages((cur) => cur.filter((_, j) => j !== i))}
+                      title="remove attachment"
+                      aria-label={`remove attachment ${i + 1}`}
                     >
-                      <span className="chat-agent-check" aria-hidden="true">
-                        {selectedIds.includes(a.id as number) ? "✓" : ""}
-                      </span>
-                      {a.name}{a.model ? ` · ${pretty_name(a.model)}` : ""}
-                      {machineByAgent[a.name] && ` · ${machineByAgent[a.name]}`}
+                      <X size={12} />
                     </button>
-                  ))}
-                </div>
-              )}
-            </div>
-            {pendingImages.map((img, i) => (
-              <span className="chat-attach-chip" key={`${i}-${img.slice(-16)}`}>
-                <img src={img} alt="attached screenshot preview" />
-                <button
-                  type="button"
-                  onClick={() => setPendingImages((cur) => cur.filter((_, j) => j !== i))}
-                  title="remove attachment"
-                  aria-label={`remove attachment ${i + 1}`}
-                >
-                  <X size={12} />
-                </button>
-              </span>
-            ))}
+                  </span>
+                ))}
+              </div>
+            )}
             <textarea
+              ref={inputRef}
               className={`chat-input${inputDrag ? " drag" : ""}`}
-              rows={1}
+              rows={6}
               value={input}
-              onChange={(e) => setInput(e.target.value)}
+              onChange={(e) => {
+                setInput(e.target.value);
+                write_draft(activeKey, e.target.value);
+                const el = e.target as HTMLTextAreaElement;
+                el.style.height = "auto";
+                el.style.height = `${Math.min(el.scrollHeight, 480)}px`;
+              }}
               onKeyDown={(e: React.KeyboardEvent<HTMLTextAreaElement>) => {
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
@@ -1162,54 +1187,98 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
               }}
               placeholder={
                 messages.length === 0
-                  ? "Say something to the agent — type a message, or drop / paste an image"
+                  ? "Message the agent — ⏎ to send, drop / paste an image to attach"
                   : threadBusy
                     ? "generating…"
-                    : "type a message — drop or paste an image, or drop a card"
+                    : "Message the agent — drop or paste an image, or drop a card"
               }
             />
-            <button
-              type="button"
-              className={focusOn ? "chat-capscreen on" : "chat-capscreen"}
-              onClick={() => setFocusOn((f) => !f)}
-              title={focusOn ? "focus on: page context is sent — click to stop" : "focus off: send bare messages — click to include page context"}
-              aria-label="toggle page focus context"
-              aria-pressed={focusOn}
-            >
-              <Crosshair size={16} />
-            </button>
-            <button
-              type="button"
-              className={pendingImages.length ? "chat-capscreen on" : "chat-capscreen"}
-              onClick={() => setCapscreenOpen(true)}
-              title="attach annotated screenshot"
-              aria-label="attach annotated screenshot"
-            >
-              <Camera size={16} />
-            </button>
-            <button
-              type="button"
-              className="chat-capscreen on"
-              onClick={() => stop_thread(activeId)}
-              disabled={!threadBusy}
-              title="interrupt this run"
-              aria-label="interrupt this run"
-            >
-              <Square size={16} />
-            </button>
-            <button
-              type="submit"
-              className="chat-send"
-              disabled={!selected.length || (!input.trim() && !pendingImages.length)}
-              title={
-                threadBusy
-                  ? "interrupt the current reply and send this now"
-                  : "send"
-              }
-              aria-label={threadBusy ? "interrupt and send now" : "send message"}
-            >
-              {threadBusy ? <Square size={16} /> : <Send size={16} />}
-            </button>
+            <div className="chat-composer-bar">
+              <div className="chat-composer-tools">
+                <div className="chat-agent-pick" ref={pickerRef}>
+                  <button
+                    type="button"
+                    className="chat-agent-pick-btn"
+                    onClick={() => setPickerOpen((v) => !v)}
+                    title="choose agent(s)"
+                    aria-label="choose agents"
+                    aria-haspopup="menu"
+                    aria-expanded={pickerOpen}
+                  >
+                    <Bot size={16} />
+                    {selected.length > 0 && (
+                      <span className="chat-agent-count" aria-hidden="true">
+                        {selected.length}
+                      </span>
+                    )}
+                  </button>
+                  {pickerOpen && (
+                    <div className="chat-agent-menu" role="menu" aria-label="agents">
+                      {agents.length === 0 && <span className="dock-ws-empty">no agents yet</span>}
+                      {agents.map((a) => (
+                        <button
+                          type="button"
+                          key={a.id}
+                          role="menuitemcheckbox"
+                          aria-checked={selectedIds.includes(a.id as number)}
+                          className={selectedIds.includes(a.id as number) ? "on" : ""}
+                          onClick={() => toggle_agent(a.id as number)}
+                        >
+                          <span className="chat-agent-check" aria-hidden="true">
+                            {selectedIds.includes(a.id as number) ? "✓" : ""}
+                          </span>
+                          {a.name}{a.model ? ` · ${pretty_name(a.model)}` : ""}
+                          {machineByAgent[a.name] && ` · ${machineByAgent[a.name]}`}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <select
+                  className="search-toggle"
+                  value={searchMode}
+                  onChange={(e) => setSearchMode(e.target.value as "off" | "auto" | "on")}
+                  title="web search mode"
+                  aria-label="web search mode"
+                >
+                  <option value="off">search: off</option>
+                  <option value="auto">search: auto</option>
+                  <option value="on">search: on</option>
+                </select>
+                <button
+                  type="button"
+                  className={focusOn ? "chat-capscreen on" : "chat-capscreen"}
+                  onClick={() => setFocusOn((f) => !f)}
+                  title={focusOn ? "focus on: page context is sent — click to stop" : "focus off: send bare messages — click to include page context"}
+                  aria-label="toggle page focus context"
+                  aria-pressed={focusOn}
+                >
+                  <Crosshair size={16} />
+                </button>
+                <button
+                  type="button"
+                  className={pendingImages.length ? "chat-capscreen on" : "chat-capscreen"}
+                  onClick={() => setCapscreenOpen(true)}
+                  title="attach annotated screenshot"
+                  aria-label="attach annotated screenshot"
+                >
+                  <Camera size={16} />
+                </button>
+              </div>
+              <button
+                type="submit"
+                className="chat-send"
+                disabled={!selected.length || (!input.trim() && !pendingImages.length)}
+                title={
+                  threadBusy
+                    ? "interrupt the current reply and send this now"
+                    : "send"
+                }
+                aria-label={threadBusy ? "interrupt and send now" : "send message"}
+              >
+                {threadBusy ? <Square size={16} /> : <Send size={16} />}
+              </button>
+            </div>
           </form>
           <CapscreenModal
             open={capscreenOpen}
@@ -1267,6 +1336,12 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
           ))}
         </aside>
       </div>
+      <AgentReview
+        open={reviewOpen}
+        agent={selected[0]?.name ?? null}
+        project_id={project_id ?? undefined}
+        on_close={() => setReviewOpen(false)}
+      />
       {toast && (
         <p className="toast run-toast" role="status">
           {toast}

@@ -358,6 +358,7 @@ fn kanban_router(state: KanbanStore) -> Router {
             "/api/kanban/cards/{id}/agent",
             get(get_agent).put(set_agent),
         )
+        .route("/api/kanban/cards/{id}/runs", get(list_card_runs))
         .route("/api/kanban/cards/{id}/resources", get(list_card_resources))
         .route("/api/pipelines/schema", get(pipeline_schema))
         .route("/api/kanban/cards/{id}/pipeline", put(set_card_pipeline))
@@ -2401,17 +2402,33 @@ async fn get_agent(
     axum::extract::Path(id): axum::extract::Path<i64>,
     _user: AuthUser,
 ) -> Result<Json<AgentDto>, ApiError> {
-    let agent = state
+    let card = state
         .app
         .cards
-        .agent(id)
+        .get(id)
         .await
         .map_err(kanban_err)?
         .ok_or(ApiError(
             ApiError::NOT_FOUND_MSG.to_string(),
             StatusCode::NOT_FOUND,
         ))?;
-    Ok(Json(AgentDto::from(agent)))
+    let agent = state
+        .app
+        .cards
+        .agent(id)
+        .await
+        .map_err(kanban_err)?
+        .unwrap_or(kanban_rs::AgentState {
+            name: String::new(),
+            state: serde_json::Value::Null,
+        });
+    Ok(Json(AgentDto {
+        name: agent.name,
+        state: agent.state,
+        runner: card.runner().as_kind().to_owned(),
+        run_status: card.run_status,
+        last_agent: card.last_agent,
+    }))
 }
 
 #[utoipa::path(
@@ -2441,6 +2458,22 @@ async fn set_agent(
         .map_err(kanban_err)?;
     crate::app::events::publish(crate::app::events::EventKind::Card);
     Ok("ok")
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/kanban/cards/{id}/runs",
+    responses((status = 200, body = [CardRunDto]), (status = 404, body = str))
+)]
+async fn list_card_runs(
+    State(state): State<KanbanStore>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+    _user: AuthUser,
+) -> Result<Json<Vec<CardRunDto>>, ApiError> {
+    let runs = state.app.cards.card_runs(id).await.map_err(kanban_err)?;
+    Ok(Json(
+        runs.iter().map(|r| CardRunDto::from(r.clone())).collect(),
+    ))
 }
 
 #[utoipa::path(
@@ -2532,9 +2565,14 @@ async fn run_card(
     user: AuthUser,
 ) -> Result<Json<crate::app::pipeline_run::RunRecord>, ApiError> {
     require_edit(&user)?;
-    let record = crate::app::pipeline_run::run_card_pipeline(&state.app, state.engine.clone(), id)
-        .await
-        .map_err(kanban_err)?;
+    let record = crate::app::pipeline_run::run_card_pipeline(
+        &state.app,
+        state.engine.clone(),
+        id,
+        kanban_rs::TRIGGER_MANUAL,
+    )
+    .await
+    .map_err(kanban_err)?;
     record_activity(
         &state.store,
         "run",
@@ -3606,6 +3644,7 @@ struct MachineAgentGitRequest {
     title: Option<String>,
     head: Option<String>,
     base: Option<String>,
+    project_id: Option<i64>,
 }
 
 #[utoipa::path(
@@ -3628,6 +3667,7 @@ async fn run_machine_git(
         title: req.title,
         head: req.head,
         base: req.base,
+        project_id: req.project_id,
     }
     .tool()?;
     if agent.is_empty() {
@@ -3924,19 +3964,34 @@ async fn project_agents(
     let mut merged: std::collections::BTreeMap<String, ProjectAgentDto> =
         std::collections::BTreeMap::new();
     for card in &cards {
-        let Some(name) = card.agent_name.as_deref() else {
-            continue;
-        };
-        let entry = merged
-            .entry(name.to_owned())
-            .or_insert_with(|| ProjectAgentDto {
-                name: name.to_owned(),
-                card_ids: Vec::new(),
-                threads: 0,
-                running: false,
-                machine: None,
-            });
-        entry.card_ids.push(card.id);
+        if let Some(name) = card.agent_name.as_deref() {
+            let entry = merged
+                .entry(name.to_owned())
+                .or_insert_with(|| ProjectAgentDto {
+                    name: name.to_owned(),
+                    card_ids: Vec::new(),
+                    threads: 0,
+                    running: false,
+                    machine: None,
+                });
+            entry.card_ids.push(card.id);
+        }
+        // A run record (last_agent) also surfaces the agent on the project,
+        // without being a preference on the card.
+        if let Some(name) = card.last_agent.as_deref()
+            && card.run_status == kanban_rs::RUN_STATUS_RUNNING
+        {
+            let entry = merged
+                .entry(name.to_owned())
+                .or_insert_with(|| ProjectAgentDto {
+                    name: name.to_owned(),
+                    card_ids: Vec::new(),
+                    threads: 0,
+                    running: false,
+                    machine: None,
+                });
+            entry.running = true;
+        }
     }
     for thread in &threads {
         let entry = merged
@@ -3977,7 +4032,8 @@ async fn project_agents(
 struct AgentGitRequest {
     /// `clone` needs `url`; `branch` needs `name`; `commit` needs `message`;
     /// `push` takes `branch`; `pr` takes `title`/`head`/`base`; `status` and
-    /// `diff` take no arguments.
+    /// `diff` take no arguments. `project_id` supplies the stored repo
+    /// secret when `push`/`pr` carry no explicit `token`.
     op: String,
     url: Option<String>,
     token: Option<String>,
@@ -3987,6 +4043,7 @@ struct AgentGitRequest {
     title: Option<String>,
     head: Option<String>,
     base: Option<String>,
+    project_id: Option<i64>,
 }
 
 impl AgentGitRequest {
@@ -4047,8 +4104,13 @@ impl AgentGitRequest {
 async fn run_agent_git(
     State(state): State<ManagerState>,
     Path(agent): Path<String>,
-    Json(req): Json<AgentGitRequest>,
+    Json(mut req): Json<AgentGitRequest>,
 ) -> Result<Json<AgentRunReply>, ApiError> {
+    if req.token.is_none() {
+        if let Some(id) = req.project_id {
+            req.token = state.settings.git_repo(id).and_then(|r| r.secret);
+        }
+    }
     let tool = req.tool()?;
     let manager = Arc::clone(&state.manager);
     let git_agent = agent.clone();
@@ -4281,6 +4343,7 @@ async fn install_script(
         remove_card,
         get_agent,
         set_agent,
+        list_card_runs,
         run_card,
         test_pipeline,
         set_card_schedule,
@@ -4678,6 +4741,10 @@ struct CardDto {
     agent_name: Option<String>,
     /// JSON-encoded agent state, if an agent is attached.
     agent_state: Option<serde_json::Value>,
+    /// Last recorded run status; a record, not a preference.
+    run_status: String,
+    /// Agent that executed the most recent run.
+    last_agent: Option<String>,
     assignee: Option<String>,
     pipeline_id: Option<i64>,
     pipeline_name: Option<String>,
@@ -4702,6 +4769,8 @@ impl From<kanban_rs::CardRow> for CardDto {
             position: r.position,
             agent_name: r.agent_name,
             agent_state: r.agent_state.and_then(|s| serde_json::from_str(&s).ok()),
+            run_status: r.run_status,
+            last_agent: r.last_agent,
             assignee: r.assignee,
             pipeline_id: r.pipeline_id,
             pipeline_name: None,
@@ -4921,6 +4990,10 @@ struct AgentSkillRequest {
 struct AgentDto {
     name: String,
     state: serde_json::Value,
+    /// Runner preference: "human" | "pinned" | "pipeline".
+    runner: String,
+    run_status: String,
+    last_agent: Option<String>,
 }
 
 impl From<kanban_rs::AgentState> for AgentDto {
@@ -4928,6 +5001,34 @@ impl From<kanban_rs::AgentState> for AgentDto {
         Self {
             name: a.name,
             state: a.state,
+            runner: kanban_rs::RUNNER_HUMAN.into(),
+            run_status: kanban_rs::RUN_STATUS_IDLE.into(),
+            last_agent: None,
+        }
+    }
+}
+
+#[derive(Serialize, utoipa::ToSchema)]
+struct CardRunDto {
+    id: i64,
+    trigger: String,
+    agent: String,
+    ok: bool,
+    summary: String,
+    started_at: String,
+    finished_at: Option<String>,
+}
+
+impl From<kanban_rs::RunRecordRow> for CardRunDto {
+    fn from(r: kanban_rs::RunRecordRow) -> Self {
+        Self {
+            id: r.id,
+            trigger: r.trigger,
+            agent: r.agent,
+            ok: r.ok,
+            summary: r.summary,
+            started_at: r.started_at.to_rfc3339(),
+            finished_at: r.finished_at.map(|t| t.to_rfc3339()),
         }
     }
 }

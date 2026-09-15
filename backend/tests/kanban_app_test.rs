@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use kanban_rs::{COLUMN_DONE, COLUMN_FAILED, CardRow, PipelineRow, StoreError};
+use kanban_rs::{COLUMN_DONE, COLUMN_FAILED, CardRow, PipelineRow, RunRecordNew, StoreError};
 use mockall::predicate::eq;
 
 use backend::app::kanban::KanbanApp;
@@ -34,6 +34,9 @@ fn card_row(id: i64, pipeline_id: Option<i64>) -> CardRow {
         position: 0,
         agent_name: None,
         agent_state: None,
+        run_status: kanban_rs::RUN_STATUS_IDLE.into(),
+        last_agent: None,
+        last_run_id: None,
         assignee: None,
         pipeline_id,
         cron: None,
@@ -229,24 +232,34 @@ async fn run_card_pipeline_records_ok_and_persists_state() {
         .returning(|id| Ok(Some(card_row(id, Some(PIPE_ID)))));
     expect_run_moves_todo_to(&mut cards, COLUMN_DONE);
     cards
-        .expect_set_agent()
-        .withf(|_, a: &kanban_rs::AgentState| {
-            a.name == "pipeline-runner"
-                && a.state["run"]["status"] == "ok"
-                && a.state["run"]["stages"]
-                    .as_array()
-                    .is_some_and(|s| s.len() == 2)
+        .expect_set_agent_state()
+        .withf(|_, s: &str| {
+            serde_json::from_str::<serde_json::Value>(s).is_ok_and(|v| {
+                v["run"]["status"] == "ok"
+                    && v["run"]["stages"].as_array().is_some_and(|s| s.len() == 2)
+            })
         })
         .returning(|_, _| Ok(()));
+    cards
+        .expect_record_run()
+        .withf(|r: &RunRecordNew| {
+            r.trigger == kanban_rs::TRIGGER_MANUAL && r.agent == "pipeline-runner" && r.ok
+        })
+        .returning(|_| Ok(1));
     pipelines.expect_list().returning(move || {
         let mut row = pipeline_row(PIPE_ID, PIPE_NAME);
         row.spec = SPEC_OK.into();
         Ok(vec![row])
     });
 
-    let record = pipeline_run::run_card_pipeline(&runner_app(cards, pipelines), None, CARD_ID)
-        .await
-        .expect("ran");
+    let record = pipeline_run::run_card_pipeline(
+        &runner_app(cards, pipelines),
+        None,
+        CARD_ID,
+        kanban_rs::TRIGGER_MANUAL,
+    )
+    .await
+    .expect("ran");
     assert_eq!(record.status, pipeline_run::StageStatus::Ok);
     assert_eq!(record.pipeline_name, PIPE_NAME);
 }
@@ -260,10 +273,20 @@ async fn run_card_pipeline_agent_node_sets_agent_name() {
         .with(eq(CARD_ID))
         .returning(|id| Ok(Some(card_row(id, Some(PIPE_ID)))));
     expect_run_moves_todo_to(&mut cards, COLUMN_DONE);
+    // The pipeline's agent node chose `qwen`; it lands in the run record
+    // (last_agent), never in the pinned agent_name preference.
     cards
-        .expect_set_agent()
-        .withf(|_, a: &kanban_rs::AgentState| a.name == "qwen")
+        .expect_set_agent_state()
+        .withf(|_, s: &str| {
+            serde_json::from_str::<serde_json::Value>(s).is_ok_and(|v| v["run"]["status"] == "ok")
+        })
         .returning(|_, _| Ok(()));
+    cards
+        .expect_record_run()
+        .withf(|r: &RunRecordNew| {
+            r.trigger == kanban_rs::TRIGGER_PIPELINE && r.agent == "qwen" && r.ok
+        })
+        .returning(|_| Ok(1));
     pipelines.expect_list().returning(move || {
         let mut row = pipeline_row(PIPE_ID, PIPE_NAME);
         row.spec = SPEC_AGENT.into();
@@ -272,10 +295,14 @@ async fn run_card_pipeline_agent_node_sets_agent_name() {
     let mut agents = MockAgentConfigRepo::new();
     agents.expect_by_name().returning(|_| Ok(None));
 
-    let record =
-        pipeline_run::run_card_pipeline(&runner_app_with(cards, pipelines, agents), None, CARD_ID)
-            .await
-            .expect("ran");
+    let record = pipeline_run::run_card_pipeline(
+        &runner_app_with(cards, pipelines, agents),
+        None,
+        CARD_ID,
+        kanban_rs::TRIGGER_PIPELINE,
+    )
+    .await
+    .expect("ran");
     assert_eq!(record.status, pipeline_run::StageStatus::Ok);
 }
 
@@ -289,18 +316,30 @@ async fn run_card_pipeline_unwired_stage_fails_run_with_note() {
         .returning(|id| Ok(Some(card_row(id, Some(PIPE_ID)))));
     expect_run_moves_todo_to(&mut cards, COLUMN_FAILED);
     cards
-        .expect_set_agent()
-        .withf(|_, a: &kanban_rs::AgentState| a.state["run"]["status"] == "failed")
+        .expect_set_agent_state()
+        .withf(|_, s: &str| {
+            serde_json::from_str::<serde_json::Value>(s)
+                .is_ok_and(|v| v["run"]["status"] == "failed")
+        })
         .returning(|_, _| Ok(()));
+    cards
+        .expect_record_run()
+        .withf(|r: &RunRecordNew| !r.ok)
+        .returning(|_| Ok(1));
     pipelines.expect_list().returning(move || {
         let mut row = pipeline_row(PIPE_ID, PIPE_NAME);
         row.spec = SPEC_FAIL.into();
         Ok(vec![row])
     });
 
-    let record = pipeline_run::run_card_pipeline(&runner_app(cards, pipelines), None, CARD_ID)
-        .await
-        .expect("run record persisted");
+    let record = pipeline_run::run_card_pipeline(
+        &runner_app(cards, pipelines),
+        None,
+        CARD_ID,
+        kanban_rs::TRIGGER_MANUAL,
+    )
+    .await
+    .expect("run record persisted");
     assert_eq!(record.status, pipeline_run::StageStatus::Failed);
     assert!(
         record
@@ -333,14 +372,20 @@ async fn run_card_pipeline_ref_image_loads_file_into_payload() {
         .returning(|id| Ok(Some(card_row(id, Some(PIPE_ID)))));
     expect_run_moves_todo_to(&mut cards, COLUMN_DONE);
     cards
-        .expect_set_agent()
-        .withf(|_, a: &kanban_rs::AgentState| {
-            a.state["run"]["stages"][1]["status"] == "ok"
-                && a.state["run"]["stages"][1]["note"]
-                    .as_str()
-                    .is_some_and(|n| n.contains("loaded image"))
+        .expect_set_agent_state()
+        .withf(|_, s: &str| {
+            serde_json::from_str::<serde_json::Value>(s).is_ok_and(|v| {
+                v["run"]["stages"][1]["status"] == "ok"
+                    && v["run"]["stages"][1]["note"]
+                        .as_str()
+                        .is_some_and(|n| n.contains("loaded image"))
+            })
         })
         .returning(|_, _| Ok(()));
+    cards
+        .expect_record_run()
+        .withf(|r: &RunRecordNew| r.ok)
+        .returning(|_| Ok(1));
     let spec: &'static str = Box::leak(
         SPEC_REF_IMAGE
             .replace("REPLACED", &img_path.to_string_lossy())
@@ -352,9 +397,14 @@ async fn run_card_pipeline_ref_image_loads_file_into_payload() {
         Ok(vec![row])
     });
 
-    let record = pipeline_run::run_card_pipeline(&runner_app(cards, pipelines), None, CARD_ID)
-        .await
-        .expect("ran");
+    let record = pipeline_run::run_card_pipeline(
+        &runner_app(cards, pipelines),
+        None,
+        CARD_ID,
+        kanban_rs::TRIGGER_MANUAL,
+    )
+    .await
+    .expect("ran");
     assert_eq!(record.status, pipeline_run::StageStatus::Ok);
 
     std::fs::remove_dir_all(&dir).ok();
@@ -371,23 +421,34 @@ async fn run_card_pipeline_without_pipeline_persists_failed_run() {
     // persisted and the card moves to the failed column.
     expect_run_moves_todo_to(&mut cards, COLUMN_FAILED);
     cards
-        .expect_set_agent()
-        .withf(|_, a: &kanban_rs::AgentState| {
-            a.name == "pipeline-runner"
-                && a.state["run"]["status"] == "failed"
-                && a.state["run"]["stages"].as_array().is_some_and(|s| {
-                    s.len() == 1
-                        && s[0]["note"]
-                            .as_str()
-                            .is_some_and(|n| n.contains("no such pipeline"))
-                })
+        .expect_set_agent_state()
+        .withf(|_, s: &str| {
+            serde_json::from_str::<serde_json::Value>(s).is_ok_and(|v| {
+                v["run"]["status"] == "failed"
+                    && v["run"]["stages"].as_array().is_some_and(|s| {
+                        s.len() == 1
+                            && s[0]["note"]
+                                .as_str()
+                                .is_some_and(|n| n.contains("no such pipeline"))
+                    })
+            })
         })
         .returning(|_, _| Ok(()));
+    cards
+        .expect_record_run()
+        .withf(|r: &RunRecordNew| {
+            !r.ok && r.agent == "pipeline-runner" && r.trigger == kanban_rs::TRIGGER_MANUAL
+        })
+        .returning(|_| Ok(1));
 
-    let record =
-        pipeline_run::run_card_pipeline(&runner_app(cards, MockPipelineRepo::new()), None, CARD_ID)
-            .await
-            .expect("failed run persisted");
+    let record = pipeline_run::run_card_pipeline(
+        &runner_app(cards, MockPipelineRepo::new()),
+        None,
+        CARD_ID,
+        kanban_rs::TRIGGER_MANUAL,
+    )
+    .await
+    .expect("failed run persisted");
     assert_eq!(record.status, pipeline_run::StageStatus::Failed);
     assert_eq!(record.pipeline_id, pipeline_run::PIPELINE_ID_NONE);
 }

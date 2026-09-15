@@ -20,6 +20,9 @@ pub use agent_token::{
 pub use board::{Board, BoardError, Column};
 pub use card::{
     Card, CardId, PRIORITY_CRITICAL, PRIORITY_HIGH, PRIORITY_LOW, PRIORITY_NORMAL, Priority,
+    RUN_STATUS_ERROR, RUN_STATUS_FINISHED, RUN_STATUS_IDLE, RUN_STATUS_QUEUED, RUN_STATUS_RUNNING,
+    RUNNER_HUMAN, RUNNER_PINNED, RUNNER_PIPELINE, RunStatus, Runner, TRIGGER_CRON, TRIGGER_MANUAL,
+    TRIGGER_PIPELINE,
 };
 pub use chat::{ChatMessageRow, ChatThreadRow, ROLE_ASSISTANT, ROLE_USER};
 pub use pipeline::PipelineRow;
@@ -28,7 +31,8 @@ pub use skill::{NewSkill, SkillRow};
 pub use store::{
     ACTIVITY_LIST_DEFAULT, ACTIVITY_LIST_MAX, ACTIVITY_MESSAGE_MAX_CHARS, ActivityRow, AddCard,
     AgentOutputRow, AgentState, CardRow, CommentRow, DbTx, MoveCard, OUTPUT_STATUS_APPROVED,
-    OUTPUT_STATUS_PENDING, OUTPUT_STATUS_REJECTED, Store, StoreError, UpdateCard,
+    OUTPUT_STATUS_PENDING, OUTPUT_STATUS_REJECTED, RunRecordNew, RunRecordRow, Store, StoreError,
+    UpdateCard,
 };
 pub use user::{
     DEFAULT_ADMIN_PASSWORD, DEFAULT_ADMIN_USER, MIN_PASSWORD_LEN, NewUser, Role, UserRow,

@@ -4,6 +4,7 @@ import {
   Activity,
   Bot,
   Check,
+  CircleDot,
   CircleUserRound,
   Clock,
   KanbanSquare,
@@ -45,6 +46,7 @@ const ITEMS = [
   { to: "/routine", title: "routine", Icon: Clock },
   { to: "/attachments", title: "attachments", Icon: Paperclip },
   { to: "/agents", title: "agents", Icon: Bot },
+  { to: "/review", title: "review", Icon: GitPullRequest },
   { to: "/settings", title: "settings", Icon: Settings },
 ];
 
@@ -158,6 +160,15 @@ export default function SideNav({ on_chat, shifted }: { on_chat: () => void; shi
         </NavLink>
       ))}
       <div className="dock-out">
+        <button
+          type="button"
+          className="chat-dock-btn title-circle-btn"
+          onClick={() => nav("/review")}
+          title="review agent work (work tree · git actions)"
+          aria-label="review agent work"
+        >
+          <CircleDot size={16} />
+        </button>
         <button
           type="button"
           className={`chat-dock-btn quota-dock-btn ${quota_open ? "open" : ""}`}

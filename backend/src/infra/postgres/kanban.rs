@@ -6,8 +6,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use kanban_rs::{
     AddCard, AgentConfigRow, AgentConfigUpdate, AgentState, CardRow, CommentRow, DbTx, MoveCard,
-    NewSkill, PipelineRow, ProjectRow, ResourceRow, SkillRow, Store, StoreError, UpdateCard,
-    UpsertResource, WorkspaceRow,
+    NewSkill, PipelineRow, ProjectRow, ResourceRow, RunRecordNew, RunRecordRow, SkillRow, Store,
+    StoreError, UpdateCard, UpsertResource, WorkspaceRow,
 };
 
 use crate::domain::{
@@ -158,8 +158,20 @@ impl CardRepo for PgKanban {
         self.store().set_agent(id, agent).await
     }
 
+    async fn set_agent_state(&self, id: i64, state_json: &str) -> Result<(), StoreError> {
+        self.store().set_agent_state(id, state_json).await
+    }
+
     async fn agent(&self, id: i64) -> Result<Option<AgentState>, StoreError> {
         self.store().agent(id).await
+    }
+
+    async fn record_run(&self, r: RunRecordNew) -> Result<i64, StoreError> {
+        self.store().record_run(r).await
+    }
+
+    async fn card_runs(&self, card_id: i64) -> Result<Vec<RunRecordRow>, StoreError> {
+        self.store().card_runs(card_id).await
     }
 
     async fn set_pipeline(&self, card_id: i64, pipeline_id: Option<i64>) -> Result<(), StoreError> {

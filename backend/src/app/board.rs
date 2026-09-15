@@ -177,10 +177,14 @@ impl BoardOps for BoardService {
                 }
             }
             BoardOp::RunCard { card_id } => {
-                let record =
-                    super::pipeline_run::run_card_pipeline(&self.app, self.engine.clone(), card_id)
-                        .await
-                        .map_err(|e| e.to_string())?;
+                let record = super::pipeline_run::run_card_pipeline(
+                    &self.app,
+                    self.engine.clone(),
+                    card_id,
+                    kanban_rs::TRIGGER_MANUAL,
+                )
+                .await
+                .map_err(|e| e.to_string())?;
                 if let Err(e) = self
                     .store
                     .record_activity("run", &format!("started pipeline run for task {card_id}"))

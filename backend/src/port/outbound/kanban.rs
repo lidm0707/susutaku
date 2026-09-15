@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use kanban_rs::resource::UpsertResource;
 use kanban_rs::{
     AgentConfigRow, AgentState, CardRow, CommentRow, PipelineRow, ProjectRow, ResourceRow,
-    SkillRow, StoreError, WorkspaceRow,
+    RunRecordNew, RunRecordRow, SkillRow, StoreError, WorkspaceRow,
 };
 use mockall::automock;
 
@@ -37,7 +37,12 @@ pub trait CardRepo: Send + Sync {
     async fn move_card(&self, mv: CardMove) -> Result<(), StoreError>;
     async fn remove(&self, id: i64) -> Result<(), StoreError>;
     async fn set_agent(&self, id: i64, agent: &AgentState) -> Result<(), StoreError>;
+    /// Writes only the run ledger; the pinned agent stays untouched.
+    async fn set_agent_state(&self, id: i64, state_json: &str) -> Result<(), StoreError>;
     async fn agent(&self, id: i64) -> Result<Option<AgentState>, StoreError>;
+    /// Appends a finished run and updates the card's run record fields.
+    async fn record_run(&self, r: RunRecordNew) -> Result<i64, StoreError>;
+    async fn card_runs(&self, card_id: i64) -> Result<Vec<RunRecordRow>, StoreError>;
     async fn set_pipeline(&self, card_id: i64, pipeline_id: Option<i64>) -> Result<(), StoreError>;
     async fn set_cron(&self, card_id: i64, cron: Option<String>) -> Result<(), StoreError>;
     /// Opens a transaction handle; write + read-back run inside it.

@@ -781,6 +781,12 @@ button:disabled {
   width: min(58rem, 94vw);
 }
 
+/* once a thread has messages (the log section only renders then), let the
+   chat take maximum height */
+.overlay-box.modal:has(.chat-modal-log) {
+  height: min(94vh, 60rem);
+}
+
 .overlay.docked {
   background: transparent;
   backdrop-filter: none;
@@ -2963,6 +2969,86 @@ button {
   padding: 0.25rem;
 }
 
+.title-circle-btn {
+  border-radius: 50%;
+  border: 1px solid #444;
+}
+
+.title-circle-btn:disabled {
+  opacity: 0.4;
+}
+
+.agent-review {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+}
+
+.agent-review-status {
+  margin: 0;
+  font-family: ui-monospace, monospace;
+  font-size: 0.75rem;
+  color: #9a9aa4;
+  white-space: pre-wrap;
+}
+
+.agent-review-output {
+  margin: 0;
+  padding: 0.6rem;
+  border-radius: 6px;
+  border: 1px solid #333;
+  background: #101014;
+  font-size: 0.72rem;
+  max-height: 12rem;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+
+.agent-review-hint {
+  margin: 0;
+  font-size: 0.72rem;
+  color: #d4a24a;
+}
+
+.review-page {
+  max-width: none;
+}
+
+.review-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 22rem);
+  gap: 1rem;
+  align-items: start;
+  width: 100%;
+  padding: 0 1rem 1rem;
+}
+
+.review-left,
+.review-right {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+}
+
+.review-agent-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.review-worktree {
+  margin: 0;
+  font-size: 0.72rem;
+  color: #9a9aa4;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 60rem) {
+  .review-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .overlay-box button[type="button"]:hover {
   color: #e6e6ea;
 }
@@ -4935,31 +5021,55 @@ select.agent-multi {
 
 /* composer bar: one rounded pill holding mode select, agent picker,
    input and action buttons */
-.chat-modal-body form {
+.chat-modal-body form.chat-composer {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.25rem;
+  margin-top: 0.35rem;
+  padding: 0.5rem 0.6rem;
+  background: #16161c;
+  border: 1px solid #2a2a33;
+  border-radius: 0.75rem;
+  transition: border-color 0.15s;
+}
+.chat-modal-body form.chat-composer:focus-within {
+  border-color: #3b6fd4;
+}
+.chat-composer-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  padding: 0.1rem 0.2rem;
+}
+.chat-composer-bar {
   display: flex;
   align-items: center;
   gap: 0.4rem;
-  margin-top: 0.35rem;
-  padding: 0.35rem 0.5rem;
-  background: #16161c;
-  border: 1px solid #2a2a33;
-  border-radius: 1.35rem;
-  transition: border-color 0.15s;
 }
-.chat-modal-body form:focus-within {
-  border-color: #3b6fd4;
+.chat-composer-tools {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex: 1;
+  min-width: 0;
+}
+.chat-composer-tools .search-toggle {
+  font-size: 0.75rem;
+  padding: 0.3rem 0.4rem;
+  border-radius: 999px;
 }
 
 .chat-modal-body form textarea.chat-input {
-  flex: 1;
+  width: 100%;
   resize: none;
-  max-height: 10rem;
+  min-height: 9rem;
+  max-height: 30rem;
   overflow-y: auto;
-  align-self: center;
   background: transparent;
   border: none;
   color: #e6e6ea;
-  padding: 0.3rem 0.2rem;
+  padding: 0.4rem 0.2rem;
 }
 .chat-modal-body form textarea.chat-input:focus {
   outline: none;
@@ -5113,7 +5223,6 @@ select.agent-multi {
 .chat-attach-chip {
   position: relative;
   display: inline-flex;
-  align-self: center;
 }
 .chat-queue {
   display: flex;

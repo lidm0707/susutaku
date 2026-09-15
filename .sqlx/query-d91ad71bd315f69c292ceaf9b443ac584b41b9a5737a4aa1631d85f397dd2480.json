@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, column_id, project_id, title, description,\n                      priority, position, agent_name, agent_state, assignee, pipeline_id, cron, deadline,\n                      labels, checklist, estimate\n               FROM kanban_cards\n               WHERE ($1::bigint IS NULL OR project_id = $1)\n               ORDER BY column_id, position, id",
+  "query": "SELECT id, column_id, project_id, title, description,\n                      priority, position, agent_name, agent_state, run_status, last_agent, last_run_id,\n                      assignee, pipeline_id, cron, deadline,\n                      labels, checklist, estimate\n               FROM kanban_cards WHERE id = $1",
   "describe": {
     "columns": [
       {
@@ -50,36 +50,51 @@
       },
       {
         "ordinal": 9,
-        "name": "assignee",
+        "name": "run_status",
         "type_info": "Text"
       },
       {
         "ordinal": 10,
-        "name": "pipeline_id",
-        "type_info": "Int8"
-      },
-      {
-        "ordinal": 11,
-        "name": "cron",
+        "name": "last_agent",
         "type_info": "Text"
       },
       {
+        "ordinal": 11,
+        "name": "last_run_id",
+        "type_info": "Int8"
+      },
+      {
         "ordinal": 12,
-        "name": "deadline",
+        "name": "assignee",
         "type_info": "Text"
       },
       {
         "ordinal": 13,
-        "name": "labels",
-        "type_info": "Text"
+        "name": "pipeline_id",
+        "type_info": "Int8"
       },
       {
         "ordinal": 14,
-        "name": "checklist",
+        "name": "cron",
         "type_info": "Text"
       },
       {
         "ordinal": 15,
+        "name": "deadline",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 16,
+        "name": "labels",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 17,
+        "name": "checklist",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 18,
         "name": "estimate",
         "type_info": "Int4"
       }
@@ -99,6 +114,9 @@
       false,
       true,
       true,
+      false,
+      true,
+      true,
       true,
       true,
       true,
@@ -108,5 +126,5 @@
       true
     ]
   },
-  "hash": "723c68c027aa2e0acccf5a170221f7733728b5102f0be6bebdb9bad99a8b1310"
+  "hash": "d91ad71bd315f69c292ceaf9b443ac584b41b9a5737a4aa1631d85f397dd2480"
 }

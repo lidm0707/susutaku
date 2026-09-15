@@ -118,9 +118,14 @@ async fn run_due(app: &KanbanApp, engine: Option<&Arc<dyn Inference>>, state: &A
         if now < due {
             continue;
         }
-        let next = if super::pipeline_run::run_card_pipeline(app, engine.cloned(), id)
-            .await
-            .is_ok()
+        let next = if super::pipeline_run::run_card_pipeline(
+            app,
+            engine.cloned(),
+            id,
+            kanban_rs::TRIGGER_CRON,
+        )
+        .await
+        .is_ok()
         {
             cron.next_after(now)
         } else {

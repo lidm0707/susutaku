@@ -100,6 +100,10 @@ export interface Card {
   priority: string;
   agent_name?: string;
   agent_state?: unknown;
+  /** Last recorded run status; a record, not a preference. */
+  run_status?: string;
+  /** Agent that executed the most recent run. */
+  last_agent?: string | null;
   assignee?: string | null;
   pipeline_id?: number | null;
   pipeline_name?: string;
@@ -270,6 +274,40 @@ export async function remove_git_repo(project_id: number): Promise<void> {
     method: "DELETE",
   });
   if (!res.ok) throw new ApiError(res.status, await res.text());
+}
+
+export type AgentGitOp = "status" | "diff" | "branch" | "commit" | "push" | "pr";
+
+export interface AgentGitBody {
+  op: AgentGitOp;
+  url?: string;
+  name?: string;
+  message?: string;
+  branch?: string;
+  title?: string;
+  head?: string;
+  base?: string;
+}
+
+export async function agent_git(
+  agent: string,
+  body: AgentGitBody,
+  project_id?: number
+): Promise<string> {
+  const res = await api(`/api/manager/agents/${encodeURIComponent(agent)}/git`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...body, project_id }),
+  });
+  const reply = await res.json();
+  return (reply as { output: string }).output;
+}
+
+export interface ManagerAgent {
+  agent: string;
+  work_tree: string;
+  runs: number;
+  last_cmd: string | null;
 }
 
 export interface PromptSection {
