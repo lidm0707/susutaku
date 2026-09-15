@@ -152,15 +152,15 @@ async fn persist(
     record: RunRecord,
     trigger: &'static str,
 ) -> Result<RunRecord, StoreError> {
+    // A null/array/scalar agent_state (e.g. a set_agent write with state:
+    // null) is as good as no state: only an object can carry the run ledger.
     let mut state = card
         .agent_state
         .as_deref()
         .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
-        .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::new()));
-    let obj = state
-        .as_object_mut()
-        .ok_or_else(|| StoreError::BadSpec("agent state is not a JSON object".into()))?;
-    obj.insert(
+        .and_then(|v| v.as_object().cloned())
+        .unwrap_or_default();
+    state.insert(
         RUN_KEY.to_owned(),
         serde_json::to_value(&record).map_err(|e| StoreError::BadSpec(e.to_string()))?,
     );
