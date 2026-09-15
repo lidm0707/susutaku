@@ -81,7 +81,7 @@ export default function Settings() {
   const [tab, setTab] = useState<Tab>("client");
 
   return (
-    <main className="chat">
+    <main className="chat settings-page">
       <header>
         <h1>settings</h1>
       </header>

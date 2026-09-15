@@ -5642,3 +5642,8 @@ select.agent-multi {
   font-size: 0.8rem;
   cursor: pointer;
 }
+
+/* settings page: wider so the providers split layout can breathe */
+.settings-page {
+  max-width: 1080px;
+}
