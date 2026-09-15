@@ -53,11 +53,11 @@ function RunDetail({ task_id }: { task_id: number }) {
           <p className="agent-logs-result">
             {agent ?? "run"} · {run.status} · finished {run.finished_at}
           </p>
-          {run.stages.length === 0 ? (
+          {(run.stages?.length ?? 0) === 0 ? (
             <p className="empty">no stages recorded</p>
           ) : (
             <pre className="agent-logs-pre">
-              {run.stages.map((s) => `${s.node}/${s.stage}: ${s.status}${s.note ? ` — ${s.note}` : ""}`).join("\n")}
+              {(run.stages ?? []).map((s) => `${s.node}/${s.stage}: ${s.status}${s.note ? ` — ${s.note}` : ""}`).join("\n")}
             </pre>
           )}
           <p className="agent-logs-result">result: {run.output ?? "—"}</p>

@@ -130,7 +130,7 @@ export interface CardRunStage {
 
 export interface CardRun {
   status: RunStatus;
-  stages: CardRunStage[];
+  stages?: CardRunStage[];
   output?: string | null;
   finished_at: string;
 }

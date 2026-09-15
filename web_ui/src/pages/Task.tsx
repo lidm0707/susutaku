@@ -1266,7 +1266,7 @@ function RunBadge({
     }
     return null;
   }
-  const failed_note = run.stages.find((s) => s.status === "failed")?.note ?? "";
+  const failed_note = run.stages?.find((s) => s.status === "failed")?.note ?? "";
   return (
     <button
       className={`run-badge run-${run.status}`}
@@ -1327,7 +1327,7 @@ function RunTimeline({ run }: { run: CardRun | null }) {
         <span className={run.status === "ok" ? "run-ok-text" : "run-failed-text"}>{STAGE_LABEL[run.status]}</span>
       </h3>
       <ol>
-        {run.stages.map((s, i) => (
+        {(run.stages ?? []).map((s, i) => (
           <li key={`${s.node}-${i}`} className={`run-stage run-${s.status}`}>
             <span className="run-stage-icon">
               {s.status === "ok" ? <CheckCircle2 size={13} /> : <XCircle size={13} />}
