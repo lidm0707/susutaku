@@ -83,9 +83,14 @@ susutaku/
   Owns the model size/quantization policy — see `crates/local_model/AGENTS.md`.
 - `crates/pdf-rs` — PDF parsing
 - `crates/task-rs` — task board model + Postgres store (`query_as!`); hierarchy
-  workspace → project → task (card); cards carry agent state (`agent_name`,
-  `agent_state` JSON), optional sandbox `image` and `cron`; runs are recorded
-  (`run_records`, `GET /api/task/cards/{id}/runs`)
+  workspace → project → task (card); one entity per piece of work — a Board
+  Card IS a Task. Cards carry agent state (`agent_name`, `agent_state` JSON),
+  an optional sandbox `image`, and a canonical `TaskStatus`
+  (todo/in_progress/review/conflict/done/failed = board column, transitions
+  validated server-side); runs are recorded (`run_records`,
+  `GET /api/task/cards/{id}/runs`). Routines are a **separate** entity
+  (`routines` + `routine_runs` tables, same store) — recurring automation,
+  never a card.
 - `crates/gguf-rs` — GGUF model file parsing
 - `crates/agent_3th_cli/` — third-party CLI integrations (`claude_cli`, `codex_cli`)
 - `crates/cloud_model_api/` — cloud model HTTP APIs (`zai_api`, `ai_interface_layer`)
@@ -163,17 +168,27 @@ susutaku/
 - sqlx macros compile against the live DB — keep the container up when running `cargo check` on `task-rs`/`backend`.
 - API: `/api/workspaces` (GET/POST), `/api/workspaces/{id}` (DELETE),
   `/api/workspaces/{id}/projects` (GET/POST), `/api/projects/{id}` (DELETE).
-- Tasks: `/api/task/cards?project_id=` (GET/POST), `/api/task/cards/{id}` (DELETE),
-  `/api/task/cards/{id}/move` (POST), `/api/task/cards/{id}/agent` (GET/PUT),
-  `/api/task/cards/{id}/schedule` (PUT, 5-field UTC cron),
-  `/api/task/cards/{id}/image` (PUT), `/api/task/cards/{id}/run` (POST — runs
-  the card's assigned agent), `/api/task/cards/{id}/runs` (GET history),
-  `/api/task/cards/{id}/resources` (GET), `/api/task/cards/{id}/comments`.
+- Tasks: `/api/tasks?project_id=` (GET) and `POST /api/tasks` (create; status
+  defaults todo) are the canonical surface; `/api/task/cards*` remain as
+  backward-compatible aliases (`/api/task/cards/{id}` DELETE/PUT,
+  `/{id}/move` POST, `/{id}/agent` GET/PUT, `/{id}/schedule` PUT — legacy,
+  no longer scheduled, `/{id}/image` PUT, `/{id}/run` POST — runs the card's
+  assigned agent, `/{id}/runs` GET history, `/{id}/resources` GET,
+  `/{id}/comments` GET/POST).
+- Task status: `PATCH /api/tasks/{id}/status` — the backend validates the
+  transition (`TaskStatus::transition_allowed` in `crates/task-rs`); the
+  frontend is never the authority. Statuses: todo, in_progress, review,
+  conflict, done, failed.
+- Routines (owner-handled, separate from tasks): `GET/POST /api/routines`,
+  `PUT/DELETE /api/routines/{id}`, `POST /api/routines/{id}/run` (owner role
+  only), `GET /api/routines/{id}/runs` (any role). The scheduler scans
+  enabled routines only; card cron is no longer scheduled.
   A task (card) belongs to exactly one project; deleting a workspace cascades
   to its projects and tasks.
 - Agent outputs (durable review artifacts): `/api/agent-outputs`,
-  `/api/agent-outputs/{id}` (GET), `{id}/status` approve/reject — see
-  `docs/review-flow.md`.
+  `/api/agent-outputs/{id}` (GET, DELETE), `{id}/status` approve/reject —
+  see `docs/review-flow.md`. On the Review page, opening a PR auto-finishes
+  the agent: work tree torn down, output stored (PR is the end state).
 - Card runs: `backend/src/app/card_run.rs` — run the card's assigned agent
   (model inference + its tools); there is no pipeline stage engine in the
   backend anymore (`crates/piplines` remains but is unwired).
@@ -188,7 +203,8 @@ susutaku/
 - Bootstrap: with zero users, an unauthenticated `POST /api/auth/users` creates
   the first user, forced to role `owner`.
 - Guards: any role reads task; editor+ mutates cards/agent state;
-  admin+ manages users. Passwords: min 8 chars, never returned.
+  admin+ manages users; **owner only** manages/runs routines. Passwords:
+  min 8 chars, never returned.
 
 ## Web UI conventions (`web_ui/`)
 

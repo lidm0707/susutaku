@@ -66,8 +66,9 @@ graph TD
      - `TOOL: LSP DEFINITION|REFERENCES|HOVER <path> <line> <col>` →
        rust-analyzer over the work tree,
      - `TOOL: CARD_FIND | BOARD_LIST | CARD_CREATE | CARD_AGENT | CARD_IMAGE |
-       CARD_ROUTINE | CARD_ROUTINE_CLEAR | CARD_RUN` → task-board operations
-       through `BoardService`,
+       CARD_RUN` → task-board operations through `BoardService` (legacy
+       `CARD_ROUTINE`/`CARD_ROUTINE_CLEAR` still write `card.cron`, but the
+       scheduler no longer runs card cron — use `/api/routines`):
      - `TOOL: AGENT_RUN <agent> <cmd>` → runs one command as a named agent in
        its own sandbox (see `docs/agent-run-tool.md`).
    - Every finished call is emitted as a `ToolEvent` over a broadcast channel
@@ -113,13 +114,13 @@ graph TD
   /api/chat/threads/{id}`; per-thread memory recall feeds past exchanges into
   the prompt.
 
-## Task cards: agent runs and routines
+## Task cards: agent runs
 
 ```mermaid
 graph TD
-    A[Run button or cron tick] --> B[card_run::run_card]
+    A[Run button] --> B[card_run::run_card]
     B --> C[Load card - NoSuchCard if missing]
-    C --> D[Move card to doing column]
+    C --> D[Move card to in_progress status]
     D --> E{Agent assigned?}
     E -->|no| F[Failed run: no agent assigned to the card]
     E -->|yes| G{Inference engine configured?}
@@ -135,7 +136,7 @@ graph TD
     M --> N
     N --> O[Merge into card agent_state under run key]
     O --> P[record_run row: trigger + agent + ok + summary max OUTPUT_PREVIEW_MAX]
-    P --> Q[Move card to done or failed column]
+    P --> Q[Move card to done or failed status]
     Q --> R[Return RunRecord to UI]
 ```
 
@@ -157,11 +158,30 @@ graph TD
 ```
 
 A task card is the second way to drive an agent from the web. Cards carry
-per-card agent state (`agent_name` + `agent_state` JSON), an optional sandbox
-`image`, and an optional cron routine. There are **no pipelines anymore**:
-a card run submits the card's task to its assigned agent's configured model —
-the agent's own tools (shell, fetch, search, git, …) do the real work from a
-chat turn.
+per-card agent state (`agent_name` + `agent_state` JSON) and an optional
+sandbox `image`. There are **no pipelines anymore**: a card run submits the
+card's task to its assigned agent's configured model — the agent's own tools
+(shell, fetch, search, git, …) do the real work from a chat turn. Recurring
+automation is **not** a card feature anymore — see
+[Routines](#routines-owner-handled) below.
+
+### Task statuses (`TaskStatus`, `crates/task-rs/src/card.rs`)
+
+The board column IS the task status. Canonical enum:
+`todo | in_progress | review | conflict | done | failed` (stored in
+`column_id`; legacy `doing` parses as `in_progress`).
+
+- A Board Card IS a Task — one entity (`task_cards` table), no separate
+  card model. `POST /api/tasks` creates a task (status defaults `todo`).
+- `PATCH /api/tasks/{id}/status` moves a task between statuses; the
+  **backend** validates transitions (`transition_allowed`, service:
+  `CardService::set_status`); illegal moves → 400. Allowed:
+  todo→{in_progress,done,failed}; in_progress→{review,conflict,done,failed,
+  todo}; review→{done,conflict,in_progress}; conflict→{review,in_progress,
+  done}; done→{todo,in_progress}; failed→{todo,in_progress}.
+- `/api/task/cards*` routes remain as backward-compatible aliases; card runs
+  move through the same enum (start → in_progress, ok → done, fail →
+  failed).
 
 ### Manual run (`POST /api/task/cards/{id}/run`)
 
@@ -183,22 +203,36 @@ Requires editor+ role. `app/card_run.rs::run_card`:
    card's `agent_state`.
 6. The `RunRecord` (agent, status, output, finished_at) is returned to the UI.
 
-### Scheduled runs (`app/schedule_work.rs`)
+### Scheduled runs — Routines (`app/schedule_work.rs` + `app/routine_run.rs`)
 
-- A background task ticks every `TICK_SECS = 30`; `schedule_work::spawn` is
-  called at router build in `api.rs::router`.
-- Each tick lists all cards, keeps those with a `cron` field (set via
-  `PUT /api/task/cards/{id}/schedule` or `TOOL: CARD_ROUTINE`), and keeps
-  next-fire times in a `RwLock<HashMap<card_id, next>>`; entries for cards
-  that lost their cron are dropped.
-- When a card is due it runs the **same `run_card`** as a manual run, with
-  trigger `cron`.
-  - Store success → next fire time advances via `cron.next_after(now)`.
-  - Store error → retried on the next tick (`now + TICK_SECS`).
-  - Unparseable cron → the card is dropped from the schedule.
-- Lock scope is kept tiny: due decisions happen under the write lock, actual
-  card runs happen outside it. `GET /api/cronjobs` exposes the upcoming
-  schedule.
+Routines are a separate entity from tasks (own tables `routines` +
+`routine_runs`; a routine never touches the board). The scheduler ticks
+every `TICK_SECS = 30` and scans **enabled routines only** — card cron is
+no longer scheduled (`card.cron` column remains in the DB, unscheduled).
+
+- Due routine → `routine_run::run_routine`: builds a prompt from the named
+  agent's config (persona/prompt/output format, when set) + the routine's
+  `instruction`, submits to the engine (agent model routed via `engines`),
+  and stores a `routine_runs` row (trigger `cron`, ok, summary). Next fire
+  = `cron.next_after(now)`; store error → retry next tick; unparseable
+  cron → dropped from the schedule.
+- API: `GET/POST /api/routines`, `PUT/DELETE /api/routines/{id}`,
+  `POST /api/routines/{id}/run` — **owner role only** (`require_owner`;
+  routine runs are owner-handled). `GET /api/routines/{id}/runs` is
+  readable by any role. Cron format is validated at create/update.
+- UI: `/routines` page — compact list (cron label, agent, paused badge),
+  run-now, runs history, create/edit with the cron builder. Task cards no
+  longer carry a schedule editor.
+- `GET /api/cronjobs` still exposes the schedule handle entries.
+
+### Chat grounding: task context snapshot
+
+A chat turn with `card_id` set gets a compact **TASK CONTEXT** snapshot
+prepended (`BoardOps::card_context`): id, title, status, priority,
+description and the last 20 comments. Comment threads on a task are the
+durable context store — an `@agent` mention in a task comment sends the
+chat turn **as that named agent** (persona, tool allow-list, thinking
+level) with `card_id` attached, and posts the reply back as a comment.
 
 ### Card agent state API
 

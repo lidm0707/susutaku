@@ -212,7 +212,7 @@ Implemented as of the podman sandbox work:
 - `POST /api/clients/{id}/kick` disconnects the client from the hub.
 - New backend endpoints drive shared machines by hostname:
   `POST /api/machines/{hostname}/agents/{agent}/run { cmd }`.
-- Web UI machines modal (agent sandboxes tab) lists every machine with the
+- Web UI runtime modal (agent sandboxes tab) lists every machine with the
   agents it runs (`agents: …`) and its sandbox count; remote machines can be
   kicked (disconnected) from there.
   machines; picking one opens an agent console (agent name + command →

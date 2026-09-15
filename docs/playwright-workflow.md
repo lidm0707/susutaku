@@ -45,9 +45,9 @@ host: cargo run -p backend        # MLX needs macOS Metal, stays on host :8991
 | `playwright/tests/graph.spec.ts` | ```plot fence renders a wgpu-wasm canvas (or 2D fallback) without wasm errors; chat intercepted |
 | `playwright/tests/claude.spec.ts` | Claude provider: status endpoint, callback validation |
 | `playwright/tests/settings.spec.ts` | Settings page client-env tab (server-detected host, workspace path) |
-| `playwright/tests/dock.spec.ts` | Dock modals: machines (MachinesModal), workspace creation (ProfileModal → PromptModal) |
+| `playwright/tests/dock.spec.ts` | Dock modals: runtime (MachinesModal component, renamed), workspace creation (ProfileModal → PromptModal) |
 | `playwright/tests/review.spec.ts` | Review page: agent pick → status → diff → commit; fresh work tree renders empty state, not 400 |
-| `playwright/tests/worker.spec.ts` | Auth guards for cronjobs; backend worker picks up a scheduled card and runs it |
+| `playwright/tests/worker.spec.ts` | Auth guards for cronjobs; card cron scheduling is gone — the scheduler now picks up **routines** (`/api/routines`, owner-handled) |
 | `playwright/tests/ux-snapshots.spec.ts` | Full-page screenshots of every route (`/`, `/task`, `/prompts`, `/settings`) |
 | `playwright/tests/walkthrough.spec.ts` | Step-by-step walkthrough capture into `screenshots/walkthrough/` |
 | `playwright/tests/deploy-check.spec.ts` | Ad-hoc live-deploy check, gated on `E2E_DEPLOY_CHECK=1` |

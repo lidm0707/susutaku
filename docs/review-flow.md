@@ -36,6 +36,19 @@ card/chat run                review page (/review)                artifact
    (`pending` → `approved` / `rejected`, consts in `task-rs/src/store.rs`).
    `POST /api/agent-outputs/{id}/status` sets it; the outputs modal filters
    by status and offers approve/reject buttons while an output is pending.
+   Outputs can be deleted: `DELETE /api/agent-outputs/{id}` (editor+); the
+   outputs modal has a per-row × and a delete button in the detail view.
+
+## Work tree lifecycle: PR is the end state
+
+The Review page auto-finishes an agent right after a successful **open pr**
+action (`web_ui/src/pages/Review.tsx`): `finish_manager_agent` captures the
+patch/transcript as an agent output, purges the sandbox and deletes
+`work/agents/<agent>` — the tree is disposable once the PR exists and the
+agent drops off the list. Git status is deliberately **not** re-fetched
+afterwards (a git op auto-spawns a fresh slot and would recreate the tree).
+If teardown fails (e.g. the agent is homed on another client machine) the
+tree stays alive and the PR output remains visible.
 
 ## What runs where (git split)
 

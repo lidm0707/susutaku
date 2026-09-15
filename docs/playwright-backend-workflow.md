@@ -48,10 +48,10 @@ order:
 run their assigned agent): round 0 `TOOL: BOARD_LIST`, round 1
 `TOOL: CARD_FIND <title>`, then find-or-create — `TOOL: CARD_CREATE <project>
 <title> | plan: <topic>` if no card matched, else round 2
-`TOOL: CARD_AGENT <card> default` (always assigns an agent), round 3
-`TOOL: CARD_ROUTINE <card> 0 * * * *`, finally `TASK-OK: task stored on card
-<id>: <title>`. Saying the same task again must reuse the card, not duplicate
-it — the spec asserts exactly one card per topic.
+`TOOL: CARD_AGENT <card> default` (always assigns an agent), finally
+`TASK-OK: task stored on card <id>: <title>`. Saying the same task again
+must reuse the card, not duplicate it — the spec asserts exactly one card
+per topic.
 
 ## The loop
 
@@ -79,9 +79,10 @@ UX/snapshot suite stays on the host-backend stack from
 4. **Summary (compact)** — `POST /api/chat` with a `summarize …` message
    returns the `MOCK-SUMMARY:` reply.
 5. **`do task:` card flow** — the mock walks `BOARD_LIST → CARD_FIND →
-   CARD_CREATE → CARD_AGENT → CARD_ROUTINE` through the tool loop; the spec
-   then asserts the card exists exactly once, with the assigned agent and cron
-   (`0 * * * *`), and that repeating the task reuses the card.
+   CARD_CREATE → CARD_AGENT` through the tool loop; the spec then asserts the
+   card exists exactly once, with the assigned agent, and that repeating the
+   task reuses the card (card cron scheduling was removed — routines are a
+   separate owner-handled entity).
 6. **Agent in that backend** — `POST /api/manager/agents` spawns a sandboxed
    agent, `/run echo agent-run-ok` executes and its output is asserted.
    Skipped on Docker VMs without `/dev/fuse`/overlay mounts
