@@ -1,20 +1,18 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { FileDiff, GitCommitHorizontal, GitPullRequestArrow, RefreshCw, Upload, User } from "lucide-react";
 import { Button, Field, TextInput } from "../ui/controls.js";
 import { Modal } from "../ui/Overlay.js";
 import { use_projects } from "../components/ProjectContext.js";
-import { agent_git, fetch_agents, fetch_manager_agents, type AgentGitBody, type ManagerAgent } from "../lib.js";
+import { agent_git, fetch_agents, fetch_cards, fetch_manager_agents, type AgentGitBody, type Card, type ManagerAgent } from "../lib.js";
 import DiffView, { DiffFileList, DiffStats, type DiffFile } from "../components/DiffView.js";
 
 const TASK_COMMIT_PREFIX = "agent task: ";
 const NO_CHANGES = "(no changes)";
+const WORK_TREE_ROOT = "work/agents";
+const LEFT_MIN_PCT = 15;
+const LEFT_MAX_PCT = 60;
+const LEFT_DEFAULT_PCT = 30;
 
-// merge flow steps, shown so the commit → push → pr order is obvious
-const FLOW_STEPS = [
-  "1. commit — save the changes inside the agent's work tree",
-  "2. push — upload the branch to the remote",
-  "3. open pr — request merging that branch into main",
-] as const;
 
 type ActionKind = "commit" | "push" | "pr";
 
@@ -51,11 +49,21 @@ export default function Review() {
   const [action, setAction] = useState<ActionKind | null>(null);
   const [file, setFile] = useState<DiffFile | null>(null);
   const [fullDiff, setFullDiff] = useState(false);
+  const [tasks, setTasks] = useState<Card[]>([]);
+  const grid_ref = useRef<HTMLDivElement>(null);
+  const [left_pct, set_left_pct] = useState(LEFT_DEFAULT_PCT);
   const { project_id } = use_projects();
   const projectId = project_id ?? undefined;
 
   const agent = picked ?? agents[0]?.agent ?? null;
   const info = agents.find((a) => a.agent === agent);
+  const agent_tasks = tasks.filter((t) => t.agent_name === agent);
+
+  useEffect(() => {
+    fetch_cards(projectId ?? null)
+      .then(setTasks)
+      .catch(() => {});
+  }, [projectId]);
 
   useEffect(() => {
     // manager snapshot first; fall back to configured agents so review works
@@ -145,14 +153,49 @@ export default function Review() {
   const action_value = action === "commit" ? message : action === "push" ? branch : title;
   const set_action_value = action === "commit" ? setMessage : action === "push" ? setBranch : setTitle;
 
+  function start_resize(e: React.MouseEvent) {
+    e.preventDefault();
+    const grid = grid_ref.current;
+    if (!grid) return;
+    const on_move = (ev: MouseEvent) => {
+      const rect = grid.getBoundingClientRect();
+      const pct = ((ev.clientX - rect.left) / rect.width) * 100;
+      set_left_pct(Math.min(LEFT_MAX_PCT, Math.max(LEFT_MIN_PCT, pct)));
+    };
+    const on_up = () => {
+      window.removeEventListener("mousemove", on_move);
+      window.removeEventListener("mouseup", on_up);
+    };
+    window.addEventListener("mousemove", on_move);
+    window.addEventListener("mouseup", on_up);
+  }
+
   return (
     <main className="chat review-page">
       <header>
         <h1>review</h1>
         <span className="sub">{agents.length} agent{agents.length === 1 ? "" : "s"}</span>
       </header>
-      <div className="review-grid">
+      <div
+        className="review-grid"
+        ref={grid_ref}
+        style={{ "--review-left": `${left_pct}%` } as React.CSSProperties}
+      >
         <section className="review-left" aria-label="changes">
+          <div className="review-actions" role="toolbar" aria-label="git actions">
+            <button type="button" className="review-action-circle" disabled={busy || !agent} onClick={() => setAction("commit")}>
+              <GitCommitHorizontal size={16} />
+              <span className="review-action-tip">commit…</span>
+            </button>
+            <button type="button" className="review-action-circle" disabled={busy || !agent} onClick={() => setAction("push")}>
+              <Upload size={16} />
+              <span className="review-action-tip">push…</span>
+            </button>
+            <button type="button" className="review-action-circle" disabled={busy || !agent} onClick={() => setAction("pr")}>
+              <GitPullRequestArrow size={16} />
+              <span className="review-action-tip">open pr…</span>
+            </button>
+          </div>
           <nav className="review-agent-list">
             {agents.length === 0 && <p className="empty">no agents — create one on the agents page</p>}
             {agents.map((a) => (
@@ -169,9 +212,35 @@ export default function Review() {
           </nav>
           {info && (
             <p className="review-worktree">
-              work tree: <code title={info.work_tree}>{info.work_tree}</code>
+              work tree: <code title={info.work_tree || `${WORK_TREE_ROOT}/${info.agent}`}>
+                {info.work_tree || `${WORK_TREE_ROOT}/${info.agent}`}
+              </code>
             </p>
           )}
+          <section className="review-tasks" aria-label="tasks for this agent">
+            <h2 className="review-tasks-title">tasks</h2>
+            {agent_tasks.length === 0 ? (
+              <p className="review-tasks-empty">no tasks assigned to this agent</p>
+            ) : (
+              <ul className="review-task-list">
+                {agent_tasks.map((t) => (
+                  <li key={t.id} className="review-task-item">
+                    <span className="review-task-title">{t.title}</span>
+                    <span className="review-task-column">{t.column_id}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+        </section>
+        <div
+          className="review-resizer"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="resize columns"
+          onMouseDown={start_resize}
+        />
+        <section className="review-right" aria-label="changes and tasks">
           <div className="review-diff-panel">
             <div className="review-diff-head">
               <span className="review-diff-title"><FileDiff size={14} /> changes</span>
@@ -190,14 +259,12 @@ export default function Review() {
               >
                 <RefreshCw size={12} /> refresh
               </button>
-              {diff && diff !== NO_CHANGES && (
-                <button type="button" className="review-diff-open" onClick={() => setFullDiff(true)}>
-                  view full diff
-                </button>
-              )}
             </div>
             {diff && diff !== NO_CHANGES ? (
-              <DiffFileList diff={diff} on_pick={setFile} />
+              <>
+                <DiffFileList diff={diff} on_pick={setFile} />
+                <DiffView diff={diff} rows={28} />
+              </>
             ) : (
               <p className="review-diff-none">
                 {busy ? "loading…" : !status
@@ -215,20 +282,6 @@ export default function Review() {
               </button>
             )}
           </div>
-        </section>
-        <section className="review-right" aria-label="actions">
-          <ol className="review-flow">
-            {FLOW_STEPS.map((s) => <li key={s}>{s}</li>)}
-          </ol>
-          <button type="button" className="review-action" disabled={busy || !agent} onClick={() => setAction("commit")}>
-            <GitCommitHorizontal size={14} /> commit…
-          </button>
-          <button type="button" className="review-action" disabled={busy || !agent} onClick={() => setAction("push")}>
-            <Upload size={14} /> push…
-          </button>
-          <button type="button" className="review-action" disabled={busy || !agent} onClick={() => setAction("pr")}>
-            <GitPullRequestArrow size={14} /> open pr…
-          </button>
           {output && <pre className="agent-review-output">{output}</pre>}
         </section>
       </div>
@@ -261,18 +314,13 @@ export default function Review() {
 
       <Modal
         open={fullDiff}
-        title={status.includes("clean") || !status ? "diff" : "git status + diff"}
+        title="git status"
         on_close={() => setFullDiff(false)}
         wide
       >
-        {status && (
-          <Field label="git status">
-            <pre className="agent-review-output">{status}</pre>
-          </Field>
-        )}
-        <Field label="diff">
-          <DiffView diff={diff} rows={24} />
-        </Field>
+        {status
+          ? <pre className="agent-review-output">{status}</pre>
+          : <p className="review-action-hint">no status yet — hit refresh</p>}
       </Modal>
     </main>
   );

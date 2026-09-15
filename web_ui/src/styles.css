@@ -440,6 +440,57 @@ button:disabled {
   margin-left: 0.6rem;
 }
 
+.dock-out-left {
+  position: absolute;
+  right: 100%;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-right: 0.6rem;
+}
+
+.dock-scope-menu {
+  position: absolute;
+  bottom: calc(100% + 0.5rem);
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 0.75rem;
+  min-width: 18rem;
+  padding: 0.5rem;
+  border-radius: 12px;
+  background: #1a1a21;
+  border: 1px solid #2c2c36;
+  box-shadow: 0 4px 16px rgb(0 0 0 / 0.4);
+}
+
+.dock-scope-menu .dock-ws-list {
+  min-width: 8rem;
+}
+
+.dock-scope-select {
+  min-width: 8rem;
+  padding: 0.4rem 0.5rem;
+  border-radius: 8px;
+  border: 1px solid #2c2c36;
+  background: #23232b;
+  color: #e6e6ea;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.dock-scope-select:hover:not(:disabled),
+.dock-scope-select:focus {
+  border-color: #4a4a56;
+  outline: none;
+}
+
+.dock-scope-select:disabled {
+  opacity: 0.4;
+}
+
 .dock-out .chat-dock-btn {
   position: static;
   right: auto;
@@ -450,6 +501,11 @@ button:disabled {
 
 .dock-out .chat-dock-btn:hover {
   transform: translateY(-1px);
+}
+
+.dock-out a.chat-dock-btn.active {
+  color: #e6e6ea;
+  background: #26262f;
 }
 
 .dock-tools .chat-dock-btn {
@@ -3046,7 +3102,7 @@ button {
 
 .review-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 22rem);
+  grid-template-columns: var(--review-left, 30%) auto minmax(0, 1fr);
   gap: 1rem;
   align-items: start;
   width: 100%;
@@ -3177,38 +3233,111 @@ button {
   color: #ffa198;
 }
 
-.review-flow {
-  margin: 0;
-  padding-left: 1.1rem;
-  font-size: 0.72rem;
-  color: #9a9aa4;
+.review-actions {
   display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
+  gap: 0.5rem;
 }
 
-.review-action {
+.review-action-circle {
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 0.4rem;
-  padding: 0.45rem 0.7rem;
-  border-radius: 6px;
+  width: 2.2rem;
+  height: 2.2rem;
+  padding: 0;
+  border-radius: 50%;
   border: 1px solid #2a2a33;
   background: #1a1a21;
-  color: inherit;
-  font-size: 0.78rem;
+  color: #e6e6ea;
   cursor: pointer;
 }
 
-.review-action:hover:not(:disabled) {
+.review-action-circle svg {
+  width: 18px;
+  height: 18px;
+  color: #e6e6ea;
+  flex: none;
+}
+
+.review-action-circle:hover:not(:disabled) {
   border-color: #3a3a44;
   background: #202028;
 }
 
-.review-action:disabled {
+.review-action-circle:disabled {
   opacity: 0.4;
   cursor: default;
+}
+
+.review-action-tip {
+  position: absolute;
+  top: calc(100% + 0.35rem);
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 0.15rem 0.5rem;
+  border-radius: 4px;
+  border: 1px solid #2a2a33;
+  background: #1a1a21;
+  font-size: 0.7rem;
+  white-space: nowrap;
+  color: #c8c8d0;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.1s ease;
+  z-index: 5;
+}
+
+.review-action-circle:hover .review-action-tip {
+  opacity: 1;
+}
+
+.review-tasks-title {
+  margin: 0;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #9a9aa4;
+}
+
+.review-tasks-empty {
+  margin: 0;
+  font-size: 0.72rem;
+  color: #6d6d78;
+}
+
+.review-task-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.review-task-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.35rem 0.55rem;
+  border: 1px solid #2a2a33;
+  border-radius: 6px;
+  background: #1a1a21;
+  font-size: 0.74rem;
+}
+
+.review-task-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.review-task-column {
+  flex-shrink: 0;
+  font-size: 0.66rem;
+  color: #9a9aa4;
 }
 
 .review-action-hint {
@@ -3277,12 +3406,35 @@ button {
   font-weight: 600;
 }
 
+.review-resizer {
+  width: 0.4rem;
+  cursor: col-resize;
+  border-radius: 3px;
+  background: transparent;
+}
+
+.review-resizer:hover {
+  background: #2a2a33;
+}
+
 @media (max-width: 60rem) {
   .review-grid {
     grid-template-columns: 1fr;
   }
+
+  .review-resizer {
+    display: none;
+  }
 }
 
+.review-tasks-title {
+  margin: 0;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #9a9aa4;
+}
 .overlay-box button[type="button"]:hover {
   color: #e6e6ea;
 }

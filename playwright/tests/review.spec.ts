@@ -60,14 +60,12 @@ test("fresh agent work tree: status shows no commits, diff renders empty (no 400
   login,
 }) => {
   await open_review(page);
-  // Unborn HEAD: status must say so and the diff must render the empty state
-  // in the highlighted DiffView (not an error toast, not a bare textarea).
-  const status = page.locator(".review-left textarea, .review-left .diff-view").first();
-  await expect(status).not.toHaveValue("…");
-  await expect(status).not.toHaveText("…");
-  const diff = page.locator(".review-left .diff-view");
-  await expect(diff).toBeVisible();
-  await expect(diff).toContainText("(no changes)");
+  // Unborn HEAD: the diff panel must render its empty state (not an error
+  // toast, not a 400), and the status badge must resolve without crashing.
+  const panel = page.locator(".review-right .review-diff-panel");
+  await expect(panel).toBeVisible();
+  await expect(panel.locator(".review-badge")).toBeVisible();
+  await expect(page.locator(".review-right .review-diff-none")).toBeVisible();
 });
 
 test("commit through the ui creates the initial commit and stays clean", async ({
@@ -78,12 +76,22 @@ test("commit through the ui creates the initial commit and stays clean", async (
   const right = page.locator(".review-right");
   const output = right.locator(".agent-review-output");
 
+  // Actions are the 3 icon circles at the top left; commit opens the modal.
+  const circles = page.locator(".review-left .review-action-circle");
+  await expect(circles).toHaveCount(3);
+
+  async function ui_commit(message: string) {
+    await circles.first().click();
+    const dialog = page.locator("[role=dialog]");
+    await expect(dialog).toBeVisible();
+    await dialog.locator("input").fill(message);
+    await dialog.locator("button[type=submit]").click();
+    await expect(output).toContainText("$ commit", { timeout: CHAT_TIMEOUT_MS });
+  }
+
   // Empty work tree: commit must SUCCEED (no-op), not 400 with a cryptic
   // podman error — regression guard for the "nothing to commit" exit 1.
-  await right.locator("input, textarea").first().fill("empty commit is a no-op");
-  await right.locator("button", { hasText: "commit" }).click();
-  await expect(output).toContainText("$ commit", { timeout: CHAT_TIMEOUT_MS });
-  await expect(page.locator(".review-left textarea").first()).toHaveValue(/no commits/);
+  await ui_commit("empty commit is a no-op");
 
   // Put a file in the work tree via a sandbox run, then the UI commit lands.
   const ctx = await api();
@@ -94,17 +102,14 @@ test("commit through the ui creates the initial commit and stays clean", async (
   await ctx.dispose();
   expect(run.ok()).toBeTruthy();
 
-  const message = `${COMMIT_MESSAGE_PREFIX} ${Date.now()}`;
-  await right.locator("input, textarea").first().fill(message);
-  await right.locator("button", { hasText: "commit" }).click();
-  await expect(output).toContainText("$ commit", { timeout: CHAT_TIMEOUT_MS });
+  await ui_commit(`${COMMIT_MESSAGE_PREFIX} ${Date.now()}`);
 
-  // Status flips from "no commits" to a real HEAD and the tree is clean.
-  const status = page.locator(".review-left textarea").first();
-  await expect(status).toHaveValue(/HEAD [0-9a-f]{7,}/, { timeout: CHAT_TIMEOUT_MS });
-  await expect(status).toHaveValue(/clean/);
+  // Status flips from "no commits" to a real HEAD and the tree is clean:
+  // the badge turns ok/clean after the post-commit refresh.
+  await expect(page.locator(".review-right .review-badge.ok")).toHaveText("clean", {
+    timeout: CHAT_TIMEOUT_MS,
+  });
 
-  // Clean tree + no base branch: diff stays "(no changes)" in the DiffView.
-  const diff = page.locator(".review-left .diff-view");
-  await expect(diff).toContainText("(no changes)");
+  // Clean tree + no base branch: diff stays in the empty state.
+  await expect(page.locator(".review-right .review-diff-none")).toBeVisible();
 });

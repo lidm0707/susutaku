@@ -3,8 +3,8 @@ import { NavLink, useNavigate } from "react-router-dom";
 import {
   Activity,
   Bot,
-  Check,
   CircleUserRound,
+  Layers,
   FileDiff,
   Inbox,
   KanbanSquare,
@@ -40,7 +40,6 @@ import QuotaBoard from "./QuotaBoard.tsx";
 
 const ITEMS = [
   { to: "/task", title: "task", Icon: KanbanSquare },
-  { to: "/attachments", title: "attachments", Icon: Paperclip },
   { to: "/agents", title: "agents", Icon: Bot },
   { to: "/review", title: "review", Icon: FileDiff },
   { to: "/settings", title: "settings", Icon: Settings },
@@ -98,6 +97,7 @@ function AgentLogsModal({ agent, on_close }: { agent: string | null; on_close: (
 
 export default function SideNav({ on_chat, shifted }: { on_chat: () => void; shifted: boolean }) {
   const nav = useNavigate();
+  const [scope_open, set_scope_open] = useState(false);
   const [profile_open, set_profile_open] = useState(false);
   const [pw_open, set_pw_open] = useState(false);
   const [machines_open, set_machines_open] = useState(false);
@@ -144,6 +144,21 @@ export default function SideNav({ on_chat, shifted }: { on_chat: () => void; shi
 
   return (
     <nav className={`dock-nav ${shifted ? "shifted" : ""}`} aria-label="main navigation">
+      <div className="dock-out-left">
+        <div className="dock-profile">
+          <button
+            className={`dock-profile-btn ${scope_open ? "open" : ""}`}
+            onClick={() => set_scope_open((v) => !v)}
+            title="workspace & project"
+            aria-haspopup="menu"
+            aria-expanded={scope_open}
+          >
+            <Layers size={16} />
+            <span className="dock-label">scope</span>
+          </button>
+          {scope_open && <ScopeMenu on_close={() => set_scope_open(false)} />}
+        </div>
+      </div>
       {ITEMS.map(({ to, title, Icon }) => (
         <NavLink
           key={to}
@@ -156,6 +171,14 @@ export default function SideNav({ on_chat, shifted }: { on_chat: () => void; shi
         </NavLink>
       ))}
       <div className="dock-out">
+        <NavLink
+          to="/attachments"
+          aria-label="attachments"
+          title="attachments"
+          className={({ isActive }) => `chat-dock-btn ${isActive ? "active" : ""}`}
+        >
+          <Paperclip size={16} />
+        </NavLink>
         <button
           type="button"
           className={`chat-dock-btn quota-dock-btn ${quota_open ? "open" : ""}`}
@@ -239,17 +262,7 @@ export default function SideNav({ on_chat, shifted }: { on_chat: () => void; shi
   );
 }
 
-function ProfileModal({
-  open,
-  on_close,
-  on_logout,
-  on_change_password,
-}: {
-  open: boolean;
-  on_close: () => void;
-  on_logout: () => void;
-  on_change_password: () => void;
-}) {
+function ScopeMenu({ on_close }: { on_close: () => void }) {
   const { workspaces, ws_id, pick } = use_workspaces();
   const { projects, project_id, pick_project } = use_projects();
   const [creating, set_creating] = useState<null | "workspace" | "project">(null);
@@ -274,7 +287,7 @@ function ProfileModal({
   }
 
   return (
-    <Modal open={open} title="profile" on_close={on_close}>
+    <div className="dock-scope-menu" role="menu" aria-label="workspace and project">
       <section className="profile-scope" aria-label="workspace">
         <header className="profile-scope-head">
           <span className="agent-logs-label">workspace</span>
@@ -285,20 +298,20 @@ function ProfileModal({
             aria-label="new workspace"
           >+</button>
         </header>
-        <div role="radiogroup" aria-label="workspaces" className="dock-ws-list">
-          {workspaces.length === 0 && <span className="dock-ws-empty">no workspaces</span>}
+        <select
+          className="dock-scope-select"
+          aria-label="workspaces"
+          value={ws_id ?? ""}
+          onChange={(e: React.ChangeEvent<HTMLSelectElement>) => {
+            pick(Number(e.target.value));
+            on_close();
+          }}
+        >
+          {workspaces.length === 0 && <option value="">no workspaces</option>}
           {workspaces.map((w) => (
-            <button
-              key={w.id}
-              role="radio"
-              aria-checked={w.id === ws_id}
-              onClick={() => pick(w.id)}
-            >
-              {w.id === ws_id ? <Check size={14} /> : <span className="dock-ws-spacer" />}
-              {w.name}
-            </button>
+            <option key={w.id} value={w.id}>{w.name}</option>
           ))}
-        </div>
+        </select>
       </section>
       <section className="profile-scope" aria-label="project">
         <header className="profile-scope-head">
@@ -311,28 +324,21 @@ function ProfileModal({
             aria-label="new project"
           >+</button>
         </header>
-        <div role="radiogroup" aria-label="projects" className="dock-ws-list">
-          {projects.length === 0 && <span className="dock-ws-empty">no projects</span>}
+        <select
+          className="dock-scope-select"
+          aria-label="projects"
+          value={project_id ?? ""}
+          disabled={ws_id == null}
+          onChange={(e: React.ChangeEvent<HTMLSelectElement>) => {
+            pick_project(Number(e.target.value));
+            on_close();
+          }}
+        >
+          {projects.length === 0 && <option value="">no projects</option>}
           {projects.map((p) => (
-            <button
-              key={p.id}
-              role="radio"
-              aria-checked={p.id === project_id}
-              onClick={() => { pick_project(p.id); }}
-            >
-              {p.id === project_id ? <Check size={14} /> : <span className="dock-ws-spacer" />}
-              {p.name}
-            </button>
+            <option key={p.id} value={p.id}>{p.name}</option>
           ))}
-        </div>
-      </section>
-      <section className="profile-actions" aria-label="account actions">
-        <button onClick={on_change_password}>
-          <KeyRound size={14} /> change password
-        </button>
-        <button className="danger" onClick={on_logout}>
-          <LogOut size={14} /> logout
-        </button>
+        </select>
       </section>
       <PromptModal
         open={creating != null}
@@ -341,6 +347,31 @@ function ProfileModal({
         on_close={() => set_creating(null)}
         on_submit={(v: string) => submit_create(v)}
       />
+    </div>
+  );
+}
+
+function ProfileModal({
+  open,
+  on_close,
+  on_logout,
+  on_change_password,
+}: {
+  open: boolean;
+  on_close: () => void;
+  on_logout: () => void;
+  on_change_password: () => void;
+}) {
+  return (
+    <Modal open={open} title="profile" on_close={on_close}>
+      <section className="profile-actions" aria-label="account actions">
+        <button onClick={on_change_password}>
+          <KeyRound size={14} /> change password
+        </button>
+        <button className="danger" onClick={on_logout}>
+          <LogOut size={14} /> logout
+        </button>
+      </section>
     </Modal>
   );
 }
