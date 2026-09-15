@@ -28,25 +28,39 @@ host: cargo run -p backend        # MLX needs macOS Metal, stays on host :8991
 |---|---|
 | `docker/test/Dockerfile.playwright` | Playwright runner image (browsers + deps baked in) |
 | `docker/compose/playwright.yml` | postgres + web + playwright, zero published ports |
-| `playwright/playwright.config.ts` | baseURL from `PLAYWRIGHT_BASE_URL` env |
+| `playwright/playwright.config.ts` | baseURL from `PLAYWRIGHT_BASE_URL` env (default `http://localhost:3334`) |
 | `playwright/global-setup.ts` | Fresh `susutaku_e2e` DB lifecycle on the internal compose postgres |
 | `playwright/setup.ts` / `playwright/teardown.ts` | globalSetup / globalTeardown hooks |
-| `playwright/tests/helpers.ts` | Seeds the e2e user (bootstrap or admin-created) |
+| `playwright/tests/helpers.ts` | Seeds the e2e user through the auth API (direct login → bootstrap → admin login + forced password rotation) |
 | `playwright/tests/fixtures.ts` | `login` fixture: fresh logged-in page per test |
-| `crates/task-rs/examples/hash_password.rs` | Prints an argon2 hash to seed the e2e admin (one-time) |
 | `playwright/tests/auth.spec.ts` | Login redirect / bad-credential flows |
 | `playwright/tests/task.spec.ts` | Board loads; workspace+project API round-trip |
-| `playwright/tests/card-detail.spec.ts` | Card detail: two-pane layout, priority/deadline, tabs, agent mention chat, run history |
-| `playwright/tests/ux-snapshots.spec.ts` | Full-page screenshots of every route |
+| `playwright/tests/card-detail.spec.ts` | Card detail: two-pane layout, priority/deadline, tabs, comments, agent mention chat (route-intercepted), inline run + history timeline |
+| `playwright/tests/card-run.spec.ts` | API-only: card runs its assigned agent via `POST /api/task/cards/{id}/run`; no agent → failed run lands in history; agent assign/read round-trip |
+| `playwright/tests/chat-mock.spec.ts` | Mock-model stack: catalog, echo, toolcall round, summarize, scripted `do task:` card flow, sandboxed agent spawn+run (gated on `E2E_MOCK_MODEL=1`) |
+| `playwright/tests/chat-modal.spec.ts` | Chat as global modal (floating fab → dialog); same mock-model gating as `chat-mock` |
+| `playwright/tests/chat-card-html.spec.ts` | Chat card chip (new card → chip → card page) + html fence preview/raw toggle; route-intercepted |
+| `playwright/tests/chat-dock-resize.spec.ts` | Chat dock width resize persists across reloads |
+| `playwright/tests/chat-real.spec.ts` | Real local model server, gated on `E2E_REAL_MODEL=1` (see `docker/compose/playwright-real.yml`) |
+| `playwright/tests/graph.spec.ts` | ```plot fence renders a wgpu-wasm canvas (or 2D fallback) without wasm errors; chat intercepted |
+| `playwright/tests/claude.spec.ts` | Claude provider: status endpoint, callback validation |
+| `playwright/tests/settings.spec.ts` | Settings page client-env tab (server-detected host, workspace path) |
+| `playwright/tests/dock.spec.ts` | Dock modals: machines (MachinesModal), workspace creation (ProfileModal → PromptModal) |
+| `playwright/tests/review.spec.ts` | Review page: agent pick → status → diff → commit; fresh work tree renders empty state, not 400 |
+| `playwright/tests/worker.spec.ts` | Auth guards for cronjobs; backend worker picks up a scheduled card and runs it |
+| `playwright/tests/ux-snapshots.spec.ts` | Full-page screenshots of every route (`/`, `/task`, `/prompts`, `/settings`) |
+| `playwright/tests/walkthrough.spec.ts` | Step-by-step walkthrough capture into `screenshots/walkthrough/` |
+| `playwright/tests/deploy-check.spec.ts` | Ad-hoc live-deploy check, gated on `E2E_DEPLOY_CHECK=1` |
 | `playwright/screenshots/` | UX review images (bind-mounted from the container) |
 
 ## Environment (all inside compose — nothing hardcoded in tests)
 
 | Var | Default | Meaning |
 |---|---|---|
-| `PLAYWRIGHT_BASE_URL` | `http://web` | Web from inside the network |
+| `PLAYWRIGHT_BASE_URL` | `http://web` in compose / `http://localhost:3334` bare | Web from inside the network |
 | `BACKEND_PORT` | `8991` | Host backend port the web proxy targets |
-| `E2E_ADMIN_USER` / `E2E_ADMIN_PASSWORD` | `admin` / `adminadmin` | Admin used to create the e2e user when bootstrap is unavailable |
+| `E2E_ADMIN_USER` / `E2E_ADMIN_PASSWORD` | `owner` / `owner` (helpers); compose passes `e2e-admin` / `e2e-admin-e2e-admin` | Admin used to create the e2e user when bootstrap is unavailable |
+| `E2E_ADMIN_NEW_PASSWORD` | `owner-owner-1` | Rotation target for the auto-seeded owner's forced password change |
 | `E2E_USER` / `E2E_PASSWORD` | `e2e-tester` / `e2e-e2e-e2e` | Credentials tests log in with |
 | `E2E_SKIP_DB_LIFECYCLE` | unset | Set to `1` to skip the fresh-DB create/drop |
 | `E2E_PG_HOST` | `postgres` | Internal postgres service for the e2e DB |
@@ -63,23 +77,22 @@ via the `pg` client — no `docker exec`, no host access. Migrations run
 automatically on backend connect, so the DB needs no seeding beyond the
 suite's own API bootstrap.
 
-## One-time setup: seed the e2e admin (host backend only)
+## Seeding: no one-time setup
 
-The e2e stack proxies `/api` to the host backend (Metal requirement), so the
-host dev DB needs an admin whose credentials the suite knows. Default env:
-`e2e-admin` / `e2e-admin-e2e-admin` (role `admin`, no forced password change).
+The backend auto-seeds a default `owner` / `owner` account (role `owner`,
+`must_change_password = TRUE`) on every DB connect
+(`Store::ensure_default_admin` in `crates/task-rs/src/user.rs`). There is no
+manual psql/hash step anymore.
 
-```sh
-HASH=$(cargo run -q -p task-rs --example hash_password -- 'e2e-admin-e2e-admin')
-docker exec susutaku-postgres-1 psql -U susutaku -d susutaku -c \
-  "INSERT INTO users (username, password_hash, role, must_change_password) \
-   VALUES ('e2e-admin', '$HASH', 'admin', FALSE) \
-   ON CONFLICT (username) DO UPDATE SET password_hash = EXCLUDED.password_hash;"
-```
+`tests/helpers.ts` seeds the `e2e-tester` user through the real API, in order:
 
-Override via compose env `E2E_ADMIN_USER` / `E2E_ADMIN_PASSWORD` for any other
-admin account. The suite then creates its own `e2e-tester` user through the
-public `POST /api/auth/users` endpoint.
+1. Try logging in as `e2e-tester` directly (already seeded by a past run) — done.
+2. Zero users → unauthenticated bootstrap `POST /api/auth/users` — done.
+3. Otherwise log in as the admin (`E2E_ADMIN_USER`/`E2E_ADMIN_PASSWORD`,
+   retrying with `E2E_ADMIN_NEW_PASSWORD` if the password was already
+   rotated), complete the forced password change via
+   `POST /api/auth/change-password`, and create `e2e-tester`
+   (409 / "already taken" counts as success).
 
 ## The loop
 
@@ -115,9 +128,10 @@ docker compose -f docker/compose/playwright.yml run --rm \
   regressions are caught by the same `docker compose up`, no separate tooling.
 - **Screenshots as artifacts, baselines in git.** `screenshots/pages/*.png` are
   for human UX review; `tests/__screenshots__/` baselines gate regressions.
-- **Seeding via public API only.** The e2e user is created through the real
-  bootstrap/admin endpoints — no DB fixtures to keep in sync. Only the admin
-  account itself is seeded once (argon2 hash, same crate the backend uses).
+- **Seeding via public API only.** The admin account is auto-seeded by the
+  backend itself (owner/owner + forced change, rotated by `helpers.ts`);
+  the e2e user is created through the real auth endpoints — no DB fixtures,
+  no argon2 hash to paste by hand.
 - **Exit code propagation.** `--exit-code-from playwright` makes the compose run
   CI-usable directly.
 

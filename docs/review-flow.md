@@ -15,22 +15,34 @@ card/chat run                review page (/review)                artifact
 ```
 
 1. **Spawn** — the first git op or manager call auto-spawns the agent's slot:
-   work tree seeded at `work/agents/<agent>/sandbox/workspace` (clone of the
-   project's bound repo, or an empty init), optional task branch created.
-2. **Review** — `/review` shows status, the diff, and the commit/push/PR
-   actions per agent.
-3. **Finish** — `POST /api/manager/agents/{agent}/finish` captures
-   everything into `TaskOutcome` and stores it as an agent output
-   (`agent_outputs` table): patch text, commit oid, transcript. This is the
-   durable artifact — reviewable in the outputs modal even after the work
-   tree is gone.
+   work tree seeded at `work/agents/<slot>/sandbox/workspace` (clone of the
+   project's bound repo, or an empty init); task-scoped slots
+   (`<agent>#<task>`) get a `task/<task>-<agent>` branch when the repo has
+   commits, and the spawn-time HEAD is kept as the patch base.
+2. **Review** — `/review` (`web_ui/src/pages/Review.tsx`) shows the agent
+   list (manager snapshot merged with configured agents), the agent's task
+   cards, status, the diff (file list + stats + highlighted DiffView) and
+   the commit/push/PR actions with task-branch prefills
+   (`task/<agent>`, `agent task: <agent>`). `ChatModal` embeds the same
+   actions per agent via the `AgentReview` slide-over.
+3. **Finish** — `POST /api/manager/agents/{agent}/finish` (optional body
+   `{ push, project_id, branch }`) captures everything into `TaskOutcome`,
+   optionally pushing the task branch (repo + token from the project's bound
+   git repo) before the work tree is torn down — push failure never fails the
+   finish. It then stores an agent output (`agent_outputs` table): patch
+   text, commit oid, transcript. This is the durable artifact — reviewable
+   in the outputs modal even after the work tree is gone.
+4. **Decide** — each stored output carries a review **status**
+   (`pending` → `approved` / `rejected`, consts in `task-rs/src/store.rs`).
+   `POST /api/agent-outputs/{id}/status` sets it; the outputs modal filters
+   by status and offers approve/reject buttons while an output is pending.
 
 ## What runs where (git split)
 
 | op | runs | notes |
 |---|---|---|
-| clone / status / diff | host, `git-rs` (git2) | read-only + bootstrap; no network needed after clone |
-| branch / commit / push / pr | inside the agent's podman container (`NetworkPolicyChoice::Enabled`) | commit needs no token; push/pr get a run-scoped `GIT_TOKEN` via askpass |
+| clone / status / diff | host, `git-rs` (git2), via `manager-rs/src/git_state.rs` | read-only + bootstrap; `GIT CLONE` with **no url** clones the repo bound to the chat's project (`backend/src/infra/project_git.rs`: thread → project → repo setting); a clone is refused unless the workspace is fresh |
+| branch / commit / push / pr | inside the agent's podman container (`NetworkPolicyChoice::Enabled`), selected by `@<agent>` at the end of the tool line | commit needs no token (and is a no-op when nothing is staged); push/pr get a run-scoped `GIT_TOKEN` via askpass; PR goes through the GitHub API (`PR_BASE_DEFAULT = "main"`) |
 
 ## Diff resolution order (`manager-rs/src/git_state.rs`)
 
@@ -103,6 +115,8 @@ E2E_SKIP_DB_LIFECYCLE=1 npx playwright test tests/review.spec.ts
   to the mock model (`SUSUTAKU_LOCAL_MODEL_URL: http://mock-model:8992`),
   which only echoes canned `TOOLCALL-OK` replies. Point it at a real
   server, e.g. `SUSUTAKU_LOCAL_MODEL_URL=http://host.docker.internal:8992`.
-- **Review / ship the work** → `/review` page (this doc).
+- **Review / ship the work** → `/review` page (this doc): commit, push the
+  task branch, open the PR, then finish to store the artifact and approve or
+  reject it.
 - **Scheduled/whole-card automation** → attach a pipeline or a cron routine
   to the card; not the right tool for one-off questions.

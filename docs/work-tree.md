@@ -29,15 +29,20 @@ relative path, resolved against the backend process CWD):
 
 ```
 work/agents/
-├── zai/                        ← everything for agent "zai"
+├── zai/                        ← everything for agent "zai" (task-less slot)
 │   └── sandbox/
 │       └── workspace/          ← THE work tree: a git repo checkout
 │           ├── .git/
 │           └── <project files>
-├── e2e-review-1789…/
-│   └── sandbox/workspace/      ← another agent, another isolated repo
+├── zai_42/                     ← a TASK slot: agent "zai" on task 42
+│   └── sandbox/workspace/      ← its own repo clone + task branch
 └── …
 ```
+
+One work tree per agent — and, since the per-task-slot rework, one extra
+work tree **per (agent, task) pair**: `spawn_task` keys the slot as
+`<agent>#<task>` (`TASK_KEY_SEP`, sanitized to `_` on disk), so two tasks of
+the same agent never share a tree or a branch.
 
 Why one per agent, not one shared folder:
 
@@ -60,12 +65,16 @@ Inside, the path has a fixed shape (`core-agent/src/podman/{sandbox,state}.rs`):
 
 ### spawn (first git op or manager call)
 
-1. path computed: `work/agents/<name>` (`spawn_task_impl`)
-2. `reclaim_stale`: if the folder exists but is empty/garbage, it is wiped
+1. slot key computed: `<agent>` or `<agent>#<task>`; path computed:
+   `work/agents/<sanitized key>` (`spawn_task_impl`)
+2. `reclaim_stale`: if the folder exists it is wiped (slots are in-memory; a
+   tree on disk with no live slot is stale by definition)
 3. seed: clone the project's bound repo (`settings → git repos`) — or, if
    none is bound / the clone fails, `git init` an empty repo
-4. optional task branch: `task/<agent>-<task>` created and checked out, so
-   the agent's commits stay off `main`
+4. task branch (task slots only, best effort, **only when the repo already
+   has commits**): `task/<task>-<agent>` (`TASK_BRANCH_PREFIX`) is created
+   and checked out, so the task's commits stay isolated from `main`; the
+   spawn-time HEAD is remembered as the slot's `base_commit`
 5. the podman sandbox is pointed at this folder; every agent command runs
    with `workspace/` mounted at `/workspace` — the agent can only see and
    change files inside its own work tree
@@ -80,11 +89,24 @@ Git ops are split (details in `docs/git-sandbox-tls.md`):
 
 ### finish / teardown
 
-`manager.finish` commits any still-uncommitted work (message
-`agent task: <name>`), captures the **patch** (unified diff) + commit oid,
-stores them as the durable artifact (`agent_outputs` table), then
-**purges the whole `work/agents/<name>` folder** and drops the slot.
-After finish, the only memory of the work tree is that artifact.
+`manager.finish` (via `finish_with_push`) captures the **task patch** with
+`GitRepo::task_patch`: any still-uncommitted work is committed as
+`agent task: <agent>` (`TASK_COMMIT_PREFIX`), then the patch is the diff from
+the spawn-time `base_commit` (or the empty tree on an unborn HEAD) to the new
+HEAD. The outcome (`TaskOutcome`) carries patch, commit oid, the task branch
+and — when the finish request asked for a push — the push result. The push
+(`FinishPush`, repo + token from the project's bound repo, branch = override
+else task branch else current) runs **before** teardown so a commit can never
+be stranded on a deleted tree; a push failure does not fail the finish, the
+patch artifact is already captured. Everything is stored in the
+`agent_outputs` table (the durable artifact), then the sandbox is purged, the
+whole `work/agents/<slot>` folder deleted and the slot dropped. After finish,
+the only memory of the work tree is that artifact.
+
+Publishing for review is the same shape one step earlier:
+`Manager::publish` commits pending work, pushes the task branch and opens a
+PR against `main` (GitHub API) — it requires a task-scoped slot, since the
+branch to publish is the one created at spawn.
 
 ## 4. Where the root lives (host vs docker)
 

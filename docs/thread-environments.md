@@ -37,9 +37,21 @@ Implementation notes:
 - `AgentSandbox::for_work_tree(dir)` wraps `Sandbox::new_in(...).keep_on_drop()`
   — a plain `Sandbox` **deletes its root on drop**; `keep_on_drop()` hands the
   directory lifecycle to the environment manager instead.
+- `ThreadEnvManager` is **in-memory** (`RwLock<HashMap<thread_id, EnvEntry>>`,
+  no DB table yet). `ENV_TTL_SECS = 24 * 60 * 60`.
 - `ThreadEnvManager::sweep` runs on every resolve: drops map entries idle
   beyond 24h (deletes their directory) and removes orphan directories left by
-  a previous backend process (mtime-based). No background task needed.
+  a previous backend process. No background task needed.
+- `runner_for(thread_id, agent)` takes the thread's agent config name for
+  information only — the environment is per thread, not per agent.
+
+## Phases 2–4 (still planned)
+
+Status check 2026-09: none of the three phases is wired yet — there is no
+`thread_envs` DB table, no `card_id` on environments, the review page lists
+manager agent slots only (the `/api/sandbox*` routes inspect global
+temp-dir sandboxes, not thread envs), and no project-level merge tree
+exists.
 
 ## Phase 2 — card binding (planned)
 
@@ -83,4 +95,4 @@ Implementation notes:
 | Non-destructive sandbox | `crates/core-agent/src/podman/sandbox.rs` (`keep_on_drop`), `backend/src/infra/podman.rs` (`for_work_tree`) |
 | Turn routing | `backend/src/app/chat.rs` (`turn_runner`, `shell_blocking_on`, runner-parameterized artifact scan/persist) |
 | Wiring | `backend/src/main.rs`, `backend/src/api.rs` (`ZaiChatDeps.thread_envs`) |
-| Tests | `backend/tests/thread_env.rs` |
+| Tests | `backend/tests/thread_env.rs` (same thread reuses, different threads isolated, empty id rejected) |
