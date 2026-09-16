@@ -106,15 +106,13 @@ export default function Routines() {
   }
 
   return (
-    <main className="page">
-      <header className="page-head">
+    <main className="chat routines-page">
+      <header>
         <h1>routines</h1>
         <span className="sub">{(routines ?? []).length} routine{(routines ?? []).length === 1 ? "" : "s"}</span>
-        <div className="head-actions">
-          <Button variant="primary" onClick={() => setDraft({ ...EMPTY })}>
-            <Plus size={14} /> new routine
-          </Button>
-        </div>
+        <Button onClick={() => setDraft({ ...EMPTY })}>
+          <Plus size={14} /> new routine
+        </Button>
       </header>
       <section aria-label="routine list" className="routine-list">
         {routines === null && <p className="empty">loading…</p>}
@@ -125,9 +123,6 @@ export default function Routines() {
             <p className="routine-empty-hint">
               routines are recurring automation on a cron schedule — they never touch the task board
             </p>
-            <Button variant="primary" onClick={() => setDraft({ ...EMPTY })}>
-              <Plus size={14} /> create the first routine
-            </Button>
           </div>
         )}
         {(routines ?? []).map((r) => (

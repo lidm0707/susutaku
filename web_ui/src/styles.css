@@ -5608,7 +5608,7 @@ select.agent-multi {
 .routine-empty {
   display: flex;
   flex-direction: column;
-  align-items: center;
+  align-items: flex-start;
   gap: 0.5rem;
   border: 1px dashed #2a2a33;
   border-radius: 12px;
@@ -5626,21 +5626,12 @@ select.agent-multi {
 .routine-empty-hint {
   font-size: 0.78rem;
   max-width: 40ch;
-  text-align: center;
+  text-align: left;
+  margin: 0;
 }
 
-.routine-empty .primary {
+.routine-empty .btn {
   margin-top: 0.4rem;
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  background: #2f6f4f;
-  border: none;
-  color: #f0fff5;
-  border-radius: 8px;
-  padding: 0.45rem 0.9rem;
-  font-size: 0.8rem;
-  cursor: pointer;
 }
 
 /* settings page: wider so the providers split layout can breathe */
