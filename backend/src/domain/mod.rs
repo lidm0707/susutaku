@@ -19,6 +19,6 @@ pub use service::{
 pub use valueobject::TOOL_SUMMARY_MAX;
 pub use valueobject::{
     Artifact, ArtifactKind, BoardOp, BoardRequest, BoardResult, BoundRepo, CancelFlag, ChatCmd,
-    ChatOutcome, GenReply, GitOp, MemoryHit, ReplyRx, SearchMode, SearchResult, TOOL_KIND_NAMES,
-    ToolEvent, ToolKind, ToolSet, ToolUse,
+    ChatOutcome, GenReply, GitOp, INTERRUPTED_NOTE, MemoryHit, ReplyRx, SearchMode, SearchResult,
+    TOOL_KIND_NAMES, ToolEvent, ToolKind, ToolSet, ToolUse,
 };

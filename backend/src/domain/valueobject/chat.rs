@@ -24,6 +24,11 @@ impl CancelFlag {
     }
 }
 
+/// Appended to a partially generated reply when the run was cancelled, so
+/// the partial text is kept in the transcript/memory and the next send can
+/// see what was in progress.
+pub const INTERRUPTED_NOTE: &str = "\n\n(interrupted — run stopped, partial reply kept)";
+
 /// Driving-adapter request: one chat turn.
 pub struct ChatCmd {
     pub message: String,

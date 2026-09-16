@@ -4,10 +4,10 @@
 use std::sync::Arc;
 
 use crate::domain::{
-    ArtifactKind, BoardOp, BoardRequest, BoundRepo, ChatCmd, ChatOutcome, GenReply, GitOp, LspOp,
-    Prompt, ResourceService, SearchMode, SearchResult, SkillService, TOOL_DENIED,
-    TOOL_RESULT_HEADER, TOOL_ROUNDS_MAX, TOOL_SUMMARY_MAX, ToolCall, ToolEvent, ToolKind, ToolSet,
-    ToolUse,
+    ArtifactKind, BoardOp, BoardRequest, BoundRepo, ChatCmd, ChatOutcome, GenReply, GitOp,
+    INTERRUPTED_NOTE, LspOp, Prompt, ResourceService, SearchMode, SearchResult, SkillService,
+    TOOL_DENIED, TOOL_RESULT_HEADER, TOOL_ROUNDS_MAX, TOOL_SUMMARY_MAX, ToolCall, ToolEvent,
+    ToolKind, ToolSet, ToolUse,
 };
 use crate::port::inbound::ChatHandling;
 use crate::port::outbound::{
@@ -247,6 +247,10 @@ impl ChatUseCase {
         if !allow_tools || rounds >= TOOL_ROUNDS_MAX {
             return None;
         }
+        // an interrupted partial reply never acts on tools
+        if reply.text.contains(INTERRUPTED_NOTE) {
+            return None;
+        }
         ToolCall::parse(&reply.text)
     }
 
@@ -276,6 +280,10 @@ impl ChatUseCase {
         let token = cmd.board_token.clone()?;
         let project_id = cmd.project_id.filter(|id| *id > 0)?;
         if !allow_tools || rounds > 0 || ToolCall::offers(&reply.text) {
+            return None;
+        }
+        // an interrupted partial is not a finished answer: keep it as-is
+        if reply.text.contains(INTERRUPTED_NOTE) {
             return None;
         }
         if !self.is_work_request(&cmd.message, cmd.tokenizer).await {

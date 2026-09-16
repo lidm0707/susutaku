@@ -13,7 +13,7 @@ pub mod tool_use;
 
 pub use board::{BoardOp, BoardRequest, BoardResult};
 pub use bound_repo::BoundRepo;
-pub use chat::{CancelFlag, ChatCmd, ChatOutcome};
+pub use chat::{CancelFlag, ChatCmd, ChatOutcome, INTERRUPTED_NOTE};
 pub use gen_reply::{GenReply, ReplyRx};
 pub use git_op::GitOp;
 pub use memory_hit::MemoryHit;

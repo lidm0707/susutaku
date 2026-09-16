@@ -11,7 +11,7 @@ use susutaku_mlx::tok::TokKind;
 use tokio::sync::broadcast;
 use zai_api::client::DEFAULT_MODEL;
 
-use crate::domain::{CancelFlag, GenReply, ReplyRx};
+use crate::domain::{CancelFlag, GenReply, INTERRUPTED_NOTE, ReplyRx};
 use crate::infra::zai::settings::SettingsState;
 use crate::port::outbound::Inference;
 
@@ -104,7 +104,18 @@ impl ZaiEngine {
                 let mut text = String::new();
                 for delta in stream {
                     if self.cancelled() {
-                        return Err(CANCELLED.to_string());
+                        // keep what was generated so far: the partial reply
+                        // reaches the transcript/memory and the next send
+                        // continues from it
+                        if text.is_empty() {
+                            return Err(CANCELLED.to_string());
+                        }
+                        text.push_str(INTERRUPTED_NOTE);
+                        return Ok(GenReply {
+                            model,
+                            text,
+                            stats: GenStats::default(),
+                        });
                     }
                     match delta {
                         Ok(d) => {
