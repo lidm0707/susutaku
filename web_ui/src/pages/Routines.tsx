@@ -13,6 +13,7 @@ import {
   type RoutineRun,
 } from "../lib.js";
 import { Modal } from "../ui/Overlay.js";
+import { Button, IconButton } from "../ui/controls.js";
 import { toast } from "../ui/Toast.js";
 import { cron_valid, describe_cron, RoutineEditor } from "../components/RoutineEditor.js";
 
@@ -110,9 +111,9 @@ export default function Routines() {
         <h1>routines</h1>
         <span className="sub">{(routines ?? []).length} routine{(routines ?? []).length === 1 ? "" : "s"}</span>
         <div className="head-actions">
-          <button className="primary" onClick={() => setDraft({ ...EMPTY })}>
+          <Button variant="primary" onClick={() => setDraft({ ...EMPTY })}>
             <Plus size={14} /> new routine
-          </button>
+          </Button>
         </div>
       </header>
       <section aria-label="routine list" className="routine-list">
@@ -124,9 +125,9 @@ export default function Routines() {
             <p className="routine-empty-hint">
               routines are recurring automation on a cron schedule — they never touch the task board
             </p>
-            <button className="primary" onClick={() => setDraft({ ...EMPTY })}>
+            <Button variant="primary" onClick={() => setDraft({ ...EMPTY })}>
               <Plus size={14} /> create the first routine
-            </button>
+            </Button>
           </div>
         )}
         {(routines ?? []).map((r) => (
@@ -144,11 +145,12 @@ export default function Routines() {
               {!r.enabled && <span className="routine-off">paused</span>}
             </div>
             <div className="routine-actions">
-              <button onClick={() => open_runs(r)} aria-label={`runs of ${r.name}`}>runs</button>
-              <button disabled={runningId === r.id} onClick={() => run_now(r)} aria-label={`run ${r.name} now`}>
+              <Button onClick={() => open_runs(r)}>runs</Button>
+              <Button disabled={runningId === r.id} onClick={() => run_now(r)}>
                 <Play size={12} /> {runningId === r.id ? "running…" : "run now"}
-              </button>
-              <button
+              </Button>
+              <IconButton
+                title="edit"
                 onClick={() =>
                   setDraft({
                     id: r.id,
@@ -159,13 +161,12 @@ export default function Routines() {
                     enabled: r.enabled,
                   })
                 }
-                aria-label={`edit ${r.name}`}
               >
                 <Pencil size={12} />
-              </button>
-              <button className="danger" onClick={() => remove(r.id)} aria-label={`delete ${r.name}`}>
+              </IconButton>
+              <IconButton title="delete" className="danger" onClick={() => remove(r.id)}>
                 <Trash2 size={12} />
-              </button>
+              </IconButton>
             </div>
           </article>
         ))}
@@ -239,12 +240,12 @@ export default function Routines() {
           </div>
 
           <footer className="routine-modal-foot">
-            <button type="button" onClick={() => setDraft(null)}>
+            <Button type="button" onClick={() => setDraft(null)}>
               <X size={13} /> cancel
-            </button>
-            <button type="submit" className="primary" disabled={!draft_valid}>
+            </Button>
+            <Button type="submit" variant="primary" disabled={!draft_valid}>
               {draft?.id == null ? "create routine" : "save changes"}
-            </button>
+            </Button>
           </footer>
         </form>
       </Modal>
