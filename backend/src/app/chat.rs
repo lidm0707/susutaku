@@ -40,6 +40,17 @@ fn think_hint(level: ThinkLevel) -> Option<&'static str> {
 }
 const TOOL_ERROR: &str = "tool failed: ";
 const TOOL_FALLBACK_NOTE: &str = "(the model could not finish this run; try again)";
+const TOOL_MALFORMED: &str = "malformed tool line: nothing was run. The format is exactly `TOOL: KIND arg` — e.g. `TOOL: CARD_CREATE <numeric project_id> <short title> | <description>`. Ids are numbers: call BOARD_LIST (or CARD_FIND) first when you don't know them, then repeat the tool line.";
+
+pub const AUTO_TITLE_MAX_CHARS: usize = 60;
+pub const AUTO_DESC_MAX_CHARS: usize = 2000;
+pub const CLASSIFY_MAX_TOKENS: usize = 8;
+pub const CLASSIFY_YES: &str = "YES";
+pub const CLASSIFY_PROMPT: &str = "You are a strict YES/NO classifier. USER MESSAGE:\n";
+pub const CLASSIFY_QUESTION: &str = "\n\nDoes the user ask to do, build, change, fix, or create work (an action for the agent), or only ask a question / discuss? Answer with exactly one word: YES (action) or NO (question).";
+const CARD_ID_PREFIX: &str = "card ";
+const AUTO_TITLE_FALLBACK: &str = "task";
+const AUTO_REPLY_OPEN: &str = "opened ";
 const BOARD_ERROR_PREFIX: &str = "error:";
 /// At most this many files are picked up from one shell output.
 const ARTIFACT_SCAN_MAX: usize = 8;
@@ -238,6 +249,72 @@ impl ChatUseCase {
         ToolCall::parse(&reply.text)
     }
 
+    /// A tool line was offered but does not parse: one corrective turn while
+    /// budget remains, instead of dead-ending on the raw line.
+    fn malformed_tool(&self, reply: &GenReply, allow_tools: bool, rounds: usize) -> bool {
+        allow_tools && rounds < TOOL_ROUNDS_MAX && ToolCall::offers(&reply.text)
+    }
+
+    /// Deterministic work-request fallback (user option 2): the chat's agent
+    /// is bound, the model answered without any tool call — classify the
+    /// message once and, for a do/build/change request, open a card in the
+    /// chat's project, assign the agent and run it. Pure questions keep the
+    /// model's normal answer.
+    async fn auto_card(
+        &self,
+        cmd: &ChatCmd,
+        allow_tools: bool,
+        rounds: usize,
+        reply: &GenReply,
+    ) -> Option<String> {
+        let agent = cmd
+            .agent
+            .as_deref()
+            .map(str::trim)
+            .filter(|n| !n.is_empty())?;
+        let token = cmd.board_token.clone()?;
+        let project_id = cmd.project_id.filter(|id| *id > 0)?;
+        if !allow_tools || rounds > 0 || ToolCall::offers(&reply.text) {
+            return None;
+        }
+        if !self.is_work_request(&cmd.message, cmd.tokenizer).await {
+            return None;
+        }
+        let create = BoardOp::CreateCard {
+            project_id,
+            title: short_title(&cmd.message),
+            description: Some(cmd.message.chars().take(AUTO_DESC_MAX_CHARS).collect()),
+        };
+        let created = self.board_blocking(Some(token.clone()), create).await;
+        let card_id = parse_card_id(&created)?;
+        self.board_blocking(
+            Some(token.clone()),
+            BoardOp::AssignAgent {
+                card_id,
+                agent: agent.to_owned(),
+            },
+        )
+        .await;
+        let run = self
+            .board_blocking(Some(token), BoardOp::RunCard { card_id })
+            .await;
+        Some(format!(
+            "{AUTO_REPLY_OPEN}card {card_id} for agent {agent} and ran it:\n{run}"
+        ))
+    }
+
+    /// One tiny YES/NO inference: does the message ask for work?
+    async fn is_work_request(&self, message: &str, tok: TokKind) -> bool {
+        let prompt = format!("{CLASSIFY_PROMPT}{message}{CLASSIFY_QUESTION}");
+        match self
+            .infer(prompt, None, CLASSIFY_MAX_TOKENS, tok, false)
+            .await
+        {
+            Ok(r) => r.text.trim().to_uppercase().starts_with(CLASSIFY_YES),
+            Err(_) => false,
+        }
+    }
+
     async fn infer(
         &self,
         prompt: String,
@@ -407,7 +484,7 @@ impl ChatUseCase {
         memories: Vec<String>,
     ) -> ChatOutcome {
         let (text, model, stats) = last_good;
-        let text = if ToolCall::parse(&text).is_some() {
+        let text = if ToolCall::offers(&text) {
             TOOL_FALLBACK_NOTE.to_string()
         } else {
             text
@@ -595,6 +672,33 @@ impl ChatUseCase {
     }
 }
 
+/// First words of the message, capped — the auto-card title.
+fn short_title(message: &str) -> String {
+    let mut title = String::new();
+    for word in message.split_whitespace() {
+        if title.chars().count() + word.chars().count() + 1 > AUTO_TITLE_MAX_CHARS {
+            break;
+        }
+        if !title.is_empty() {
+            title.push(' ');
+        }
+        title.push_str(word);
+    }
+    if title.is_empty() {
+        AUTO_TITLE_FALLBACK.to_owned()
+    } else {
+        title
+    }
+}
+
+/// `card 12 created …` → 12 (the board's CreateCard reply format).
+fn parse_card_id(created: &str) -> Option<i64> {
+    created
+        .strip_prefix(CARD_ID_PREFIX)
+        .and_then(|rest| rest.split_once(' '))
+        .and_then(|(id, _)| id.parse().ok())
+}
+
 impl ChatHandling for ChatUseCase {
     fn inference(&self) -> Option<Arc<dyn Inference>> {
         Some(self.engine.clone())
@@ -641,6 +745,18 @@ impl ChatHandling for ChatUseCase {
             ));
         }
         let agent_skills = self.agent_skills(cmd.agent.as_deref()).await;
+        // The bound agent's name must reach the model: CARD_AGENT needs it and
+        // otherwise the model stalls asking "which agent?".
+        if let Some(name) = cmd
+            .agent
+            .as_deref()
+            .map(str::trim)
+            .filter(|n| !n.is_empty())
+        {
+            context.push_str(&format!(
+                "CHAT AGENT: {name} is bound to this chat — assign it to new cards with CARD_AGENT unless the user names another agent.\n"
+            ));
+        }
         if !agent_skills.is_empty() {
             context.push_str(PROJECT_SKILLS_HEADER);
             context.push_str(&agent_skills);
@@ -696,7 +812,39 @@ impl ChatHandling for ChatUseCase {
         let mut last_good = (reply.text.clone(), reply.model.clone(), reply.stats);
 
         let mut rounds = 0usize;
-        while let Some(call) = self.next_call(&reply, allow_tools, rounds) {
+        loop {
+            let call = match self.next_call(&reply, allow_tools, rounds) {
+                Some(call) => call,
+                None if self.malformed_tool(&reply, allow_tools, rounds) => {
+                    rounds += 1;
+                    context.push_str(TOOL_RESULT_HEADER);
+                    context.push_str(TOOL_MALFORMED);
+                    prompt = Prompt::build(
+                        &cmd.message,
+                        &context,
+                        allow_tools,
+                        cmd.board_token.is_some(),
+                        &tools,
+                    );
+                    reply = match self
+                        .infer(prompt, None, cmd.max_tokens, cmd.tokenizer, think)
+                        .await
+                    {
+                        Ok(r) => {
+                            last_good = (r.text.clone(), r.model.clone(), r.stats);
+                            r
+                        }
+                        Err(e) => {
+                            tracing::warn!("chat malformed-tool retry inference failed: {e}");
+                            return Ok(self
+                                .finish(&base_runner, &cmd, last_good, searched, trace, memories)
+                                .await);
+                        }
+                    };
+                    continue;
+                }
+                None => break,
+            };
             rounds += 1;
             let runner = base_runner.clone();
             match call {
@@ -890,9 +1038,16 @@ impl ChatHandling for ChatUseCase {
             };
         }
 
+        // Option-2 fallback: agent bound, no tool ran, plain answer — for a
+        // work request open a card and run it instead of chat-back.
+        if let Some(text) = self.auto_card(&cmd, allow_tools, rounds, &reply).await {
+            last_good.0 = text.clone();
+            reply.text = text;
+        }
+
         // Tool budget exhausted while the model still wants a tool: force a
         // final answer on the gathered context, without the tool offer.
-        if allow_tools && rounds > 0 && ToolCall::parse(&reply.text).is_some() {
+        if allow_tools && rounds > 0 && ToolCall::offers(&reply.text) {
             reply = match self
                 .infer(
                     Prompt::build(&cmd.message, &context, false, false, &tools),

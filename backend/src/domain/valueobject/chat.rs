@@ -47,6 +47,9 @@ pub struct ChatCmd {
     /// Target task card: artifacts produced this turn (written files,
     /// shell-created images/text) are attached to it as card resources.
     pub card_id: Option<i64>,
+    /// Chat's project; when set with a bound agent, a plain no-tool answer to
+    /// a work request is escalated: card opened, agent assigned, run once.
+    pub project_id: Option<i64>,
 }
 
 /// Driving-adapter response: one completed chat turn.

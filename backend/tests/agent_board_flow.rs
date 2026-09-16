@@ -15,6 +15,7 @@ use susutaku_mlx::tok::TokKind;
 const MARK_CARD_CREATED: &str = "card 2 created";
 const MARK_AGENT_ASSIGNED: &str = "agent nightly assigned";
 const MARK_TOOL_OFFER: &str = "TOOL:";
+const MARK_CLASSIFY: &str = "YES/NO classifier";
 
 struct NoSearch;
 impl Searcher for NoSearch {
@@ -87,6 +88,44 @@ impl Inference for BoardFlowEngine {
     }
 }
 
+/// Never calls a tool. The classifier turn answers YES (work request) or NO
+/// (plain question) depending on the user message.
+struct AutoCardEngine;
+impl Inference for AutoCardEngine {
+    fn submit(
+        &self,
+        prompt: String,
+        _max_tokens: usize,
+        _tok: TokKind,
+        _think: bool,
+    ) -> Result<tokio::sync::oneshot::Receiver<Result<GenReply, String>>, String> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let classify = prompt.contains(MARK_CLASSIFY);
+        let work = prompt.contains(AUTO_WORK_MARK);
+        std::thread::spawn(move || {
+            let text = if classify {
+                if work {
+                    "YES".to_string()
+                } else {
+                    "NO".to_string()
+                }
+            } else if work {
+                "the project has these crates".to_string()
+            } else {
+                "answered normally".to_string()
+            };
+            let _ = tx.send(Ok(GenReply {
+                model: "fake".to_string(),
+                text,
+                stats: GenStats::default(),
+            }));
+        });
+        Ok(rx)
+    }
+}
+
+const AUTO_WORK_MARK: &str = "add feature set env";
+
 struct NoModels;
 impl ModelSwitch for NoModels {
     fn select(&self, _name: &str) -> Result<(), String> {
@@ -144,6 +183,7 @@ async fn agent_creates_card_then_assigns_agent() {
             image: None,
             thread_id: None,
             card_id: None,
+            project_id: None,
         })
         .await
         .expect("chat must complete");
@@ -159,4 +199,82 @@ async fn agent_creates_card_then_assigns_agent() {
         &ops[1],
         BoardOp::AssignAgent { card_id: 2, agent } if agent == "nightly"
     ));
+}
+
+fn auto_card_use_case(board: Arc<dyn BoardOps>) -> ChatUseCase {
+    let mut agents = backend::port::outbound::MockAgentConfigRepo::new();
+    // bound agent is unknown to the repo — tools fail open to the full set
+    agents.expect_by_name().returning(|_| Ok(None));
+    ChatUseCase::new(
+        Arc::new(NoSearch),
+        Arc::new(NoFetch),
+        Arc::new(NoShell),
+        Arc::new(AutoCardEngine),
+        Arc::new(NoModels),
+        None,
+        board,
+        Arc::new(agents),
+    )
+}
+
+fn auto_cmd(message: &str) -> ChatCmd {
+    ChatCmd {
+        message: message.to_string(),
+        mode: SearchMode::Auto,
+        max_tokens: 64,
+        tokenizer: TokKind::Normal,
+        think: false,
+        board_token: Some("tok".to_string()),
+        agent: Some("nightly".to_string()),
+        image: None,
+        thread_id: None,
+        card_id: None,
+        project_id: Some(1),
+    }
+}
+
+#[tokio::test]
+async fn work_request_without_tool_opens_card_and_runs_it() {
+    let board = Arc::new(RecordingBoard(Mutex::new(Vec::new())));
+    let use_case = auto_card_use_case(Arc::clone(&board) as Arc<dyn BoardOps>);
+
+    let outcome = use_case
+        .execute(auto_cmd("add feature set env in frontend"))
+        .await
+        .expect("chat must complete");
+
+    assert!(
+        outcome.text.starts_with("opened card 2"),
+        "{}",
+        outcome.text
+    );
+    let ops = board.0.lock().expect("lock");
+    assert_eq!(ops.len(), 3, "create + assign + run must reach the board");
+    assert!(matches!(
+        &ops[0],
+        BoardOp::CreateCard { project_id: 1, title, description: Some(desc) }
+            if title.contains("add feature") && desc.contains("set env")
+    ));
+    assert!(matches!(
+        &ops[1],
+        BoardOp::AssignAgent { card_id: 2, agent } if agent == "nightly"
+    ));
+    assert!(matches!(&ops[2], BoardOp::RunCard { card_id: 2 }));
+}
+
+#[tokio::test]
+async fn plain_question_keeps_the_normal_answer() {
+    let board = Arc::new(RecordingBoard(Mutex::new(Vec::new())));
+    let use_case = auto_card_use_case(Arc::clone(&board) as Arc<dyn BoardOps>);
+
+    let outcome = use_case
+        .execute(auto_cmd("what does this project have?"))
+        .await
+        .expect("chat must complete");
+
+    assert_eq!(outcome.text, "answered normally");
+    assert!(
+        board.0.lock().expect("lock").is_empty(),
+        "no board ops for a question"
+    );
 }

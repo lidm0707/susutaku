@@ -147,6 +147,23 @@ const GIT_OP_PR: &str = "PR";
 const PR_ARG_SEP: char = '|';
 
 impl ToolCall {
+    /// True when the reply offers a tool (TOOL: line or XML call) even if the
+    /// line is malformed and would not parse — used to feed an error back to
+    /// the model instead of dead-ending on the raw line.
+    pub fn offers(reply: &str) -> bool {
+        let visible = reply
+            .split_once("</think>")
+            .map(|(_, after)| after)
+            .unwrap_or(reply);
+        if Self::parse_xml(visible).is_some() {
+            return true;
+        }
+        visible
+            .lines()
+            .map(str::trim_start)
+            .any(|l| l.to_uppercase().starts_with(TOOL_PREFIX))
+    }
+
     /// First TOOL: line after the </think> block, if any. The argument may be
     /// empty (e.g. `TOOL: BOARD_LIST`).
     pub fn parse(reply: &str) -> Option<Self> {
@@ -281,7 +298,9 @@ impl ToolCall {
             }),
             XML_CARD_IMAGE => Some(Self::CardImage {
                 card_id: p("card_id")?.trim().parse().ok()?,
-                image: p("image").map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
+                image: p("image")
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty()),
             }),
             XML_BOARD_LIST => Some(Self::BoardList),
             XML_CARD_FIND | XML_CARD_FIND_ALIAS => {
@@ -304,11 +323,9 @@ impl ToolCall {
                 line: p("line")?.trim().parse().ok()?,
                 col: p("col")?.trim().parse().ok()?,
             }),
-            XML_AGENT_RUN => Self::parse_agent_run(&format!(
-                "{} {}",
-                p("agent")?.trim(),
-                p("command")?.trim()
-            )),
+            XML_AGENT_RUN => {
+                Self::parse_agent_run(&format!("{} {}", p("agent")?.trim(), p("command")?.trim()))
+            }
             XML_GIT => {
                 let op = p("op").map(str::trim);
                 let url = p("url").map(|u| u.trim().to_string());

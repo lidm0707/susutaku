@@ -664,7 +664,8 @@ export async function chat_zai(
   system?: PromptSection[],
   agent?: string,
   thread_id?: number,
-  image?: string
+  image?: string,
+  project_id?: number
 ): Promise<ChatReply> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   const token = get_token();
@@ -672,7 +673,7 @@ export async function chat_zai(
   const res = await fetch(`${API_BASE}/api/chat/zai`, {
     method: "POST",
     headers,
-    body: JSON.stringify({ message, model: model || undefined, system, agent, thread_id, image }),
+    body: JSON.stringify({ message, model: model || undefined, system, agent, thread_id, image, project_id }),
   });
   if (!res.ok) throw new ApiError(res.status, await res.text());
   return res.json();
@@ -695,7 +696,8 @@ export async function chat_zai_stream(
   thread_id: number | undefined,
   image: string | undefined,
   on_event: (ev: ChatStreamEvent) => void,
-  run_id?: string
+  run_id?: string,
+  project_id?: number
 ): Promise<ChatReply> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   const token = get_token();
@@ -703,7 +705,7 @@ export async function chat_zai_stream(
   const res = await fetch(`${API_BASE}/api/chat/zai/stream`, {
     method: "POST",
     headers,
-    body: JSON.stringify({ message, model: model || undefined, system, agent, thread_id, image, run_id }),
+    body: JSON.stringify({ message, model: model || undefined, system, agent, thread_id, image, run_id, project_id }),
   });
   if (!res.ok || !res.body) throw new ApiError(res.status, await res.text());
   const reader = res.body.getReader();

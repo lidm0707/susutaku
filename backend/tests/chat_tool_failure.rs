@@ -128,6 +128,7 @@ async fn search_failure_does_not_abort_chat() {
             image: None,
             thread_id: None,
             card_id: None,
+            project_id: None,
         })
         .await
         .expect("chat must survive a failed search tool");

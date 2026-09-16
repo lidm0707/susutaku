@@ -943,6 +943,7 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
           thread_id: thread_id ?? undefined,
           // first #card:N mention receives tool artifacts as card resources
           card_id: card_mentions(text)[0],
+          project_id: project_id ?? undefined,
         }),
       });
       return res.json();
@@ -959,10 +960,11 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
         thread_id ?? undefined,
         img,
         on_event,
-        run_id
+        run_id,
+        project_id ?? undefined
       );
     }
-    return chat_zai(text, a.model, agent_sections(a), a.name, thread_id ?? undefined, img);
+    return chat_zai(text, a.model, agent_sections(a), a.name, thread_id ?? undefined, img, project_id ?? undefined);
   }
 
   async function send(e?: React.FormEvent | React.KeyboardEvent) {

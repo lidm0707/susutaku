@@ -3,6 +3,18 @@ use backend::domain::{BoardOp, BoardRequest, BoardResult, ToolCall, ToolKind, To
 use backend::port::outbound::BoardOps;
 
 #[test]
+fn malformed_tool_line_is_still_an_offer() {
+    // the screenshot bug: a non-numeric project id must not dead-end silently
+    let line = "TOOL: CARD_CREATE project Sandbox quick echo test | echo hello";
+    assert!(ToolCall::offers(line));
+    assert_eq!(ToolCall::parse(line), None);
+    assert!(ToolCall::offers("blah\nTOOL: BOARD_LIST"));
+    assert!(ToolCall::offers("</think>TOOL: CARD_RUN"));
+    assert!(!ToolCall::offers("just an answer, no tool"));
+    assert!(!ToolCall::offers("<think>TOOL: SEARCH x</think>done"));
+}
+
+#[test]
 fn board_tool_permissions_are_per_kind() {
     // each board-family name grants only its own kind
     let set = ToolSet::from_names(&["board".to_string()]).unwrap();

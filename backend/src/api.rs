@@ -1081,6 +1081,7 @@ async fn chat<T: ChatHandling>(
             image: None,
             thread_id: req.thread_id.map(|id| id.to_string()),
             card_id: req.card_id,
+            project_id: req.project_id,
         })
         .await
         .map_err(ApiError::internal)?;
@@ -1767,6 +1768,7 @@ async fn chat_zai(
             image: gated_image,
             thread_id: req.thread_id.map(|id| id.to_string()),
             card_id: req.card_id,
+            project_id: req.project_id,
         })
         .await
         .map_err(ApiError::internal)?;
@@ -1895,6 +1897,7 @@ async fn chat_zai_stream(
         image: gated_image,
         thread_id: req.thread_id.map(|id| id.to_string()),
         card_id: req.card_id,
+        project_id: req.project_id,
     };
     let (done_tx, done_rx) = tokio::sync::oneshot::channel::<Result<ChatReply, String>>();
     let store = deps.store.clone();
@@ -4692,8 +4695,10 @@ struct ChatRequest {
     thread_id: Option<i64>,
     /// Target task card: tool artifacts produced this turn (written files,
     /// images, text output) are attached to it as card resources.
-    #[serde(default)]
     card_id: Option<i64>,
+    /// Chat's project: with a bound agent, a no-tool answer to a work request
+    /// is escalated to an opened card + run in this project.
+    project_id: Option<i64>,
 }
 /// One tool call the agent made, for display in the chat UI.
 #[derive(Serialize, utoipa::ToSchema)]
@@ -4904,6 +4909,10 @@ struct ZaiChatRequest {
     /// it as card resources.
     #[serde(default)]
     card_id: Option<i64>,
+    /// Chat's project: with a bound agent, a no-tool answer to a work request
+    /// is escalated to an opened card + run in this project.
+    #[serde(default)]
+    project_id: Option<i64>,
     /// Client-generated id for this run; when set, the run can be cancelled
     /// via `/api/chat/zai/cancel`.
     #[serde(default)]
