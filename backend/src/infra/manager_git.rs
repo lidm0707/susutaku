@@ -16,7 +16,7 @@ impl ManagerGit {
         Self { manager }
     }
 
-    fn to_proto(op: &GitOp) -> Result<proto_rs::GitTool, String> {
+    pub(crate) fn to_proto(op: &GitOp) -> Result<proto_rs::GitTool, String> {
         match op {
             GitOp::Clone { url, token } => Ok(proto_rs::GitTool::Clone {
                 url: url.clone().ok_or_else(|| "clone needs a url".to_string())?,

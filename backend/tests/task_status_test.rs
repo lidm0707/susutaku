@@ -142,6 +142,7 @@ async fn set_status_noop_when_already_there() {
 async fn card_run_reports_missing_agent_and_uses_status_columns() {
     let mut cards = MockCardRepo::new();
     cards.expect_get().returning(|_| Ok(Some(card_row("todo"))));
+    cards.expect_set_run_start().returning(|_, _| Ok(()));
     cards
         .expect_move_card()
         .withf(|mv: &CardMove| mv.column_id == COLUMN_DOING)
@@ -162,7 +163,7 @@ async fn card_run_reports_missing_agent_and_uses_status_columns() {
         Arc::new(backend::port::outbound::MockWorkspaceRepo::new()),
         Arc::new(backend::port::outbound::MockProjectRepo::new()),
     );
-    let record = card_run::run_card(&app, None, None, CARD_ID, task_rs::TRIGGER_MANUAL)
+    let record = card_run::run_card(&app, None, None, CARD_ID, task_rs::TRIGGER_MANUAL, None)
         .await
         .unwrap();
     assert_eq!(record.status, card_run::RunStatus::Failed);

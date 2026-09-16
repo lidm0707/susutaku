@@ -3,7 +3,7 @@ import { FileDiff, GitCommitHorizontal, GitPullRequestArrow, RefreshCw, Upload, 
 import { Button, Field, TextInput } from "../ui/controls.js";
 import { Modal } from "../ui/Overlay.js";
 import { use_projects } from "../components/ProjectContext.js";
-import { agent_git, fetch_agents, fetch_cards, fetch_manager_agents, finish_manager_agent, type AgentGitBody, type Card, type ManagerAgent } from "../lib.js";
+import { agent_git, fetch_agents, fetch_card_runs, fetch_cards, fetch_manager_agents, finish_manager_agent, type AgentGitBody, type Card, type CardRunRecord, type ManagerAgent } from "../lib.js";
 import DiffView, { DiffFileList, DiffStats, type DiffFile } from "../components/DiffView.js";
 
 const TASK_COMMIT_PREFIX = "agent task: ";
@@ -50,6 +50,8 @@ export default function Review() {
   const [file, setFile] = useState<DiffFile | null>(null);
   const [fullDiff, setFullDiff] = useState(false);
   const [tasks, setTasks] = useState<Card[]>([]);
+  const [task_runs, set_task_runs] = useState<{ card: Card; runs: CardRunRecord[] } | null>(null);
+  const [runs_busy, set_runs_busy] = useState(false);
   const grid_ref = useRef<HTMLDivElement>(null);
   const [left_pct, set_left_pct] = useState(LEFT_DEFAULT_PCT);
   const { project_id } = use_projects();
@@ -161,6 +163,19 @@ export default function Review() {
     await act(body);
   }
 
+  async function open_task(t: Card) {
+    set_task_runs({ card: t, runs: [] });
+    set_runs_busy(true);
+    try {
+      const runs = await fetch_card_runs(t.id);
+      set_task_runs({ card: t, runs });
+    } catch {
+      set_task_runs({ card: t, runs: [] });
+    } finally {
+      set_runs_busy(false);
+    }
+  }
+
   const clean = status.includes("clean");
   const dirty = Boolean(status) && !clean;
 
@@ -239,7 +254,14 @@ export default function Review() {
               <ul className="review-task-list">
                 {agent_tasks.map((t) => (
                   <li key={t.id} className="review-task-item">
-                    <span className="review-task-title">{t.title}</span>
+                    <button
+                      type="button"
+                      className="review-task-open"
+                      title="show run history"
+                      onClick={() => open_task(t).catch(() => {})}
+                    >
+                      <span className="review-task-title">{t.title}</span>
+                    </button>
                     <span className="review-task-column">{t.column_id}</span>
                   </li>
                 ))}
@@ -324,6 +346,43 @@ export default function Review() {
 
       <Modal open={file !== null} title={file?.path ?? ""} on_close={() => setFile(null)} wide>
         <DiffView diff={file?.text ?? ""} rows={24} />
+      </Modal>
+
+      <Modal
+        open={task_runs !== null}
+        title={task_runs ? `runs — ${task_runs.card.title}` : ""}
+        on_close={() => set_task_runs(null)}
+        wide
+      >
+        {task_runs && (
+          <div className="review-runs">
+            <p className="review-action-hint">
+              status {task_runs.card.column_id}
+              {task_runs.card.run_status ? ` · last run ${task_runs.card.run_status}` : ""}
+            </p>
+            {runs_busy ? (
+              <p className="review-action-hint">loading…</p>
+            ) : task_runs.runs.length === 0 ? (
+              <p className="review-action-hint">no runs recorded — use “run now” on the card</p>
+            ) : (
+              <ul className="review-run-list">
+                {task_runs.runs.map((r) => (
+                  <li key={r.id} className="review-run-item">
+                    <div className="review-run-head">
+                      <span className={`review-badge ${r.ok ? "ok" : "dirty"}`}>
+                        {r.ok ? "ok" : "failed"}
+                      </span>
+                      <span className="review-run-meta">
+                        {r.trigger} · {r.agent} · {r.finished_at ?? r.started_at}
+                      </span>
+                    </div>
+                    {r.summary && <pre className="review-run-summary">{r.summary}</pre>}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
       </Modal>
 
       <Modal
