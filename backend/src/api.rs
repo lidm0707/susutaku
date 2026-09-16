@@ -154,6 +154,9 @@ fn zai_chat_deps<T: ChatHandling + ModelSwitch + 'static>(
             Some(Arc::new(crate::infra::zai::router::ZaiRouter::new(
                 settings.clone(),
             ))),
+            Some(Arc::new(crate::app::card_run::WorkTree::new(
+                manager.clone(),
+            ))),
         )),
         agents: Arc::new(crate::infra::postgres::task::PgTask::new(
             task_store.clone(),
@@ -339,6 +342,9 @@ pub fn router<T: ChatHandling + ModelSwitch + 'static>(
             sched,
             engine,
             Some(engines),
+            Some(std::sync::Arc::new(crate::app::card_run::WorkTree::new(
+                manager.clone(),
+            ))),
         )))
         .layer(tower_http::trace::TraceLayer::new_for_http())
         .layer(Extension(manager))
@@ -2204,6 +2210,7 @@ struct TaskState {
     sched: std::sync::Arc<crate::app::schedule_work::ScheduleHandle>,
     engine: Option<std::sync::Arc<dyn Inference>>,
     engines: Option<std::sync::Arc<dyn ModelEngines>>,
+    wt: Option<std::sync::Arc<crate::app::card_run::WorkTree>>,
 }
 
 type TaskStore = std::sync::Arc<TaskState>;
@@ -2222,6 +2229,7 @@ fn task_state(
     sched: std::sync::Arc<crate::app::schedule_work::ScheduleHandle>,
     engine: Option<std::sync::Arc<dyn Inference>>,
     engines: Option<std::sync::Arc<dyn ModelEngines>>,
+    wt: Option<std::sync::Arc<crate::app::card_run::WorkTree>>,
 ) -> TaskStore {
     std::sync::Arc::new(TaskState {
         app: crate::app::task::build(store.clone()),
@@ -2229,6 +2237,7 @@ fn task_state(
         sched,
         engine,
         engines,
+        wt,
     })
 }
 
@@ -2649,6 +2658,7 @@ async fn run_card(
         state.engines.as_deref(),
         id,
         task_rs::TRIGGER_MANUAL,
+        state.wt.as_deref(),
     )
     .await
     .map_err(task_err)?;

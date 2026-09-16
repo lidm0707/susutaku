@@ -15,6 +15,7 @@ pub struct BoardService {
     app: super::task::TaskApp,
     engine: Option<Arc<dyn Inference>>,
     engines: Option<Arc<dyn ModelEngines>>,
+    wt: Option<Arc<super::card_run::WorkTree>>,
 }
 
 impl BoardService {
@@ -22,6 +23,7 @@ impl BoardService {
         store: Arc<task_rs::Store>,
         engine: Option<Arc<dyn Inference>>,
         engines: Option<Arc<dyn ModelEngines>>,
+        wt: Option<Arc<super::card_run::WorkTree>>,
     ) -> Self {
         let app = super::task::build(store.clone());
         Self {
@@ -29,6 +31,7 @@ impl BoardService {
             app,
             engine,
             engines,
+            wt,
         }
     }
 
@@ -200,6 +203,7 @@ impl BoardOps for BoardService {
                     self.engines.as_deref(),
                     card_id,
                     task_rs::TRIGGER_MANUAL,
+                    self.wt.as_deref(),
                 )
                 .await
                 .map_err(|e| e.to_string())?;

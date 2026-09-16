@@ -21,7 +21,7 @@ use crate::git_state;
 pub const AGENTS_ROOT: &str = "work/agents";
 pub const EMPTY_PATCH: &str = "";
 /// Separator between agent name and task id in a composite slot key.
-const TASK_KEY_SEP: char = '#';
+pub const TASK_KEY_SEP: char = '#';
 /// Git branch prefix for task-scoped agent work.
 const TASK_BRANCH_PREFIX: &str = "task/";
 

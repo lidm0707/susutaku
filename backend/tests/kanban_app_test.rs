@@ -124,6 +124,7 @@ async fn comment_service_add_missing_card_rolls_back() {
 
 /// A run from `todo` moves the card: todo → doing at start, → `target` at end.
 fn expect_run_moves_todo_to(cards: &mut MockCardRepo, target: &str) {
+    cards.expect_set_run_start().returning(|_, _| Ok(()));
     cards
         .expect_move_card()
         .withf(|mv: &backend::domain::CardMove| mv.column_id == task_rs::COLUMN_DOING)
@@ -232,6 +233,7 @@ async fn run_card_records_ok_and_persists_state() {
         None,
         CARD_ID,
         task_rs::TRIGGER_MANUAL,
+        None
     )
     .await
     .expect("ran");
@@ -265,6 +267,7 @@ async fn run_card_without_engine_fails_run_with_note() {
         None,
         CARD_ID,
         task_rs::TRIGGER_MANUAL,
+        None
     )
     .await
     .expect("run record persisted");
@@ -309,6 +312,7 @@ async fn run_card_without_agent_persists_failed_run() {
         None,
         CARD_ID,
         task_rs::TRIGGER_MANUAL,
+        None
     )
     .await
     .expect("failed run persisted");
@@ -377,6 +381,7 @@ async fn run_card_routes_through_agent_model() {
         Some(&RoutedEngine(CLOUD_MODEL)),
         CARD_ID,
         task_rs::TRIGGER_MANUAL,
+        None
     )
     .await
     .expect("ran");

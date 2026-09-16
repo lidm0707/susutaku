@@ -962,6 +962,20 @@ export async function fetch_cards(project_id: number | null): Promise<Card[]> {
   return (await api(`/api/task/cards${qs}`)).json();
 }
 
+export interface CardRunRecord {
+  id: number;
+  trigger: string;
+  agent: string;
+  ok: boolean;
+  summary: string;
+  started_at: string;
+  finished_at: string | null;
+}
+
+export async function fetch_card_runs(card_id: number): Promise<CardRunRecord[]> {
+  return (await api(`/api/task/cards/${card_id}/runs`)).json();
+}
+
 export async function create_card(
   project_id: number,
   column_id: string,

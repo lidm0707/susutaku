@@ -88,11 +88,15 @@ async fn main() {
     let sandbox = Arc::new(AgentSandbox::restore().expect("agent sandbox init"));
     spawn_client_node(sandbox.clone()).await;
     let codex_workspace = sandbox.root();
+    let manager = Manager::new();
     let board = Arc::new(BoardService::new(
         task_store.clone(),
         Some(model.clone()),
         Some(Arc::new(backend::infra::zai::router::ZaiRouter::new(
             Arc::new(backend::infra::zai::settings::SettingsState::load()),
+        ))),
+        Some(Arc::new(backend::app::card_run::WorkTree::new(
+            manager.clone(),
         ))),
     ));
     api::seed_project_skill(&task_store).await;
@@ -102,7 +106,6 @@ async fn main() {
     let agents: Arc<dyn backend::port::outbound::AgentConfigRepo> = Arc::new(
         backend::infra::postgres::task::PgTask::new(task_store.clone()),
     );
-    let manager = Manager::new();
     let resources = std::sync::Arc::new(backend::domain::ResourceService::new(Arc::new(
         backend::infra::postgres::task::PgTask::new(task_store.clone()),
     )));
