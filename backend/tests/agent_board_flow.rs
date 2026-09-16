@@ -16,6 +16,7 @@ const MARK_CARD_CREATED: &str = "card 2 created";
 const MARK_AGENT_ASSIGNED: &str = "agent nightly assigned";
 const MARK_TOOL_OFFER: &str = "TOOL:";
 const MARK_CLASSIFY: &str = "YES/NO classifier";
+const MARK_CRON_SET: &str = "routine set";
 
 struct NoSearch;
 impl Searcher for NoSearch {
@@ -146,6 +147,9 @@ impl BoardOps for RecordingBoard {
             BoardOp::AssignAgent { card_id, agent } => {
                 format!("{MARK_AGENT_ASSIGNED} to card {card_id}: {agent}")
             }
+            BoardOp::SetCron { card_id, .. } => {
+                format!("card {card_id} {MARK_CRON_SET}: `0 */5 * * *`")
+            }
             _ => "ok".to_string(),
         };
         self.0.lock().expect("lock").push(req.op);
@@ -188,9 +192,17 @@ async fn agent_creates_card_then_assigns_agent() {
         .await
         .expect("chat must complete");
 
-    assert_eq!(outcome.text, "done");
+    assert!(
+        outcome.text.starts_with("done\n\nrun: "),
+        "{}",
+        outcome.text
+    );
     let ops = board.0.lock().expect("lock");
-    assert_eq!(ops.len(), 2, "card + agent must both reach the board");
+    assert_eq!(
+        ops.len(),
+        3,
+        "card + agent must both reach the board, then the auto-run"
+    );
     assert!(matches!(
         &ops[0],
         BoardOp::CreateCard { project_id: 1, title, description: None } if title == "trump-card"
@@ -260,6 +272,84 @@ async fn work_request_without_tool_opens_card_and_runs_it() {
         BoardOp::AssignAgent { card_id: 2, agent } if agent == "nightly"
     ));
     assert!(matches!(&ops[2], BoardOp::RunCard { card_id: 2 }));
+}
+
+#[tokio::test]
+async fn scheduled_card_is_not_auto_run() {
+    // engine: create -> agent -> routine -> done (no CARD_RUN) — the card is
+    // on a schedule, so the backend must NOT run it once now.
+    struct RoutineEngine;
+    impl Inference for RoutineEngine {
+        fn submit(
+            &self,
+            prompt: String,
+            _max_tokens: usize,
+            _tok: TokKind,
+            _think: bool,
+        ) -> Result<tokio::sync::oneshot::Receiver<Result<GenReply, String>>, String> {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            let saw_agent = prompt.contains(MARK_AGENT_ASSIGNED);
+            let saw_card = prompt.contains(MARK_CARD_CREATED);
+            let saw_cron = prompt.contains(MARK_CRON_SET);
+            std::thread::spawn(move || {
+                let text = if saw_cron {
+                    "done".to_string()
+                } else if saw_agent {
+                    "TOOL: CARD_ROUTINE 2 0 */5 * * *".to_string()
+                } else if saw_card {
+                    "TOOL: CARD_AGENT 2 nightly".to_string()
+                } else {
+                    "TOOL: CARD_CREATE 1 trump-card".to_string()
+                };
+                let _ = tx.send(Ok(GenReply {
+                    model: "fake".to_string(),
+                    text,
+                    stats: GenStats::default(),
+                }));
+            });
+            Ok(rx)
+        }
+    }
+
+    let board = Arc::new(RecordingBoard(Mutex::new(Vec::new())));
+    let mut agents = backend::port::outbound::MockAgentConfigRepo::new();
+    agents.expect_by_name().returning(|_| Ok(None));
+    let use_case = ChatUseCase::new(
+        Arc::new(NoSearch),
+        Arc::new(NoFetch),
+        Arc::new(NoShell),
+        Arc::new(RoutineEngine),
+        Arc::new(NoModels),
+        None,
+        Arc::clone(&board) as Arc<dyn BoardOps>,
+        Arc::new(agents),
+    );
+
+    let outcome = use_case
+        .execute(ChatCmd {
+            message: "run backups every 5 hours".to_string(),
+            mode: SearchMode::Auto,
+            max_tokens: 64,
+            tokenizer: TokKind::Normal,
+            think: false,
+            board_token: Some("tok".to_string()),
+            agent: Some("nightly".to_string()),
+            image: None,
+            thread_id: None,
+            card_id: None,
+            project_id: Some(1),
+        })
+        .await
+        .expect("chat must complete");
+
+    assert!(
+        !outcome.text.contains("run: "),
+        "no auto-run note: {}",
+        outcome.text
+    );
+    let ops = board.0.lock().expect("lock");
+    assert_eq!(ops.len(), 3, "create + agent + routine, no run");
+    assert!(matches!(&ops[2], BoardOp::SetCron { .. }));
 }
 
 #[tokio::test]

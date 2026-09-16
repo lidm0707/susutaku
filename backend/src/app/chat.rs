@@ -51,6 +51,7 @@ pub const CLASSIFY_QUESTION: &str = "\n\nDoes the user ask to do, build, change,
 const CARD_ID_PREFIX: &str = "card ";
 const AUTO_TITLE_FALLBACK: &str = "task";
 const AUTO_REPLY_OPEN: &str = "opened ";
+const AUTO_RUN_NOTE: &str = "run: ";
 const BOARD_ERROR_PREFIX: &str = "error:";
 /// At most this many files are picked up from one shell output.
 const ARTIFACT_SCAN_MAX: usize = 8;
@@ -774,6 +775,11 @@ impl ChatHandling for ChatUseCase {
             context.push('\n');
         }
         let mut trace: Vec<ToolUse> = Vec::new();
+        // card-flow progress across this turn's board tools
+        let mut created_card: Option<i64> = None;
+        let mut card_assigned = false;
+        let mut card_ran = false;
+        let mut card_scheduled = false;
         // stream every finished tool call to the UI as it happens
         let emit_tool = |u: &ToolUse| {
             if let Some(tx) = &self.tools_tx {
@@ -995,6 +1001,21 @@ impl ChatHandling for ChatUseCase {
                     let kind = Self::board_kind(&call).expect("matched guard");
                     let op = Self::board_op(&call).expect("matched guard");
                     let out = self.board_blocking(token, op).await;
+                    // Track card-flow progress: a created card with an agent
+                    // but no run gets auto-run after the loop (see below).
+                    match &call {
+                        ToolCall::CardCreate { .. } => {
+                            created_card = parse_card_id(&out);
+                            card_ran = false;
+                        }
+                        ToolCall::CardAgent { .. } => card_assigned = true,
+                        ToolCall::CardRun { .. } => {
+                            card_ran = true;
+                            created_card = None;
+                        }
+                        ToolCall::CardSchedule { .. } => card_scheduled = true,
+                        _ => {}
+                    }
                     let ok = !out.starts_with(BOARD_ERROR_PREFIX);
                     trace.push(ToolUse {
                         kind,
@@ -1043,6 +1064,20 @@ impl ChatHandling for ChatUseCase {
         if let Some(text) = self.auto_card(&cmd, allow_tools, rounds, &reply).await {
             last_good.0 = text.clone();
             reply.text = text;
+        }
+
+        // The model created + assigned a card but dropped CARD_RUN: run it
+        // here so a work turn always ends in an executed card. Skipped when
+        // the card is on a schedule (it will run when due).
+        if let (Some(card_id), true, false, false) =
+            (created_card, card_assigned, card_ran, card_scheduled)
+        {
+            let run = self
+                .board_blocking(cmd.board_token.clone(), BoardOp::RunCard { card_id })
+                .await;
+            let note = format!("\n\n{AUTO_RUN_NOTE}{run}");
+            last_good.0.push_str(&note);
+            reply.text.push_str(&note);
         }
 
         // Tool budget exhausted while the model still wants a tool: force a
