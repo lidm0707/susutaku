@@ -1,6 +1,5 @@
-//! Agent board flow: a model asking for scheduled work must be able to create
-//! a pipeline WITH a valid spec (not just an empty shell), a card, and have
-//! the ops reach the board in order.
+//! Agent board flow: a model asked to do scheduled work must create a card,
+//! assign an agent to it, and have the ops reach the board in order.
 
 use std::sync::{Arc, Mutex};
 
@@ -13,11 +12,11 @@ use backend::port::outbound::{BoardOps, Fetcher, Inference, ModelSwitch, Runner,
 use susutaku_mlx::stats::GenStats;
 use susutaku_mlx::tok::TokKind;
 
-const SPEC_SEARCH: &str =
-    r#"{"nodes":[{"id":"a","stage":"search","params":{"query":"donald trump"}}],"links":[]}"#;
-const MARK_PIPELINE_CREATED: &str = "pipeline 1 created";
 const MARK_CARD_CREATED: &str = "card 2 created";
+const MARK_AGENT_ASSIGNED: &str = "agent nightly assigned";
 const MARK_TOOL_OFFER: &str = "TOOL:";
+const MARK_CLASSIFY: &str = "YES/NO classifier";
+const MARK_CRON_SET: &str = "routine set";
 
 struct NoSearch;
 impl Searcher for NoSearch {
@@ -55,8 +54,8 @@ impl Runner for NoShell {
     }
 }
 
-/// Round 1: create a pipeline with a spec. Round 2 (sees the creation note in
-/// the tool results): create a card. After that: final answer.
+/// Round 1: create a card. Round 2 (sees the creation note in the tool
+/// results): assign an agent. After that: final answer.
 struct BoardFlowEngine;
 impl Inference for BoardFlowEngine {
     fn submit(
@@ -67,16 +66,16 @@ impl Inference for BoardFlowEngine {
         _think: bool,
     ) -> Result<tokio::sync::oneshot::Receiver<Result<GenReply, String>>, String> {
         let (tx, rx) = tokio::sync::oneshot::channel();
-        let saw_pipeline = prompt.contains(MARK_PIPELINE_CREATED);
+        let saw_agent = prompt.contains(MARK_AGENT_ASSIGNED);
         let saw_card = prompt.contains(MARK_CARD_CREATED);
         let saw_offer = prompt.contains(MARK_TOOL_OFFER);
         std::thread::spawn(move || {
-            let text = if saw_card {
+            let text = if saw_agent {
                 "done".to_string()
-            } else if saw_pipeline {
-                "TOOL: CARD_CREATE 1 trump-card".to_string()
+            } else if saw_card {
+                "TOOL: CARD_AGENT 2 nightly".to_string()
             } else if saw_offer {
-                format!(r"TOOL: PIPELINE_CREATE nightly {SPEC_SEARCH}")
+                "TOOL: CARD_CREATE 1 trump-card".to_string()
             } else {
                 "done".to_string()
             };
@@ -89,6 +88,44 @@ impl Inference for BoardFlowEngine {
         Ok(rx)
     }
 }
+
+/// Never calls a tool. The classifier turn answers YES (work request) or NO
+/// (plain question) depending on the user message.
+struct AutoCardEngine;
+impl Inference for AutoCardEngine {
+    fn submit(
+        &self,
+        prompt: String,
+        _max_tokens: usize,
+        _tok: TokKind,
+        _think: bool,
+    ) -> Result<tokio::sync::oneshot::Receiver<Result<GenReply, String>>, String> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let classify = prompt.contains(MARK_CLASSIFY);
+        let work = prompt.contains(AUTO_WORK_MARK);
+        std::thread::spawn(move || {
+            let text = if classify {
+                if work {
+                    "YES".to_string()
+                } else {
+                    "NO".to_string()
+                }
+            } else if work {
+                "the project has these crates".to_string()
+            } else {
+                "answered normally".to_string()
+            };
+            let _ = tx.send(Ok(GenReply {
+                model: "fake".to_string(),
+                text,
+                stats: GenStats::default(),
+            }));
+        });
+        Ok(rx)
+    }
+}
+
+const AUTO_WORK_MARK: &str = "add feature set env";
 
 struct NoModels;
 impl ModelSwitch for NoModels {
@@ -105,18 +142,27 @@ struct RecordingBoard(Mutex<Vec<BoardOp>>);
 #[async_trait::async_trait]
 impl BoardOps for RecordingBoard {
     async fn exec(&self, req: BoardRequest) -> BoardResult {
-        let reply = match req.op {
-            BoardOp::CreatePipeline { .. } => MARK_PIPELINE_CREATED.to_string() + ": nightly",
-            BoardOp::CreateCard { .. } => "card 2 created".to_string(),
+        let reply = match &req.op {
+            BoardOp::CreateCard { .. } => MARK_CARD_CREATED.to_string(),
+            BoardOp::AssignAgent { card_id, agent } => {
+                format!("{MARK_AGENT_ASSIGNED} to card {card_id}: {agent}")
+            }
+            BoardOp::SetCron { card_id, .. } => {
+                format!("card {card_id} {MARK_CRON_SET}: `0 */5 * * *`")
+            }
             _ => "ok".to_string(),
         };
         self.0.lock().expect("lock").push(req.op);
         Ok(reply)
     }
+
+    async fn card_context(&self, _card_id: i64) -> Option<String> {
+        None
+    }
 }
 
 #[tokio::test]
-async fn agent_creates_pipeline_with_spec_then_card() {
+async fn agent_creates_card_then_assigns_agent() {
     let board = Arc::new(RecordingBoard(Mutex::new(Vec::new())));
     let use_case = ChatUseCase::new(
         Arc::new(NoSearch),
@@ -141,19 +187,184 @@ async fn agent_creates_pipeline_with_spec_then_card() {
             image: None,
             thread_id: None,
             card_id: None,
+            project_id: None,
         })
         .await
         .expect("chat must complete");
 
-    assert_eq!(outcome.text, "done");
+    assert!(
+        outcome.text.starts_with("done\n\nrun: "),
+        "{}",
+        outcome.text
+    );
     let ops = board.0.lock().expect("lock");
-    assert_eq!(ops.len(), 2, "pipeline + card must both reach the board");
+    assert_eq!(
+        ops.len(),
+        3,
+        "card + agent must both reach the board, then the auto-run"
+    );
     assert!(matches!(
         &ops[0],
-        BoardOp::CreatePipeline { name, spec } if name == "nightly" && spec.as_deref() == Some(SPEC_SEARCH)
+        BoardOp::CreateCard { project_id: 1, title, description: None } if title == "trump-card"
     ));
     assert!(matches!(
         &ops[1],
-        BoardOp::CreateCard { project_id: 1, title, description: None } if title == "trump-card"
+        BoardOp::AssignAgent { card_id: 2, agent } if agent == "nightly"
     ));
+}
+
+fn auto_card_use_case(board: Arc<dyn BoardOps>) -> ChatUseCase {
+    let mut agents = backend::port::outbound::MockAgentConfigRepo::new();
+    // bound agent is unknown to the repo — tools fail open to the full set
+    agents.expect_by_name().returning(|_| Ok(None));
+    ChatUseCase::new(
+        Arc::new(NoSearch),
+        Arc::new(NoFetch),
+        Arc::new(NoShell),
+        Arc::new(AutoCardEngine),
+        Arc::new(NoModels),
+        None,
+        board,
+        Arc::new(agents),
+    )
+}
+
+fn auto_cmd(message: &str) -> ChatCmd {
+    ChatCmd {
+        message: message.to_string(),
+        mode: SearchMode::Auto,
+        max_tokens: 64,
+        tokenizer: TokKind::Normal,
+        think: false,
+        board_token: Some("tok".to_string()),
+        agent: Some("nightly".to_string()),
+        image: None,
+        thread_id: None,
+        card_id: None,
+        project_id: Some(1),
+    }
+}
+
+#[tokio::test]
+async fn work_request_without_tool_opens_card_and_runs_it() {
+    let board = Arc::new(RecordingBoard(Mutex::new(Vec::new())));
+    let use_case = auto_card_use_case(Arc::clone(&board) as Arc<dyn BoardOps>);
+
+    let outcome = use_case
+        .execute(auto_cmd("add feature set env in frontend"))
+        .await
+        .expect("chat must complete");
+
+    assert!(
+        outcome.text.starts_with("opened card 2"),
+        "{}",
+        outcome.text
+    );
+    let ops = board.0.lock().expect("lock");
+    assert_eq!(ops.len(), 3, "create + assign + run must reach the board");
+    assert!(matches!(
+        &ops[0],
+        BoardOp::CreateCard { project_id: 1, title, description: Some(desc) }
+            if title.contains("add feature") && desc.contains("set env")
+    ));
+    assert!(matches!(
+        &ops[1],
+        BoardOp::AssignAgent { card_id: 2, agent } if agent == "nightly"
+    ));
+    assert!(matches!(&ops[2], BoardOp::RunCard { card_id: 2 }));
+}
+
+#[tokio::test]
+async fn scheduled_card_is_not_auto_run() {
+    // engine: create -> agent -> routine -> done (no CARD_RUN) — the card is
+    // on a schedule, so the backend must NOT run it once now.
+    struct RoutineEngine;
+    impl Inference for RoutineEngine {
+        fn submit(
+            &self,
+            prompt: String,
+            _max_tokens: usize,
+            _tok: TokKind,
+            _think: bool,
+        ) -> Result<tokio::sync::oneshot::Receiver<Result<GenReply, String>>, String> {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            let saw_agent = prompt.contains(MARK_AGENT_ASSIGNED);
+            let saw_card = prompt.contains(MARK_CARD_CREATED);
+            let saw_cron = prompt.contains(MARK_CRON_SET);
+            std::thread::spawn(move || {
+                let text = if saw_cron {
+                    "done".to_string()
+                } else if saw_agent {
+                    "TOOL: CARD_ROUTINE 2 0 */5 * * *".to_string()
+                } else if saw_card {
+                    "TOOL: CARD_AGENT 2 nightly".to_string()
+                } else {
+                    "TOOL: CARD_CREATE 1 trump-card".to_string()
+                };
+                let _ = tx.send(Ok(GenReply {
+                    model: "fake".to_string(),
+                    text,
+                    stats: GenStats::default(),
+                }));
+            });
+            Ok(rx)
+        }
+    }
+
+    let board = Arc::new(RecordingBoard(Mutex::new(Vec::new())));
+    let mut agents = backend::port::outbound::MockAgentConfigRepo::new();
+    agents.expect_by_name().returning(|_| Ok(None));
+    let use_case = ChatUseCase::new(
+        Arc::new(NoSearch),
+        Arc::new(NoFetch),
+        Arc::new(NoShell),
+        Arc::new(RoutineEngine),
+        Arc::new(NoModels),
+        None,
+        Arc::clone(&board) as Arc<dyn BoardOps>,
+        Arc::new(agents),
+    );
+
+    let outcome = use_case
+        .execute(ChatCmd {
+            message: "run backups every 5 hours".to_string(),
+            mode: SearchMode::Auto,
+            max_tokens: 64,
+            tokenizer: TokKind::Normal,
+            think: false,
+            board_token: Some("tok".to_string()),
+            agent: Some("nightly".to_string()),
+            image: None,
+            thread_id: None,
+            card_id: None,
+            project_id: Some(1),
+        })
+        .await
+        .expect("chat must complete");
+
+    assert!(
+        !outcome.text.contains("run: "),
+        "no auto-run note: {}",
+        outcome.text
+    );
+    let ops = board.0.lock().expect("lock");
+    assert_eq!(ops.len(), 3, "create + agent + routine, no run");
+    assert!(matches!(&ops[2], BoardOp::SetCron { .. }));
+}
+
+#[tokio::test]
+async fn plain_question_keeps_the_normal_answer() {
+    let board = Arc::new(RecordingBoard(Mutex::new(Vec::new())));
+    let use_case = auto_card_use_case(Arc::clone(&board) as Arc<dyn BoardOps>);
+
+    let outcome = use_case
+        .execute(auto_cmd("what does this project have?"))
+        .await
+        .expect("chat must complete");
+
+    assert_eq!(outcome.text, "answered normally");
+    assert!(
+        board.0.lock().expect("lock").is_empty(),
+        "no board ops for a question"
+    );
 }

@@ -11,7 +11,7 @@ members = [
     "crates/agent_3th_cli/codex_cli",
     "crates/agent_3th_cli/claude_cli",
     "crates/pdf-rs",
-    "crates/kanban-rs",
+    "crates/task-rs",
     "crates/queue-rs",
     "crates/manager-rs",
     "crates/piplines",
@@ -55,7 +55,7 @@ latenspace = { path = "crates/latenspace" }
 knowledge-graph = { path = "crates/knowledge_graph" }
 token-gate-adapter = { path = "crates/token_gate_adapter" }
 pdf-rs = { path = "crates/pdf-rs" }
-kanban-rs = { path = "crates/kanban-rs" }
+task-rs = { path = "crates/task-rs" }
 codex-usage-rs = { path = "crates/codex-usage-rs" }
 queue-rs = { path = "crates/queue-rs" }
 manager-rs = { path = "crates/manager-rs" }

@@ -1,4 +1,4 @@
-# ISOLATED e2e stack for the pipeline-run spec: postgres + mock-model +
+# ISOLATED e2e stack for the card-run spec: postgres + mock-model +
 # backend + web + playwright, all in containers on a private network with a
 # dedicated compose project name. Shares nothing with the dev stack or the
 # other e2e stacks (own db, own network, own artifact dir check_pipe/).
@@ -79,8 +79,8 @@ services:
       E2E_PASSWORD: e2e-e2e-e2e
       E2E_PG_HOST: postgres
       E2E_PG_PORT: "5432"
-    # Only the pipeline-run spec in this stack (playwright filter arg).
-    command: ["pipeline-run"]
+    # Only the card-run spec in this stack (playwright filter arg).
+    command: ["card-run"]
     volumes:
       - ../../playwright/tests:/work/tests
       - ../../playwright/playwright.config.ts:/work/playwright.config.ts:ro

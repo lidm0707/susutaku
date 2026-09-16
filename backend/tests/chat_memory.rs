@@ -127,6 +127,10 @@ impl BoardOps for DenyBoard {
     async fn exec(&self, _req: backend::domain::BoardRequest) -> BoardResult {
         Err("board tools disabled in test".to_string())
     }
+
+    async fn card_context(&self, _card_id: i64) -> Option<String> {
+        None
+    }
 }
 
 #[tokio::test]
@@ -146,6 +150,7 @@ async fn recalls_before_and_remembers_after() {
             image: None,
             thread_id: Some("thread-1".to_string()),
             card_id: None,
+            project_id: None,
         })
         .await
         .expect("chat ok");
@@ -186,6 +191,7 @@ async fn works_without_memory() {
             image: None,
             thread_id: None,
             card_id: None,
+            project_id: None,
         })
         .await
         .expect("chat ok");

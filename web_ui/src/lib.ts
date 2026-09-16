@@ -3,7 +3,6 @@ import { toast } from "./ui/Toast.jsx";
 export const API_BASE = import.meta.env.VITE_API_BASE || "";
 
 export const PARAM_CARD = "card";
-export const PARAM_PIPELINE = "pipeline";
 export const PARAM_PROJECT = "project";
 
 export function set_query_param(key: string, value: string | null) {
@@ -80,6 +79,8 @@ export interface Agent {
   allowed_tools?: string[];
   /// false = the agent must never receive images (screenshots).
   receive_images?: boolean;
+  /// Reasoning depth: "off" (default) | "low" | "medium" | "high".
+  thinking?: string;
 }
 
 export interface Workspace {
@@ -100,9 +101,12 @@ export interface Card {
   priority: string;
   agent_name?: string;
   agent_state?: unknown;
+  /** Last recorded run status; a record, not a preference. */
+  run_status?: string;
+  /** Agent that executed the most recent run. */
+  last_agent?: string | null;
   assignee?: string | null;
-  pipeline_id?: number | null;
-  pipeline_name?: string;
+  image?: string | null;
   cron?: string | null;
   deadline?: string | null;
   labels: string | null;
@@ -125,10 +129,8 @@ export interface CardRunStage {
 }
 
 export interface CardRun {
-  pipeline_id: number;
-  pipeline_name: string;
   status: RunStatus;
-  stages: CardRunStage[];
+  stages?: CardRunStage[];
   output?: string | null;
   finished_at: string;
 }
@@ -143,7 +145,6 @@ export interface CronJob {
   card_id: number;
   title: string;
   cron: string;
-  pipeline_name?: string | null;
   next_run: number;
 }
 
@@ -153,30 +154,6 @@ export interface Comment {
   author: string;
   body: string;
   created_at: string;
-}
-
-export interface PipelineNode {
-  id: string;
-  stage: string;
-  params: unknown;
-  x?: number;
-  y?: number;
-}
-
-export interface PipelineLink {
-  from: string;
-  to: string;
-}
-
-export interface PipelineSpec {
-  nodes: PipelineNode[];
-  links: PipelineLink[];
-}
-
-export interface Pipeline {
-  id: number;
-  name: string;
-  spec?: PipelineSpec;
 }
 
 export interface SandboxDir {
@@ -272,6 +249,44 @@ export async function remove_git_repo(project_id: number): Promise<void> {
   if (!res.ok) throw new ApiError(res.status, await res.text());
 }
 
+export type AgentGitOp = "status" | "diff" | "branch" | "commit" | "push" | "pr";
+
+export interface AgentGitBody {
+  op: AgentGitOp;
+  url?: string;
+  name?: string;
+  message?: string;
+  branch?: string;
+  title?: string;
+  head?: string;
+  base?: string;
+}
+
+export async function agent_git(
+  agent: string,
+  body: AgentGitBody,
+  project_id?: number
+): Promise<string> {
+  const res = await api(`/api/manager/agents/${encodeURIComponent(agent)}/git`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...body, project_id }),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`git ${body.op} failed: ${res.status} ${text}`);
+  }
+  const reply = await res.json();
+  return (reply as { output: string }).output;
+}
+
+export interface ManagerAgent {
+  agent: string;
+  work_tree: string;
+  runs: number;
+  last_cmd: string | null;
+}
+
 export interface PromptSection {
   role: string;
   body: string;
@@ -301,7 +316,7 @@ export function clear_token(): void {
 }
 
 export interface BoardEvent {
-  kind: "card" | "pipeline" | "cron" | "attachment";
+  kind: "card" | "cron" | "attachment";
 }
 
 const WS_RECONNECT_MS = 5000;
@@ -649,7 +664,8 @@ export async function chat_zai(
   system?: PromptSection[],
   agent?: string,
   thread_id?: number,
-  image?: string
+  image?: string,
+  project_id?: number
 ): Promise<ChatReply> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   const token = get_token();
@@ -657,7 +673,7 @@ export async function chat_zai(
   const res = await fetch(`${API_BASE}/api/chat/zai`, {
     method: "POST",
     headers,
-    body: JSON.stringify({ message, model: model || undefined, system, agent, thread_id, image }),
+    body: JSON.stringify({ message, model: model || undefined, system, agent, thread_id, image, project_id }),
   });
   if (!res.ok) throw new ApiError(res.status, await res.text());
   return res.json();
@@ -680,7 +696,8 @@ export async function chat_zai_stream(
   thread_id: number | undefined,
   image: string | undefined,
   on_event: (ev: ChatStreamEvent) => void,
-  run_id?: string
+  run_id?: string,
+  project_id?: number
 ): Promise<ChatReply> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   const token = get_token();
@@ -688,7 +705,7 @@ export async function chat_zai_stream(
   const res = await fetch(`${API_BASE}/api/chat/zai/stream`, {
     method: "POST",
     headers,
-    body: JSON.stringify({ message, model: model || undefined, system, agent, thread_id, image, run_id }),
+    body: JSON.stringify({ message, model: model || undefined, system, agent, thread_id, image, run_id, project_id }),
   });
   if (!res.ok || !res.body) throw new ApiError(res.status, await res.text());
   const reader = res.body.getReader();
@@ -914,9 +931,35 @@ export async function create_project(workspace_id: number, name: string): Promis
   });
 }
 
+export async function fetch_tasks(project_id: number | null): Promise<Card[]> {
+  const qs = project_id == null ? "" : `?project_id=${project_id}`;
+  return (await api(`/api/tasks${qs}`)).json();
+}
+
+export async function set_task_status(id: number, status: string): Promise<Response> {
+  return api(`/api/tasks/${id}/status`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ status }),
+  });
+}
+
+export async function create_task(
+  project_id: number | null,
+  title: string,
+  description: string,
+  priority: string
+): Promise<Response> {
+  return api("/api/tasks", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ project_id, title, description, priority }),
+  });
+}
+
 export async function fetch_cards(project_id: number | null): Promise<Card[]> {
   const qs = project_id == null ? "" : `?project_id=${project_id}`;
-  return (await api(`/api/kanban/cards${qs}`)).json();
+  return (await api(`/api/task/cards${qs}`)).json();
 }
 
 export async function create_card(
@@ -929,7 +972,7 @@ export async function create_card(
   checklist?: ChecklistItem[],
   estimate?: number | null
 ): Promise<Response> {
-  return api("/api/kanban/cards", {
+  return api("/api/task/cards", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -946,7 +989,7 @@ export async function create_card(
 }
 
 export async function move_card(id: number, column_id: string, position: number): Promise<Response> {
-  return api(`/api/kanban/cards/${id}/move`, {
+  return api(`/api/task/cards/${id}/move`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ column_id, position }),
@@ -954,7 +997,7 @@ export async function move_card(id: number, column_id: string, position: number)
 }
 
 export async function remove_card(id: number): Promise<Response> {
-  return api(`/api/kanban/cards/${id}`, { method: "DELETE" });
+  return api(`/api/task/cards/${id}`, { method: "DELETE" });
 }
 
 export async function update_card(
@@ -968,7 +1011,7 @@ export async function update_card(
   checklist?: ChecklistItem[],
   estimate?: number | null
 ): Promise<Card> {
-  const res = await api(`/api/kanban/cards/${id}`, {
+  const res = await api(`/api/task/cards/${id}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -986,11 +1029,11 @@ export async function update_card(
 }
 
 export async function fetch_comments(card_id: number): Promise<Comment[]> {
-  return (await api(`/api/kanban/cards/${card_id}/comments`)).json();
+  return (await api(`/api/task/cards/${card_id}/comments`)).json();
 }
 
 export async function add_comment(card_id: number, body: string): Promise<Comment> {
-  const res = await api(`/api/kanban/cards/${card_id}/comments`, {
+  const res = await api(`/api/task/cards/${card_id}/comments`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ body }),
@@ -1001,8 +1044,12 @@ export async function add_comment(card_id: number, body: string): Promise<Commen
 const CHAT_MAX_TOKENS = 1024;
 
 /// Ask the agent engine a question (same backend as the Chat page).
-/// `card_id` targets a kanban card: tool artifacts attach to it as resources.
-export async function chat(message: string, card_id?: number): Promise<ChatReply> {
+/// `card_id` targets a task card: tool artifacts attach to it as resources.
+export async function chat(
+  message: string,
+  card_id?: number,
+  agent?: string
+): Promise<ChatReply> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
   };
@@ -1011,7 +1058,13 @@ export async function chat(message: string, card_id?: number): Promise<ChatReply
   const res = await fetch(`${API_BASE}/api/chat`, {
     method: "POST",
     headers,
-    body: JSON.stringify({ message, max_tokens: CHAT_MAX_TOKENS, search: "auto", card_id }),
+    body: JSON.stringify({
+      message,
+      max_tokens: CHAT_MAX_TOKENS,
+      search: "auto",
+      card_id,
+      agent,
+    }),
   });
   if (!res.ok) throw new ApiError(res.status, await res.text());
   return res.json();
@@ -1055,10 +1108,6 @@ export async function kick_machine(hostname: string): Promise<{ hostname: string
   return res.json();
 }
 
-export async function fetch_pipelines(): Promise<Pipeline[]> {
-  return (await api("/api/pipelines")).json();
-}
-
 export interface MachineAgent {
   agent: string;
   work_tree: string;
@@ -1087,7 +1136,7 @@ export interface CardAgentState {
 }
 
 export async function fetch_card_agent(id: number): Promise<CardAgentState> {
-  return (await api(`/api/kanban/cards/${id}/agent`)).json();
+  return (await api(`/api/task/cards/${id}/agent`)).json();
 }
 
 export async function fetch_machine_agents(): Promise<MachineAgent[]> {
@@ -1195,11 +1244,27 @@ export interface StoredOutcome {
   patch: string;
   commit: string | null;
   output_id: number;
+  /** Set when the finish asked for a push: remote output or failure. */
+  push?: string;
 }
 
-export async function finish_manager_agent(agent: string): Promise<StoredOutcome> {
+export interface FinishPush {
+  push: boolean;
+  /** Project whose bound git repo supplies the push url + token. */
+  project_id?: number;
+  branch?: string;
+}
+
+export async function finish_manager_agent(
+  agent: string,
+  push?: FinishPush
+): Promise<StoredOutcome> {
   return (
-    await api(`/api/manager/agents/${encodeURIComponent(agent)}/finish`, { method: "POST" })
+    await api(`/api/manager/agents/${encodeURIComponent(agent)}/finish`, {
+      method: "POST",
+      headers: push ? { "Content-Type": "application/json" } : undefined,
+      body: push ? JSON.stringify(push) : undefined,
+    })
   ).json();
 }
 
@@ -1211,80 +1276,97 @@ export async function set_agent_output_status(id: number, status: AgentOutput["s
   });
 }
 
-export type PortKind = "any" | "text" | "json" | "image";
-
-export interface StagePorts {
-  input: PortKind;
-  output: PortKind;
-  wired: boolean;
-  doc: string;
-  params: { key: string; hint: string; required: boolean }[];
+export async function delete_agent_output(id: number): Promise<void> {
+  await api(`/api/agent-outputs/${id}`, { method: "DELETE" });
 }
 
-export type PipelineSchema = Record<string, StagePorts>;
+// ---- Routines: recurring automation, separate entity from tasks ----
 
-export async function fetch_pipeline_schema(): Promise<PipelineSchema> {
-  return (await api("/api/pipelines/schema")).json();
+export interface Routine {
+  id: number;
+  name: string;
+  cron: string;
+  agent: string;
+  instruction: string;
+  enabled: boolean;
+  created_at: string;
 }
 
-export interface PipelineRunStage {
-  node: string;
-  stage: string;
-  status: "ok" | "failed";
-  note: string;
+export interface RoutineRun {
+  id: number;
+  routine_id: number;
+  trigger: string;
+  started_at: string;
+  finished_at: string | null;
+  ok: boolean;
+  summary: string;
 }
 
-export interface PipelineRunRecord {
-  pipeline_id: number;
-  pipeline_name: string;
-  status: "ok" | "failed";
-  stages: PipelineRunStage[];
-  output?: string | null;
-  resources: string[];
-  finished_at: string;
+export async function fetch_routines(): Promise<Routine[]> {
+  return (await api("/api/routines")).json();
 }
 
-export async function test_pipeline(
+function routine_body(
+  name: string,
+  cron: string,
+  agent: string,
+  instruction: string,
+  enabled: boolean
+): string {
+  return JSON.stringify({ name, cron, agent, instruction, enabled });
+}
+
+export async function create_routine(
+  name: string,
+  cron: string,
+  agent: string,
+  instruction: string,
+  enabled: boolean
+): Promise<Routine> {
+  return (
+    await api("/api/routines", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: routine_body(name, cron, agent, instruction, enabled),
+    })
+  ).json();
+}
+
+export async function update_routine(
   id: number,
-  input: string
-): Promise<PipelineRunRecord> {
-  const res = await api(`/api/pipelines/${id}/test`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ input }),
-  });
-  return res.json();
+  name: string,
+  cron: string,
+  agent: string,
+  instruction: string,
+  enabled: boolean
+): Promise<Routine> {
+  return (
+    await api(`/api/routines/${id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: routine_body(name, cron, agent, instruction, enabled),
+    })
+  ).json();
+}
+
+export async function delete_routine(id: number): Promise<void> {
+  await api(`/api/routines/${id}`, { method: "DELETE" });
+}
+
+export async function run_routine(id: number): Promise<RoutineRun> {
+  return (
+    await api(`/api/routines/${id}/run`, { method: "POST" })
+  ).json();
+}
+
+export async function fetch_routine_runs(id: number): Promise<RoutineRun[]> {
+  return (await api(`/api/routines/${id}/runs`)).json();
 }
 
 export async function fetch_card_resources(
   card_id: number
 ): Promise<{ id: number; name: string; content: string; created_at: string }[]> {
-  return (await api(`/api/kanban/cards/${card_id}/resources`)).json();
-}
-
-export async function create_pipeline(name: string, spec: PipelineSpec): Promise<Pipeline> {
-  const res = await api("/api/pipelines", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, spec }),
-  });
-  return res.json();
-}
-
-export async function update_pipeline(
-  id: number | "new",
-  name: string,
-  spec: PipelineSpec
-): Promise<Response> {
-  return api(`/api/pipelines/${id}`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, spec }),
-  });
-}
-
-export async function remove_pipeline(id: number): Promise<Response> {
-  return api(`/api/pipelines/${id}`, { method: "DELETE" });
+  return (await api(`/api/task/cards/${card_id}/resources`)).json();
 }
 
 export interface UploadReply {
@@ -1325,21 +1407,21 @@ export async function fetch_attachment_blob(path: string): Promise<Blob> {
   return res.blob();
 }
 
-export async function set_card_pipeline(id: number, pipeline_id: number | null): Promise<Response> {
-  return api(`/api/kanban/cards/${id}/pipeline`, {
+export async function set_card_image(id: number, image: string | null): Promise<Response> {
+  return api(`/api/task/cards/${id}/image`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ pipeline_id }),
+    body: JSON.stringify({ image }),
   });
 }
 
 export async function run_card(id: number): Promise<CardRun> {
-  const res = await api(`/api/kanban/cards/${id}/run`, { method: "POST" });
+  const res = await api(`/api/task/cards/${id}/run`, { method: "POST" });
   return res.json();
 }
 
 export async function rename_card(card: Card, title: string): Promise<Response> {
-  return api(`/api/kanban/cards/${card.id}`, {
+  return api(`/api/task/cards/${card.id}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -1356,7 +1438,7 @@ export async function rename_card(card: Card, title: string): Promise<Response> 
 }
 
 export async function set_card_schedule(id: number, cron: string | null): Promise<Response> {
-  return api(`/api/kanban/cards/${id}/schedule`, {
+  return api(`/api/task/cards/${id}/schedule`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ cron }),
@@ -1400,7 +1482,7 @@ export async function set_agent(
   name: string,
   state: unknown
 ): Promise<Response> {
-  return api(`/api/kanban/cards/${id}/agent`, {
+  return api(`/api/task/cards/${id}/agent`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name, state }),

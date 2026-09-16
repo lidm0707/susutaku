@@ -11,16 +11,17 @@ susutaku/
 │    │                            auth, settings, quota board
 │    └── src/{api.rs, app/, domain/, infra/, port/}
 ├── crates/
-│   ├── core-agent/            ← agent state, sandbox (sandbox/{macos,linux,windows}.rs), web search
-│   ├── manager-rs/            ← manager process: agent sandboxes, run/logs API
+│   ├── core-agent/            ← agent state, podman sandbox (podman/{sandbox,runner,image,git_in_sandbox}.rs),
+│   │                            sandbox contract (sandbox_abstract_layer.rs), toolcalls, web search
+│   ├── manager-rs/            ← manager process: per-agent/per-task slots, work trees, run/logs API
 │   ├── local_model/           ← standalone model server (MLX on Metal, hub, HTTP API)
 │   │                            — owns model size/quant policy (see its AGENTS.md)
 │   ├── hf_loader/             ← model dir scanning + loadability filter (policy: local_model/AGENTS.md)
 │   ├── mlx-rs/                ← MLX inference backend
 │   ├── gguf-rs/               ← GGUF model file parsing
-│   ├── kanban-rs/             ← kanban board + Postgres store (query_as!)
-│   │                            workspace → project → card; card agent state
-│   ├── piplines/              ← pipeline graph/stage engine
+│   ├── task-rs/             ← task board + Postgres store (query_as!)
+│   │                            workspace → project → card; card agent state, image, cron, run records
+│   ├── piplines/              ← pipeline graph/stage engine (in workspace; no longer wired to the backend)
 │   ├── prompt-sys/            ← prompt builder + sections
 │   ├── proto-rs/              ← hub/client protocol (codec, client, server)
 │   ├── queue-rs/              ← bounded/unbounded queues
@@ -40,9 +41,14 @@ susutaku/
 │   ├── codex-usage-rs/        ← codex usage analytics (rollouts, scheduler, snapshots, store)
 │   ├── wgpu-rs/               ← GPU/wgpu cdylib+rlib backend
 │   ├── solana_wallet/         ← browser wallet keypair + RPC helpers (wasm-ready, gloo)
+│   ├── math/                  ← pure-Rust math: geomath, linalg, stats, complex, vec
+│   ├── physic/ bio/ chemi/    ← domain simulation crates
+│   ├── quatum/                ← qubit state vectors + gates
+│   ├── plan/                  ← plan/task model (Plan, Task, Priority, Status)
+│   ├── text_ide/              ← text buffer, cursor, search, undo/redo editor
 ├── web_ui/                    ← React TS UI (vite): pages/, components/, ui/, api/
 ├── playwright/                ← e2e suite (tests/, fixtures, mock-model server)
-│                                pipeline-run.spec.ts captures every editor step
+│                                chat/board/review/auth/ux specs; artifacts → screenshots/ + check_pipe/
 ├── docker/                    ← grouped by purpose:
 │   ├── compose/               ← base · demo · deploy · sandbox · playwright*
 │   │                            playwright-pipe.yml = isolated pipeline e2e stack
@@ -58,7 +64,8 @@ susutaku/
 ├── log/                       ← runtime logs
 ├── .sqlx/                     ← sqlx query metadata (offline compile)
 ├── bench/                     ← benchmark/design summaries (coverage, design renders)
-├── docs/                      ← workflow docs (attachments, playwright, docker)
+├── docs/                      ← workflow docs (attachments, playwright, docker,
+│                                review flow, work tree, podman sandbox, git sandbox)
 ├── attachments/               ← uploaded file storage
 ├── piplines/ input/ output/   ← pipeline assets
 ```
@@ -66,18 +73,30 @@ susutaku/
 ## Layout
 
 - `backend/` — HTTP backend (agent API, sandbox adapter, auth, settings)
-- `crates/core-agent` — agent state, sandbox (macOS/Linux/Windows, `sandbox/{macos,linux,windows}.rs`), web search
+- `crates/core-agent` — agent state, sandbox. The platform contract lives in
+  `sandbox_abstract_layer.rs`; the shipping backend is the **rootless podman
+  sandbox** (`podman/`: sandbox, runner, limits, image mgmt, git-in-sandbox).
+  Toolcalls (SHELL/GIT/LSP/coding/…) live in `toolcall/`, web search included.
 - `crates/hf_loader` — model dir scanning + loadability filter (policy: `crates/local_model/AGENTS.md`)
 - `crates/mlx-rs` — MLX inference backend
 - `crates/local_model` — standalone model server (MLX on Metal, hub, HTTP API).
   Owns the model size/quantization policy — see `crates/local_model/AGENTS.md`.
 - `crates/pdf-rs` — PDF parsing
-- `crates/kanban-rs` — kanban board model + Postgres store (`query_as!`); hierarchy
-  workspace → project → task (card); cards carry per-card agent state (`agent_name`, `agent_state` JSON)
+- `crates/task-rs` — task board model + Postgres store (`query_as!`); hierarchy
+  workspace → project → task (card); one entity per piece of work — a Board
+  Card IS a Task. Cards carry agent state (`agent_name`, `agent_state` JSON),
+  an optional sandbox `image`, and a canonical `TaskStatus`
+  (todo/in_progress/review/conflict/done/failed = board column, transitions
+  validated server-side); runs are recorded (`run_records`,
+  `GET /api/task/cards/{id}/runs`). Routines are a **separate** entity
+  (`routines` + `routine_runs` tables, same store) — recurring automation,
+  never a card.
 - `crates/gguf-rs` — GGUF model file parsing
 - `crates/agent_3th_cli/` — third-party CLI integrations (`claude_cli`, `codex_cli`)
 - `crates/cloud_model_api/` — cloud model HTTP APIs (`zai_api`, `ai_interface_layer`)
 - `crates/work` — applications/services built on the crates above
+- `crates/math`, `physic`, `bio`, `chemi`, `quatum`, `plan`, `text_ide` —
+  domain/engine-free libraries (math, simulations, qubit gates, plan model, text editor kit)
 - `crates/git-rs` — git work-tree control via git2 (commit-all, patch text, dirty state); host-side only
 - `crates/lsp-rs` — LSP client, codec, tool bindings
 - `crates/knowledge_graph` — entity/triple/graph model with entity embedder
@@ -91,29 +110,28 @@ susutaku/
 - `crates/solana_wallet` — browser wallet keypair (ed25519-dalek) + RPC helpers,
   wasm-ready via gloo; localStorage persistence
 - `attachments/` — file attachment storage (see `docs/attachments.md`)
-- `piplines/`, `input/`, `output/`, `web_ui/` — pipeline and UI assets (`web_ui` includes a Kanban board page backed by `crates/kanban-rs` + Postgres)
+- `piplines/`, `input/`, `output/`, `web_ui/` — pipeline and UI assets (`web_ui` includes a Task board page backed by `crates/task-rs` + Postgres)
 
 ## Backend in Docker (standalone)
 
 - The backend can run alone in a container (`docker/backend/Dockerfile.backend`,
-  `debian:stable-slim`) and execute agents in-container: on Linux it uses the
-  rootless sandbox in `crates/core-agent/src/sandbox/linux.rs` (userns +
-  mount ns + chroot jail + seccomp deny-list). No macOS/Metal dependency in
-  the agent path. Verified end-to-end: spawn → run (real stdout, jailed fs,
-  workspace persistence across runs) → finish, all inside a private
-  compose stack (`docker/compose/sandbox.yml` — postgres + backend,
-  no published ports; test via `docker compose exec` + curl).
-- Required compose flags — the sandbox refuses to run unsandboxed, so
-  namespace creation must be allowed:
-  `security_opt: [seccomp=unconfined, apparmor=unconfined]`.
+  `debian:stable-slim`) and execute agents in-container: agent commands run in
+  the **rootless podman sandbox** (`crates/core-agent/src/podman/`) — nested
+  podman with the sandbox image built at container start. No macOS/Metal
+  dependency in the agent path. Private compose stack:
+  `docker/compose/sandbox.yml` (postgres + backend, no published ports; test
+  via `docker compose exec` + curl).
+- Required compose flags — nested podman needs namespace/FUSE/cgroup
+  delegation: `security_opt: [seccomp=unconfined, apparmor=unconfined]`,
+  `privileged: true`, `/dev/fuse` (full story: `docs/podman-sandbox.md`).
 - Inference is always remote: `main.rs` builds `RemoteModel` from
   `SUSUTAKU_LOCAL_MODEL_URL` (default `127.0.0.1:8992`). In a container set it
   to the host model server (`http://host.docker.internal:8992`) — MLX itself
   never runs inside the backend container.
 - `DATABASE_URL` must point at the postgres service (not `localhost:5434`).
-- Sandbox network is loopback-only (`linux.rs` limitations): agent commands
-  inside the sandbox have no internet; `claude`/`codex` CLIs must be baked
-  into the image to be usable and run outside the sandbox.
+- Agent sandbox network defaults to `--network=none`: agent commands have no
+  internet unless a run explicitly enables it (e.g. in-sandbox git push/pr);
+  `claude`/`codex` CLIs must be baked into the image to be usable.
 
 # Podman sandbox
 
@@ -121,24 +139,16 @@ susutaku/
   required compose flags, storage/cgroup fixes, image lifecycle, and a
   verification checklist — see `docs/podman-sandbox.md`.
 
-## Pipeline e2e (playwright)
+## Playwright e2e
 
-- `playwright/tests/pipeline-run.spec.ts` walks the pipeline editor end to end
-  (create → add transform/output nodes → set params → wire → save → test run),
-  capturing a screenshot at every step into `screenshots/pipeline-run/`.
-  `output_resource` requires param `name`, `transform` requires `op` — a
-  missing required param only surfaces as repeating 400 toasts and the save
-  mark sticking on "saving…".
-- Node icon-vs-run-status flake guard: `expect_node_ok` polls for the run
-  class on `.pipe-node` (NOT the `.react-flow__node` wrapper) AND a visible
-  `.pipe-node-stage svg`, snapping `debug-icon-missing-*.png` when the icon
-  vanishes mid-poll instead of failing the step.
-- Isolated stack for this spec: `docker/compose/playwright-pipe.yml`
-  (project `susutaku-e2e-pipe`; postgres + mock-model + backend + web +
-  playwright, no published ports, artifacts bind-mounted to `check_pipe/`):
-
-      docker compose -f docker/compose/playwright-pipe.yml up --build --exit-code-from playwright
-
+- Specs live in `playwright/tests/` (auth, task board, card detail/run,
+  chat mock/real/modal/dock, review, settings, graph, worker, walkthrough,
+  ux-snapshots). The old pipeline-editor spec is gone — cards run their
+  assigned agent directly (`backend/src/app/card_run.rs`), no pipeline nodes.
+- Fully-containerized stack: `docker/compose/playwright-backend.yml`
+  (postgres + mock-model + backend + web + playwright, no published ports);
+  host-backend variant: `docker/compose/playwright.yml`. Details:
+  `docs/playwright-workflow.md`, `docs/playwright-backend-workflow.md`.
 - `Dockerfile.backend` is multi-stage and its LAST stage is `hub-runtime` —
   compose `build:` MUST set `target: backend-runtime` or the container
   silently runs the hub stub instead of the backend.
@@ -151,29 +161,50 @@ susutaku/
   (`depends_on: condition: service_healthy`); a plain `depends_on` starts the
   playwright runner while nginx still 502s.
 
-## Kanban Postgres
+## Task Postgres
 
 - Postgres runs via `docker/compose/base.yml` (`postgres` service, host port **5434** — 5432/5433 are taken by other local containers).
 - Connection: `postgres://susutaku:susutaku@localhost:5434/susutaku` (override with `DATABASE_URL`).
-- sqlx macros compile against the live DB — keep the container up when running `cargo check` on `kanban-rs`/`backend`.
+- sqlx macros compile against the live DB — keep the container up when running `cargo check` on `task-rs`/`backend`.
 - API: `/api/workspaces` (GET/POST), `/api/workspaces/{id}` (DELETE),
   `/api/workspaces/{id}/projects` (GET/POST), `/api/projects/{id}` (DELETE).
-- Tasks: `/api/kanban/cards?project_id=` (GET/POST), `/api/kanban/cards/{id}` (DELETE),
-  `/api/kanban/cards/{id}/move` (POST), `/api/kanban/cards/{id}/agent` (GET/PUT).
+- Tasks: `/api/tasks?project_id=` (GET) and `POST /api/tasks` (create; status
+  defaults todo) are the canonical surface; `/api/task/cards*` remain as
+  backward-compatible aliases (`/api/task/cards/{id}` DELETE/PUT,
+  `/{id}/move` POST, `/{id}/agent` GET/PUT, `/{id}/schedule` PUT — legacy,
+  no longer scheduled, `/{id}/image` PUT, `/{id}/run` POST — runs the card's
+  assigned agent, `/{id}/runs` GET history, `/{id}/resources` GET,
+  `/{id}/comments` GET/POST).
+- Task status: `PATCH /api/tasks/{id}/status` — the backend validates the
+  transition (`TaskStatus::transition_allowed` in `crates/task-rs`); the
+  frontend is never the authority. Statuses: todo, in_progress, review,
+  conflict, done, failed.
+- Routines (owner-handled, separate from tasks): `GET/POST /api/routines`,
+  `PUT/DELETE /api/routines/{id}`, `POST /api/routines/{id}/run` (owner role
+  only), `GET /api/routines/{id}/runs` (any role). The scheduler scans
+  enabled routines only; card cron is no longer scheduled.
   A task (card) belongs to exactly one project; deleting a workspace cascades
   to its projects and tasks.
+- Agent outputs (durable review artifacts): `/api/agent-outputs`,
+  `/api/agent-outputs/{id}` (GET, DELETE), `{id}/status` approve/reject —
+  see `docs/review-flow.md`. On the Review page, opening a PR auto-finishes
+  the agent: work tree torn down, output stored (PR is the end state).
+- Card runs: `backend/src/app/card_run.rs` — run the card's assigned agent
+  (model inference + its tools); there is no pipeline stage engine in the
+  backend anymore (`crates/piplines` remains but is unwired).
 
 ## User auth (argon2)
 
-- `kanban-rs/src/user.rs`: argon2 password hashing, ranked `Role` enum —
+- `task-rs/src/user.rs`: argon2 password hashing, ranked `Role` enum —
   `owner > super_admin > admin > editor > viewer`.
 - Tables: `users(username unique, password_hash, role)`, `auth_sessions(token, user_id)`.
 - Bearer-token auth: `POST /api/auth/login`, `POST /api/auth/logout`,
   `GET /api/auth/bootstrap`, `GET/POST /api/auth/users`.
 - Bootstrap: with zero users, an unauthenticated `POST /api/auth/users` creates
   the first user, forced to role `owner`.
-- Guards: any role reads kanban; editor+ mutates cards/agent state;
-  admin+ manages users. Passwords: min 8 chars, never returned.
+- Guards: any role reads task; editor+ mutates cards/agent state;
+  admin+ manages users; **owner only** manages/runs routines. Passwords:
+  min 8 chars, never returned.
 
 ## Web UI conventions (`web_ui/`)
 

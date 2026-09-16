@@ -15,7 +15,7 @@ function dialogWithTitle(page: Page, title: string) {
 
 test.describe("dock modals", () => {
   test("machines modal shows the machine register", async ({ page, login }) => {
-    await page.goto("/kanban");
+    await page.goto("/task");
     await page.click('button[title="machines"]');
     const modal = dialogWithTitle(page, "machines");
     await expect(modal).toBeVisible();
@@ -36,7 +36,7 @@ test.describe("dock modals", () => {
     page,
     login,
   }) => {
-    await page.goto("/kanban");
+    await page.goto("/task");
     const name = `e2e-dock-ws-${Date.now()}`;
 
     // Profile modal → "+ new workspace" opens the PromptModal.

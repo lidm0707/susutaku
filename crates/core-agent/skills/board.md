@@ -1,4 +1,4 @@
-# Kanban board skill (TOOL: BOARD_LIST, PIPELINE_CREATE, CARD_CREATE, CARD_LINK, CARD_ROUTINE)
+# Task board skill (TOOL: BOARD_LIST, PIPELINE_CREATE, CARD_CREATE, CARD_LINK, CARD_ROUTINE)
 
 - Ids first: always call BOARD_LIST before referencing an existing card or pipeline — never guess an id.
 - Routines are card schedules: a card + attached pipeline + CARD_ROUTINE cron. There is no separate routine object.

@@ -79,7 +79,7 @@ export default function Attachments() {
   }
 
   return (
-    <main className="chat kanban-page attachments-page">
+    <main className="chat task-page attachments-page">
       <header>
         <h1>attachments</h1>
         <span className="sub">{items.length} files</span>
@@ -119,8 +119,8 @@ export default function Attachments() {
                         key={c.id}
                         type="button"
                         className="chip"
-                        title="open kanban board"
-                        onClick={() => navigate("/kanban")}
+                        title="open task board"
+                        onClick={() => navigate("/task")}
                       >
                         {c.title}
                       </button>

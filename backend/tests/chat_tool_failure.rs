@@ -97,6 +97,10 @@ impl BoardOps for DenyBoard {
     async fn exec(&self, _req: backend::domain::BoardRequest) -> BoardResult {
         Err(TOOL_DENIED.to_string())
     }
+
+    async fn card_context(&self, _card_id: i64) -> Option<String> {
+        None
+    }
 }
 
 #[tokio::test]
@@ -124,6 +128,7 @@ async fn search_failure_does_not_abort_chat() {
             image: None,
             thread_id: None,
             card_id: None,
+            project_id: None,
         })
         .await
         .expect("chat must survive a failed search tool");

@@ -1,5 +1,5 @@
 use core_agent::agent_state::{AgentState, Phase, Role};
-use core_agent::toolcall::{Tool, kanban};
+use core_agent::toolcall::{Tool, task};
 
 #[test]
 fn tool_names_are_stable() {
@@ -28,14 +28,14 @@ fn tool_names_are_stable() {
 
 #[test]
 fn card_body_matches_api_shape() {
-    let body = kanban::card_body(&kanban::NewCard {
+    let body = task::card_body(&task::NewCard {
         project_id: 3,
         title: "run backups".into(),
         description: Some("nightly".into()),
     });
     let v: serde_json::Value = serde_json::from_str(&body).expect("json body");
     assert_eq!(v["project_id"], 3);
-    assert_eq!(v["column_id"], kanban::DEFAULT_COLUMN_ID);
+    assert_eq!(v["column_id"], task::DEFAULT_COLUMN_ID);
     assert_eq!(v["title"], "run backups");
     assert_eq!(v["description"], "nightly");
 }

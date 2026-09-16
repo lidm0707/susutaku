@@ -5,21 +5,21 @@ name = "01-login"
 path = "/"
 
 [[pages]]
-name = "02-kanban"
-path = "/kanban"
+name = "02-task"
+path = "/task"
 auth = true
 
 [[pages]]
-name = "03-kanban-add-task-modal"
-path = "/kanban"
+name = "03-task-add-task-modal"
+path = "/task"
 auth = true
 [[pages.setup]]
-click = '.kanban-add button'
+click = '.task-add button'
 shot_after = false
 
 [[pages]]
 name = "04-chat-modal"
-path = "/kanban"
+path = "/task"
 auth = true
 [[pages.setup]]
 click = "button.chat-fab"
@@ -27,7 +27,7 @@ shot_after = false
 
 [[pages]]
 name = "05-machines-popover"
-path = "/kanban"
+path = "/task"
 auth = true
 [[pages.setup]]
 click = 'button[title="machines"]'
@@ -35,7 +35,7 @@ shot_after = false
 
 [[pages]]
 name = "06-activity-popover"
-path = "/kanban"
+path = "/task"
 auth = true
 [[pages.setup]]
 click = 'button[title="activity"]'

@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use kanban_rs::{CommentRow, StoreError};
+use task_rs::{CommentRow, StoreError};
 
 use crate::port::outbound::CommentRepo;
 

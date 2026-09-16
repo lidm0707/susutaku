@@ -121,6 +121,29 @@ header h1 {
   white-space: pre-wrap;
 }
 
+.msg-table-wrap {
+  margin: 0.4rem 0;
+  overflow-x: auto;
+}
+
+.msg-table {
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+
+.msg-table th,
+.msg-table td {
+  border: 1px solid #2a2a33;
+  padding: 0.25rem 0.55rem;
+  text-align: left;
+  white-space: pre-wrap;
+}
+
+.msg-table th {
+  background: #1a1a21;
+  font-weight: 600;
+}
+
 .msg-code {
   margin: 0.4rem 0;
   border: 1px solid #2a2a33;
@@ -417,6 +440,57 @@ button:disabled {
   margin-left: 0.6rem;
 }
 
+.dock-out-left {
+  position: absolute;
+  right: 100%;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-right: 0.6rem;
+}
+
+.dock-scope-menu {
+  position: absolute;
+  bottom: calc(100% + 0.5rem);
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 0.75rem;
+  min-width: 18rem;
+  padding: 0.5rem;
+  border-radius: 12px;
+  background: #1a1a21;
+  border: 1px solid #2c2c36;
+  box-shadow: 0 4px 16px rgb(0 0 0 / 0.4);
+}
+
+.dock-scope-menu .dock-ws-list {
+  min-width: 8rem;
+}
+
+.dock-scope-select {
+  min-width: 8rem;
+  padding: 0.4rem 0.5rem;
+  border-radius: 8px;
+  border: 1px solid #2c2c36;
+  background: #23232b;
+  color: #e6e6ea;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.dock-scope-select:hover:not(:disabled),
+.dock-scope-select:focus {
+  border-color: #4a4a56;
+  outline: none;
+}
+
+.dock-scope-select:disabled {
+  opacity: 0.4;
+}
+
 .dock-out .chat-dock-btn {
   position: static;
   right: auto;
@@ -427,6 +501,11 @@ button:disabled {
 
 .dock-out .chat-dock-btn:hover {
   transform: translateY(-1px);
+}
+
+.dock-out a.chat-dock-btn.active {
+  color: #e6e6ea;
+  background: #26262f;
 }
 
 .dock-tools .chat-dock-btn {
@@ -779,6 +858,12 @@ button:disabled {
 .overlay-box.modal:has(.chat-modal-body) {
   height: 50vh;
   width: min(58rem, 94vw);
+}
+
+/* once a thread has messages (the log section only renders then), let the
+   chat take maximum height */
+.overlay-box.modal:has(.chat-modal-log) {
+  height: min(94vh, 60rem);
 }
 
 .overlay.docked {
@@ -1668,7 +1753,7 @@ header a {
   color: #6fcf7c;
 }
 
-.kanban-select {
+.task-select {
   padding: 0.2rem 0.4rem;
   border-radius: 6px;
   border: 1px solid #444;
@@ -1678,7 +1763,7 @@ header a {
   max-width: 9rem;
 }
 
-.kanban-mini {
+.task-mini {
   background: transparent;
   border: 1px solid #444;
   border-radius: 6px;
@@ -1688,12 +1773,12 @@ header a {
   line-height: 1.2;
 }
 
-.kanban-mini:hover:not(:disabled) {
+.task-mini:hover:not(:disabled) {
   border-color: #888;
   color: #e6e6ea;
 }
 
-.kanban-mini:disabled {
+.task-mini:disabled {
   opacity: 0.3;
 }
 
@@ -1787,32 +1872,32 @@ header a {
   margin: 0.25rem 0 0;
 }
 
-/* kanban */
+/* task */
 
-.kanban-page {
+.task-page {
   max-width: 1080px;
 }
 
-.kanban-page > header {
+.task-page > header {
   justify-content: space-between;
 }
 
-.kanban-page > header .nav {
+.task-page > header .nav {
   margin-left: auto;
 }
 
-.kanban-add {
+.task-add {
   position: relative;
   display: flex;
   gap: 0.5rem;
   margin: 0.75rem 0;
 }
 
-.kanban-add input {
+.task-add input {
   flex: 1;
 }
 
-.kanban-mention-list {
+.task-mention-list {
   position: absolute;
   bottom: 100%;
   left: 0;
@@ -1826,7 +1911,7 @@ header a {
   background: #1c1c22;
 }
 
-.kanban-mention-list button {
+.task-mention-list button {
   display: block;
   width: 100%;
   padding: 0.3rem 0.5rem;
@@ -1838,12 +1923,12 @@ header a {
   cursor: pointer;
 }
 
-.kanban-mention-list button:hover {
+.task-mention-list button:hover {
   background: #2a2a33;
 }
 
-.kanban-add input,
-.kanban-add select {
+.task-add input,
+.task-add select {
   padding: 0.4rem 0.6rem;
   border-radius: 6px;
   border: 1px solid #444;
@@ -1852,7 +1937,7 @@ header a {
   font-size: 0.85rem;
 }
 
-.kanban-add button {
+.task-add button {
   display: flex;
   align-items: center;
   gap: 0.3rem;
@@ -1864,12 +1949,12 @@ header a {
   font-size: 0.8rem;
 }
 
-.kanban-add button:hover:not(:disabled) {
+.task-add button:hover:not(:disabled) {
   border-color: #888;
   color: #e6e6ea;
 }
 
-.kanban {
+.task {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
   gap: 0.75rem;
@@ -1879,7 +1964,7 @@ header a {
   padding-bottom: 1rem;
 }
 
-.kanban-col {
+.task-col {
   background: rgba(22, 22, 27, 0.5);
   border: 1px solid #2a2a32;
   border-radius: 10px;
@@ -1888,19 +1973,19 @@ header a {
   transition: border-color 0.12s ease, background 0.12s ease;
 }
 
-.kanban-col h2 {
+.task-col h2 {
   margin: 0 0 0.5rem;
   font-size: 0.85rem;
   font-weight: 600;
 }
 
-.kanban-view-toggle {
+.task-view-toggle {
   display: flex;
   gap: 0.25rem;
   margin-left: auto;
 }
 
-.kanban-view-toggle button {
+.task-view-toggle button {
   display: flex;
   align-items: center;
   padding: 0.25rem 0.5rem;
@@ -1910,12 +1995,12 @@ header a {
   color: #888;
 }
 
-.kanban-view-toggle button.active {
+.task-view-toggle button.active {
   border-color: #888;
   color: #e6e6ea;
 }
 
-.kanban-list {
+.task-list {
   display: flex;
   flex-direction: column;
   gap: 0.4rem;
@@ -1923,14 +2008,14 @@ header a {
   padding-bottom: 1rem;
 }
 
-.kanban-list .kanban-card {
+.task-list .task-card {
   flex-direction: row;
   align-items: center;
   gap: 0.6rem;
   margin-bottom: 0;
 }
 
-.kanban-list .kanban-title {
+.task-list .task-title {
   flex: 1;
   min-width: 0;
   overflow: hidden;
@@ -1938,7 +2023,7 @@ header a {
   white-space: nowrap;
 }
 
-.kanban-list-col {
+.task-list-col {
   font-size: 0.72rem;
   color: #888;
   border: 1px solid #333;
@@ -1947,7 +2032,7 @@ header a {
   white-space: nowrap;
 }
 
-.kanban-card {
+.task-card {
   display: flex;
   flex-direction: column;
   gap: 0.35rem;
@@ -1960,22 +2045,22 @@ header a {
   transition: border-color 0.12s ease, transform 0.12s ease, box-shadow 0.12s ease;
 }
 
-.kanban-card:hover {
+.task-card:hover {
   border-color: #4a4a56;
   transform: translateY(-1px);
   box-shadow: 0 3px 10px rgba(0, 0, 0, 0.3);
 }
 
-.kanban-card:active {
+.task-card:active {
   cursor: grabbing;
 }
 
-.kanban-col.drag-over {
+.task-col.drag-over {
   border-color: #3b6fd4;
   background: rgba(26, 31, 43, 0.5);
 }
 
-.kanban-card.dragging {
+.task-card.dragging {
   opacity: 0.45;
 }
 
@@ -1990,19 +2075,19 @@ button {
   transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
 }
 
-.kanban-card-top {
+.task-card-top {
   display: flex;
   justify-content: space-between;
   align-items: center;
 }
 
-.kanban-card-actions {
+.task-card-actions {
   display: flex;
   gap: 0.35rem;
 }
 
-.kanban-card-actions button,
-.kanban-move button {
+.task-card-actions button,
+.task-move button {
   background: transparent;
   border: none;
   color: #888;
@@ -2010,21 +2095,21 @@ button {
   display: flex;
 }
 
-.kanban-card-actions button:hover:not(:disabled),
-.kanban-move button:hover:not(:disabled) {
+.task-card-actions button:hover:not(:disabled),
+.task-move button:hover:not(:disabled) {
   color: #e6e6ea;
 }
 
-.kanban-card-actions button:disabled,
-.kanban-move button:disabled {
+.task-card-actions button:disabled,
+.task-move button:disabled {
   opacity: 0.3;
 }
 
-.kanban-card-actions .agent-set {
+.task-card-actions .agent-set {
   color: #6fcf7c;
 }
 
-.kanban-prio {
+.task-prio {
   font-size: 0.65rem;
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -2034,14 +2119,14 @@ button {
   color: #888;
 }
 
-.kanban-card-meta {
+.task-card-meta {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 0.35rem;
 }
 
-.kanban-label {
+.task-label {
   display: inline-flex;
   align-items: center;
   gap: 0.25rem;
@@ -2053,14 +2138,14 @@ button {
   white-space: nowrap;
 }
 
-.kanban-label-dot {
+.task-label-dot {
   width: 7px;
   height: 7px;
   border-radius: 50%;
   flex: none;
 }
 
-.kanban-label button {
+.task-label button {
   background: none;
   border: none;
   color: #888;
@@ -2069,17 +2154,17 @@ button {
   cursor: pointer;
 }
 
-.kanban-label button:hover {
+.task-label button:hover {
   color: #ff7b7b;
 }
 
-.kanban-label-edit {
+.task-label-edit {
   display: flex;
   flex-wrap: wrap;
   gap: 0.3rem;
 }
 
-.kanban-check-progress {
+.task-check-progress {
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
@@ -2087,7 +2172,7 @@ button {
   color: #888;
 }
 
-.kanban-check-bar {
+.task-check-bar {
   width: 40px;
   height: 4px;
   border-radius: 2px;
@@ -2096,31 +2181,31 @@ button {
   flex: none;
 }
 
-.kanban-check-bar-fill {
+.task-check-bar-fill {
   display: block;
   height: 100%;
   background: #6fcf7c;
 }
 
-.kanban-check-list {
+.task-check-list {
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
 }
 
-.kanban-check-item {
+.task-check-item {
   display: flex;
   align-items: center;
   gap: 0.4rem;
   font-size: 0.78rem;
 }
 
-.kanban-check-item input[type="checkbox"] {
+.task-check-item input[type="checkbox"] {
   accent-color: #6fcf7c;
   flex: none;
 }
 
-.kanban-check-item button {
+.task-check-item button {
   background: none;
   border: none;
   color: #888;
@@ -2130,16 +2215,16 @@ button {
   cursor: pointer;
 }
 
-.kanban-check-item button:hover {
+.task-check-item button:hover {
   color: #ff7b7b;
 }
 
-.kanban-check-text.done {
+.task-check-text.done {
   color: #6a6a74;
   text-decoration: line-through;
 }
 
-.kanban-due {
+.task-due {
   display: inline-flex;
   align-items: center;
   gap: 0.25rem;
@@ -2151,19 +2236,19 @@ button {
   white-space: nowrap;
 }
 
-.kanban-due.soon {
+.task-due.soon {
   color: #e3b341;
   border-color: #e3b341;
   background: rgba(227, 179, 65, 0.1);
 }
 
-.kanban-due.overdue {
+.task-due.overdue {
   color: #ff7b7b;
   border-color: #ff7b7b;
   background: rgba(255, 123, 123, 0.1);
 }
 
-.kanban-estimate {
+.task-estimate {
   display: inline-flex;
   align-items: center;
   gap: 0.2rem;
@@ -2189,19 +2274,19 @@ button {
   color: #6a6a74;
 }
 
-.kanban-title {
+.task-title {
   font-size: 0.85rem;
 }
 
-.kanban-title-link {
+.task-title-link {
   cursor: pointer;
 }
 
-.kanban-title-link:hover {
+.task-title-link:hover {
   text-decoration: underline;
 }
 
-.kanban-desc {
+.task-desc {
   font-size: 0.72rem;
   color: #9a9aa4;
   white-space: nowrap;
@@ -2210,7 +2295,7 @@ button {
   max-width: 100%;
 }
 
-.kanban-comments {
+.task-comments {
   display: flex;
   flex-direction: column;
   gap: 0.4rem;
@@ -2221,7 +2306,7 @@ button {
   border-top: 1px solid #2a2a32;
 }
 
-.kanban-comment {
+.task-comment {
   display: flex;
   flex-direction: column;
   gap: 0.15rem;
@@ -2277,20 +2362,20 @@ button {
   align-items: center;
 }
 
-.kanban-comment-meta {
+.task-comment-meta {
   font-size: 0.66rem;
   color: #8a8a94;
 }
 
-.kanban-detail-form {
+.task-detail-form {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
 }
 
-.kanban-detail-form input,
-.kanban-detail-form textarea,
-.slideover .kanban-select {
+.task-detail-form input,
+.task-detail-form textarea,
+.slideover .task-select {
   width: 100%;
   max-width: none;
   flex: 1;
@@ -2302,27 +2387,27 @@ button {
   font-size: 0.85rem;
 }
 
-.kanban-detail-form textarea {
+.task-detail-form textarea {
   font-family: ui-monospace, monospace;
   font-size: 0.8rem;
   line-height: 1.45;
   resize: vertical;
 }
 
-.kanban-detail-form input:focus,
-.kanban-detail-form textarea:focus,
-.slideover .kanban-select:focus {
+.task-detail-form input:focus,
+.task-detail-form textarea:focus,
+.slideover .task-select:focus {
   outline: none;
   border-color: #3b6fd4;
 }
 
-.kanban-detail-field {
+.task-detail-field {
   display: flex;
   flex-direction: column;
   gap: 0.3rem;
 }
 
-.kanban-detail-field > label {
+.task-detail-field > label {
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
@@ -2332,17 +2417,17 @@ button {
   color: #8a8a94;
 }
 
-.kanban-detail-field > label svg {
+.task-detail-field > label svg {
   flex: none;
 }
 
-.kanban-detail-actions {
+.task-detail-actions {
   display: flex;
   justify-content: flex-end;
   padding-top: 0.25rem;
 }
 
-.kanban-detail-form button[type="submit"] {
+.task-detail-form button[type="submit"] {
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
@@ -2355,11 +2440,11 @@ button {
   cursor: pointer;
 }
 
-.kanban-detail-form button[type="submit"]:hover:not(:disabled) {
+.task-detail-form button[type="submit"]:hover:not(:disabled) {
   background: #35578c;
 }
 
-.kanban-agent {
+.task-agent {
   display: inline-flex;
   align-items: center;
   gap: 0.25rem;
@@ -2369,7 +2454,7 @@ button {
 
 /* two-pane card detail */
 
-.kanban-detail {
+.task-detail {
   display: grid;
   grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
   gap: 1.2rem;
@@ -2377,18 +2462,18 @@ button {
 }
 
 @media (max-width: 720px) {
-  .kanban-detail {
+  .task-detail {
     grid-template-columns: 1fr;
   }
 }
 
-.kanban-detail-auto {
+.task-detail-auto {
   display: flex;
   flex-direction: column;
   gap: 0.3rem;
 }
 
-.kanban-detail-auto > label {
+.task-detail-auto > label {
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
@@ -2398,11 +2483,11 @@ button {
   color: #8a8a94;
 }
 
-.kanban-detail-auto > label svg {
+.task-detail-auto > label svg {
   flex: none;
 }
 
-.kanban-auto-hint {
+.task-auto-hint {
   display: inline-flex;
   align-items: center;
   gap: 0.25rem;
@@ -2410,14 +2495,14 @@ button {
   color: #8a8a94;
 }
 
-.kanban-chips {
+.task-chips {
   display: inline-flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 0.3rem;
 }
 
-.kanban-chip {
+.task-chip {
   display: inline-flex;
   align-items: center;
   gap: 0.25rem;
@@ -2431,19 +2516,19 @@ button {
   cursor: pointer;
 }
 
-.kanban-chip:hover {
+.task-chip:hover {
   color: #c8c8d0;
   border-color: #55555f;
 }
 
-.kanban-detail-left {
+.task-detail-left {
   display: flex;
   flex-direction: column;
   gap: 0.6rem;
   min-width: 0;
 }
 
-.kanban-detail-right {
+.task-detail-right {
   display: flex;
   flex-direction: column;
   gap: 0.8rem;
@@ -2453,19 +2538,19 @@ button {
 }
 
 @media (max-width: 720px) {
-  .kanban-detail-right {
+  .task-detail-right {
     border-left: none;
     padding-left: 0;
   }
 }
 
-.kanban-tabs {
+.task-tabs {
   display: flex;
   gap: 0.25rem;
   border-bottom: 1px solid #2a2a32;
 }
 
-.kanban-tabs button {
+.task-tabs button {
   background: none;
   border: none;
   border-bottom: 2px solid transparent;
@@ -2475,24 +2560,24 @@ button {
   cursor: pointer;
 }
 
-.kanban-tabs button.active {
+.task-tabs button.active {
   color: white;
   border-bottom-color: #3b6fd4;
 }
 
-.kanban-comment-agent {
+.task-comment-agent {
   border-color: #34523a;
   background: #1c241e;
 }
 
-.kanban-thinking {
+.task-thinking {
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
   color: #8a8a94;
 }
 
-.kanban-run-inline {
+.task-run-inline {
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
@@ -2506,11 +2591,11 @@ button {
   cursor: pointer;
 }
 
-.kanban-run-inline:hover:not(:disabled) {
+.task-run-inline:hover:not(:disabled) {
   border-color: #3b6fd4;
 }
 
-/* pipeline run badge + timeline */
+/* run badge + timeline */
 
 .run-badge {
   display: inline-flex;
@@ -2625,7 +2710,7 @@ button {
   }
 }
 
-.kanban-move {
+.task-move {
   display: flex;
   gap: 0.5rem;
 }
@@ -2855,12 +2940,12 @@ button {
 }
 
 /* card detail needs room for comments/history + properties column */
-.overlay-box.slideover:has(.kanban-detail) {
+.overlay-box.slideover:has(.task-detail) {
   width: min(70vw, 90rem);
 }
 
 @media (max-width: 720px) {
-  .overlay-box.slideover:has(.kanban-detail) {
+  .overlay-box.slideover:has(.task-detail) {
     width: 94vw;
   }
 }
@@ -2879,7 +2964,14 @@ button {
   min-height: 0;
 }
 
-/* cron schedule builder (Cronjobs custom option) */
+/* per-task routine editor (task detail) */
+.routine-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+/* cron schedule builder (custom routine) */
 .cron-builder {
   display: flex;
   flex-direction: column;
@@ -2963,6 +3055,386 @@ button {
   padding: 0.25rem;
 }
 
+.title-circle-btn {
+  border-radius: 50%;
+  border: 1px solid #444;
+}
+
+.title-circle-btn:disabled {
+  opacity: 0.4;
+}
+
+.agent-review {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+}
+
+.agent-review-status {
+  margin: 0;
+  font-family: ui-monospace, monospace;
+  font-size: 0.75rem;
+  color: #9a9aa4;
+  white-space: pre-wrap;
+}
+
+.agent-review-output {
+  margin: 0;
+  padding: 0.6rem;
+  border-radius: 6px;
+  border: 1px solid #333;
+  background: #101014;
+  font-size: 0.72rem;
+  max-height: 12rem;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+
+.agent-review-hint {
+  margin: 0;
+  font-size: 0.72rem;
+  color: #d4a24a;
+}
+
+.review-page {
+  max-width: none;
+}
+
+.review-grid {
+  display: grid;
+  grid-template-columns: var(--review-left, 30%) auto minmax(0, 1fr);
+  gap: 1rem;
+  align-items: start;
+  width: 100%;
+  padding: 0 1rem 1rem;
+}
+
+.review-left,
+.review-right {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+}
+
+.review-agent-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.review-diff-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.8rem;
+  border-radius: 8px;
+  border: 1px solid #2a2a33;
+  background: #16161c;
+}
+
+.review-diff-head {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-size: 0.78rem;
+}
+
+.review-diff-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-weight: 600;
+}
+
+.review-badge {
+  margin-left: auto;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  border: 1px solid #2a2a33;
+  color: #9a9aa4;
+}
+
+.review-badge.ok {
+  color: #7ee787;
+  border-color: rgba(46, 160, 67, 0.5);
+}
+
+.review-badge.dirty {
+  color: #d4a24a;
+  border-color: rgba(212, 162, 74, 0.5);
+}
+
+.review-diff-open,
+.review-status-link {
+  border: none;
+  background: none;
+  color: #79c0ff;
+  font-size: 0.72rem;
+  cursor: pointer;
+  padding: 0;
+}
+
+.review-diff-none {
+  margin: 0;
+  font-size: 0.75rem;
+  color: #9a9aa4;
+}
+
+.diff-file-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.diff-file-item {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  width: 100%;
+  padding: 0.35rem 0.5rem;
+  border-radius: 6px;
+  border: 1px solid #2a2a33;
+  background: #1a1a21;
+  color: inherit;
+  font-family: ui-monospace, monospace;
+  font-size: 0.72rem;
+  cursor: pointer;
+  text-align: left;
+}
+
+.diff-file-item:hover {
+  border-color: #3a3a44;
+  background: #202028;
+}
+
+.diff-file-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.diff-file-stats {
+  display: inline-flex;
+  gap: 0.4rem;
+  flex: none;
+}
+
+.diff-stat-add {
+  color: #7ee787;
+}
+
+.diff-stat-del {
+  color: #ffa198;
+}
+
+.review-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.review-action-circle {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.2rem;
+  height: 2.2rem;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid #2a2a33;
+  background: #1a1a21;
+  color: #e6e6ea;
+  cursor: pointer;
+}
+
+.review-action-circle svg {
+  width: 18px;
+  height: 18px;
+  color: #e6e6ea;
+  flex: none;
+}
+
+.review-action-circle:hover:not(:disabled) {
+  border-color: #3a3a44;
+  background: #202028;
+}
+
+.review-action-circle:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.review-action-tip {
+  position: absolute;
+  top: calc(100% + 0.35rem);
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 0.15rem 0.5rem;
+  border-radius: 4px;
+  border: 1px solid #2a2a33;
+  background: #1a1a21;
+  font-size: 0.7rem;
+  white-space: nowrap;
+  color: #c8c8d0;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.1s ease;
+  z-index: 5;
+}
+
+.review-action-circle:hover .review-action-tip {
+  opacity: 1;
+}
+
+.review-tasks-title {
+  margin: 0;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #9a9aa4;
+}
+
+.review-tasks-empty {
+  margin: 0;
+  font-size: 0.72rem;
+  color: #6d6d78;
+}
+
+.review-task-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.review-task-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.35rem 0.55rem;
+  border: 1px solid #2a2a33;
+  border-radius: 6px;
+  background: #1a1a21;
+  font-size: 0.74rem;
+}
+
+.review-task-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.review-task-column {
+  flex-shrink: 0;
+  font-size: 0.66rem;
+  color: #9a9aa4;
+}
+
+.review-action-hint {
+  margin: 0;
+  font-size: 0.72rem;
+  color: #9a9aa4;
+}
+
+.review-worktree {
+  margin: 0;
+  font-size: 0.72rem;
+  color: #9a9aa4;
+  overflow-wrap: anywhere;
+}
+
+.diff-view {
+  overflow: auto;
+  border-radius: 8px;
+  background: #1a1a21;
+  border: 1px solid #2a2a33;
+  font-family: ui-monospace, monospace;
+  font-size: 0.75rem;
+  line-height: 1.5;
+}
+
+.diff-view.diff-empty {
+  padding: 0.6rem;
+  color: #9a9aa4;
+  white-space: pre-wrap;
+}
+
+.diff-line {
+  display: flex;
+  white-space: pre;
+}
+
+.diff-sign {
+  flex: none;
+  width: 1.2rem;
+  text-align: center;
+  user-select: none;
+  opacity: 0.7;
+}
+
+.diff-text {
+  overflow-wrap: anywhere;
+}
+
+.diff-add {
+  background: rgba(46, 160, 67, 0.18);
+  color: #7ee787;
+}
+
+.diff-del {
+  background: rgba(248, 81, 73, 0.15);
+  color: #ffa198;
+}
+
+.diff-hunk {
+  background: rgba(56, 139, 253, 0.15);
+  color: #79c0ff;
+}
+
+.diff-meta {
+  color: #9a9aa4;
+  font-weight: 600;
+}
+
+.review-resizer {
+  width: 0.4rem;
+  cursor: col-resize;
+  border-radius: 3px;
+  background: transparent;
+}
+
+.review-resizer:hover {
+  background: #2a2a33;
+}
+
+@media (max-width: 60rem) {
+  .review-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .review-resizer {
+    display: none;
+  }
+}
+
+.review-tasks-title {
+  margin: 0;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #9a9aa4;
+}
 .overlay-box button[type="button"]:hover {
   color: #e6e6ea;
 }
@@ -3491,599 +3963,6 @@ button {
   overflow-y: auto;
 }
 
-/* pipeline flow editor */
-
-.pipeline-page {
-  max-width: none;
-}
-
-.pipeline-layout {
-  display: grid;
-  grid-template-columns: 15rem minmax(0, 1fr);
-  gap: 0.75rem;
-  flex: 1;
-  width: 100%;
-  min-height: 0;
-  padding-bottom: 1rem;
-}
-
-.pipeline-main {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-  min-height: 0;
-}
-
-.pipeline-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-}
-
-.pipeline-name {
-  flex: 1;
-  color: #9a9aa4;
-  font-size: 0.85rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.pipeline-save {
-  display: flex;
-  align-items: center;
-  gap: 0.3rem;
-  padding: 0.4rem 0.9rem;
-  border: 1px solid #3b6fd4;
-  border-radius: 6px;
-  background: #2b4a7a;
-  color: white;
-  font-size: 0.8rem;
-}
-
-.pipeline-save:hover:not(:disabled) {
-  background: #35578c;
-}
-
-.pipeline-save:disabled {
-  opacity: 0.4;
-}
-
-.pipeline-canvas {
-  position: relative;
-  flex: 1;
-  min-height: 0;
-  border: 1px solid #2a2a32;
-  border-radius: 10px;
-  overflow: hidden;
-  background: #101014;
-}
-
-.pipe-node {
-  display: flex;
-  flex-direction: column;
-  gap: 0.2rem;
-  min-width: 10rem;
-  max-width: 16rem;
-  padding: 0.5rem 0.7rem;
-  border-radius: 8px;
-  border: 1px solid #3a3a44;
-  background: #1c1c22;
-  color: #e6e6ea;
-  font-size: 0.75rem;
-}
-
-.pipe-node.selected {
-  border-color: #3b6fd4;
-  box-shadow: 0 0 0 2px rgba(59, 111, 212, 0.35);
-}
-
-.pipe-node-unwired {
-  opacity: 0.6;
-  border-style: dashed;
-}
-
-.pipe-node-flag {
-  margin-left: 0.4rem;
-  font-size: 0.6rem;
-  font-style: normal;
-  color: #c95b5b;
-  border: 1px solid #c95b5b;
-  border-radius: 4px;
-  padding: 0 0.25rem;
-}
-
-.pipe-node-ok {
-  border-color: #3f9d5c;
-}
-
-.pipe-node-failed {
-  border-color: #c95b5b;
-  box-shadow: 0 0 0 2px rgba(201, 91, 91, 0.3);
-}
-
-.pipe-node-io {
-  color: #9a9aa4;
-  font-size: 0.62rem;
-}
-
-.stage-io {
-  display: flex;
-  gap: 0.8rem;
-  color: #9a9aa4;
-  font-size: 0.68rem;
-}
-
-.stage-connect {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-  margin-top: 0.3rem;
-}
-
-.stage-connect label {
-  color: #888;
-  font-size: 0.65rem;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-
-.stage-connect-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.3rem;
-}
-
-.stage-connect-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.3rem;
-  padding: 0.2rem 0.5rem;
-  border-radius: 6px;
-  border: 1px solid #3a3a44;
-  background: #232329;
-  color: #e6e6ea;
-  font-size: 0.68rem;
-  cursor: pointer;
-}
-
-.stage-connect-chip:hover {
-  border-color: #3b6fd4;
-}
-
-.stage-connect-chip span {
-  color: #888;
-}
-
-.run-note {
-  font-size: 0.7rem;
-  padding: 0.25rem 0.4rem;
-  border-radius: 6px;
-}
-
-.run-note.ok {
-  color: #3f9d5c;
-}
-
-.run-note.failed {
-  color: #c95b5b;
-}
-
-.pipeline-run {
-  display: flex;
-  flex-direction: column;
-  gap: 0.3rem;
-  padding: 0.5rem 0.7rem;
-  border-top: 1px solid #2a2a32;
-}
-
-.pipeline-run-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.pipeline-run-output {
-  max-height: 8rem;
-  overflow: auto;
-  margin: 0;
-  padding: 0.4rem;
-  border-radius: 6px;
-  background: #16161a;
-  color: #c8c8d0;
-  font-size: 0.65rem;
-  font-family: ui-monospace, monospace;
-  white-space: pre-wrap;
-}
-
-.pipe-node-stage {
-  font-weight: 600;
-  font-size: 0.8rem;
-}
-
-.pipe-node-params {
-  color: #888;
-  font-family: ui-monospace, monospace;
-  font-size: 0.62rem;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 14rem;
-}
-
-.pipe-node .react-flow__handle {
-  width: 0.55rem;
-  height: 0.55rem;
-  background: #3b6fd4;
-  border: 1px solid #101014;
-}
-
-/* per-kind port colors: any stays blue, text green, json amber, image pink */
-.pipe-node .react-flow__handle.port-text {
-  background: #3f9d5c;
-}
-
-.pipe-node .react-flow__handle.port-json {
-  background: #c9a13b;
-}
-
-.pipe-node .react-flow__handle.port-image {
-  background: #c95b9c;
-}
-
-.react-flow__edge-path {
-  stroke: #3b6fd4;
-  stroke-width: 1.5;
-}
-
-.react-flow__edge.selected .react-flow__edge-path {
-  stroke: #7ba7ef;
-}
-
-.react-flow__controls {
-  border-radius: 6px;
-  overflow: hidden;
-  box-shadow: none;
-  border: 1px solid #2a2a32;
-}
-
-.react-flow__controls-button {
-  background: #1c1c22;
-  border-bottom: 1px solid #2a2a32;
-  fill: #bbb;
-}
-
-.react-flow__controls-button:hover {
-  background: #26262e;
-}
-
-/* circular icon buttons right of the save button */
-.pipeline-circle {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 1.9rem;
-  height: 1.9rem;
-  border: 1px solid #444;
-  border-radius: 50%;
-  background: transparent;
-  color: #888;
-  cursor: pointer;
-}
-
-.pipeline-circle:hover:not(:disabled) {
-  border-color: #888;
-  color: #e6e6ea;
-}
-
-.pipeline-circle:disabled {
-  opacity: 0.3;
-}
-
-.pipeline-circle svg {
-  flex: none;
-}
-
-/* menu at the cursor after dropping a link on empty canvas: pick next node */
-.pipe-drop-menu {
-  position: absolute;
-  z-index: 20;
-  display: flex;
-  flex-direction: column;
-  min-width: 12rem;
-  padding: 0.3rem;
-  border-radius: 10px;
-  border: 1px solid #3a3a44;
-  background: #1c1c22;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
-}
-
-.pipe-drop-title {
-  padding: 0.2rem 0.4rem;
-  font-size: 0.6rem;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: #888;
-}
-
-.pipe-drop-menu button {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  padding: 0.35rem 0.4rem;
-  border: none;
-  border-radius: 7px;
-  background: transparent;
-  color: #e6e6ea;
-  font-size: 0.75rem;
-  text-align: left;
-  cursor: pointer;
-}
-
-.pipe-drop-menu button:hover,
-.pipe-drop-menu button.selected {
-  background: #2a2a33;
-}
-
-.pipe-drop-menu button.selected:focus-visible,
-.pipe-drop-menu:focus-visible {
-  outline: 1px solid #4a4a58;
-}
-
-.pipe-drop-menu button span {
-  color: #888;
-  font-size: 0.62rem;
-}
-
-/* invalid link target while dragging: red handle */
-.pipe-node .react-flow__handle.handle-invalid {
-  background: #c95b5b;
-  cursor: not-allowed;
-}
-
-/* edges: pickable + visible selection, so click + ⌫ unlinks */
-.pipeline-canvas .react-flow__edge {
-  cursor: pointer;
-}
-
-.pipeline-canvas .react-flow__edge .react-flow__edge-path {
-  stroke-width: 2;
-}
-
-.pipeline-canvas .react-flow__edge.selected .react-flow__edge-path {
-  stroke: #3b6fd4;
-  stroke-width: 3;
-}
-
-.pipeline-canvas .react-flow__handle {
-  transition: transform 0.1s ease;
-}
-
-.pipeline-canvas .react-flow__handle:hover {
-  transform: scale(1.4);
-}
-
-.pipeline-inspector {
-  position: absolute;
-  top: 2.6rem;
-  right: 0.5rem;
-  z-index: 10;
-  display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
-  width: 17rem;
-  max-height: calc(100% - 3.5rem);
-  overflow-y: auto;
-  padding: 0.7rem;
-  border-radius: 10px;
-  border: 1px solid #3a3a44;
-  background: #1c1c22;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
-}
-
-.inspector-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  font-size: 0.72rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: #aaa;
-}
-
-.inspector-head > span:first-child {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-}
-
-.inspector-id {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-}
-
-.inspector-id label {
-  margin-top: 0;
-}
-
-.stage-picker {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0.35rem;
-}
-
-.stage-card {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 0.15rem;
-  padding: 0.45rem 0.5rem;
-  border-radius: 8px;
-  border: 1px solid #3a3a44;
-  background: #16161c;
-  color: #ccc;
-  text-align: left;
-  cursor: pointer;
-  transition: border-color 0.12s ease, background 0.12s ease;
-}
-
-.stage-card:hover {
-  border-color: #555;
-  background: #1e1e25;
-}
-
-.stage-card.active {
-  border-color: #3b6fd4;
-  background: #20293e;
-  color: #e6e6ea;
-}
-
-.stage-card-label {
-  font-size: 0.75rem;
-  font-weight: 600;
-}
-
-.stage-card-desc {
-  font-size: 0.64rem;
-  color: #888;
-}
-
-.pipeline-inspector label {
-  font-size: 0.62rem;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: #888;
-  margin-top: 0.25rem;
-}
-
-.pipeline-inspector input,
-.pipeline-inspector select,
-.pipeline-inspector textarea {
-  padding: 0.4rem 0.55rem;
-  border-radius: 6px;
-  border: 1px solid #3a3a44;
-  background: #101014;
-  color: inherit;
-  font-size: 0.78rem;
-  font-family: ui-monospace, monospace;
-  resize: vertical;
-}
-
-.pipeline-inspector input:focus,
-.pipeline-inspector select:focus,
-.pipeline-inspector textarea:focus {
-  outline: none;
-  border-color: #3b6fd4;
-}
-
-.pipeline-inspector-del {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.3rem;
-  margin-top: 0.4rem;
-  padding: 0.4rem;
-  border: 1px solid #444;
-  border-radius: 6px;
-  background: transparent;
-  color: #ff7b7b;
-  font-size: 0.75rem;
-}
-
-.pipeline-inspector-del:hover {
-  border-color: #ff7b7b;
-}
-
-.stage-field {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-}
-
-.stage-field input[type="file"] {
-  font-size: 0.78rem;
-  color: inherit;
-}
-
-.stage-path {
-  font-family: monospace;
-  font-size: 0.72rem;
-  color: #9a9aa4;
-  word-break: break-all;
-}
-
-.stage-hint {
-  font-size: 0.72rem;
-  color: #77777f;
-  line-height: 1.4;
-}
-
-.pipeline-hint {
-  position: absolute;
-  bottom: 3.3rem;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 10;
-  padding: 0.3rem 0.8rem;
-  border-radius: 6px;
-  border: 1px solid #2a2a32;
-  background: rgba(22, 22, 27, 0.9);
-  color: #888;
-  font-size: 0.7rem;
-  white-space: nowrap;
-}
-
-/* pipelines */
-
-.pipeline-editor {
-  max-width: none;
-}
-
-.pipeline-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.4rem;
-  align-items: center;
-}
-
-.pipeline-row input,
-.pipeline-row select,
-.pipeline-row textarea {
-  padding: 0.35rem 0.5rem;
-  border-radius: 6px;
-  border: 1px solid #444;
-  background: #101014;
-  color: inherit;
-  font-size: 0.8rem;
-}
-
-.pipeline-node-id {
-  width: 8rem;
-  flex: none;
-}
-
-.pipeline-params {
-  flex: 1;
-  min-width: 12rem;
-  font-family: ui-monospace, monospace;
-  resize: vertical;
-}
-
-.pipeline-add {
-  align-self: flex-start;
-  display: inline-flex;
-  align-items: center;
-  gap: 0.3rem;
-}
-
-.pipeline-pick {
-  max-width: none;
-  padding: 0.45rem 0.6rem;
-  font-size: 0.8rem;
-}
 
 .env-card-wide {
   max-width: none;
@@ -4830,6 +4709,43 @@ select.agent-multi {
   border-color: #3d3d4a;
 }
 
+.output-row-compact {
+  padding: 0.25rem 0.45rem;
+  gap: 0.4rem;
+  font-size: 0.75rem;
+}
+
+.output-row-main {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  padding: 0;
+}
+
+.output-row-delete {
+  background: transparent;
+  border: none;
+  color: #6f6f7a;
+  cursor: pointer;
+  padding: 0.15rem;
+  border-radius: 6px;
+  display: inline-flex;
+  line-height: 0;
+}
+
+.output-row-delete:hover {
+  color: #ff6b6b;
+  background: #2a2a33;
+}
+
 .output-id {
   color: #6f6f7a;
   font-family: monospace;
@@ -4935,31 +4851,55 @@ select.agent-multi {
 
 /* composer bar: one rounded pill holding mode select, agent picker,
    input and action buttons */
-.chat-modal-body form {
+.chat-modal-body form.chat-composer {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.25rem;
+  margin-top: 0.35rem;
+  padding: 0.5rem 0.6rem;
+  background: #16161c;
+  border: 1px solid #2a2a33;
+  border-radius: 0.75rem;
+  transition: border-color 0.15s;
+}
+.chat-modal-body form.chat-composer:focus-within {
+  border-color: #3b6fd4;
+}
+.chat-composer-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  padding: 0.1rem 0.2rem;
+}
+.chat-composer-bar {
   display: flex;
   align-items: center;
   gap: 0.4rem;
-  margin-top: 0.35rem;
-  padding: 0.35rem 0.5rem;
-  background: #16161c;
-  border: 1px solid #2a2a33;
-  border-radius: 1.35rem;
-  transition: border-color 0.15s;
 }
-.chat-modal-body form:focus-within {
-  border-color: #3b6fd4;
+.chat-composer-tools {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex: 1;
+  min-width: 0;
+}
+.chat-composer-tools .search-toggle {
+  font-size: 0.75rem;
+  padding: 0.3rem 0.4rem;
+  border-radius: 999px;
 }
 
 .chat-modal-body form textarea.chat-input {
-  flex: 1;
+  width: 100%;
   resize: none;
-  max-height: 10rem;
+  min-height: 9rem;
+  max-height: 30rem;
   overflow-y: auto;
-  align-self: center;
   background: transparent;
   border: none;
   color: #e6e6ea;
-  padding: 0.3rem 0.2rem;
+  padding: 0.4rem 0.2rem;
 }
 .chat-modal-body form textarea.chat-input:focus {
   outline: none;
@@ -4993,6 +4933,46 @@ select.agent-multi {
 .chat-send:disabled {
   opacity: 0.4;
   cursor: default;
+}
+
+.chat-queued {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid #2a2a33;
+  border-radius: 0.5rem;
+  background: #1b1b22;
+  font-size: 0.8rem;
+}
+
+.chat-queued-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0.75;
+}
+
+.chat-queued-send {
+  flex-shrink: 0;
+  padding: 0.15rem 0.5rem;
+  border-radius: 0.4rem;
+  border: 1px solid #3b6fd4;
+  background: #2b4a7a;
+  color: #fff;
+}
+
+.chat-queued-drop {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  opacity: 0.6;
+}
+
+.chat-queued-drop:hover {
+  opacity: 1;
 }
 .chat-send.queue {
   border-color: #7a5cd4;
@@ -5113,7 +5093,6 @@ select.agent-multi {
 .chat-attach-chip {
   position: relative;
   display: inline-flex;
-  align-self: center;
 }
 .chat-queue {
   display: flex;
@@ -5359,4 +5338,303 @@ select.agent-multi {
   width: 5.5rem;
   flex: 0 1 auto;
   padding: 0.4rem 0.6rem;
+}
+
+/* ---- routines page (compact) ---- */
+.routine-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.routine-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  border: 1px solid #2a2a33;
+  border-radius: 8px;
+  padding: 0.4rem 0.6rem;
+  font-size: 0.8rem;
+}
+
+.routine-row.disabled {
+  opacity: 0.55;
+}
+
+.routine-main {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  min-width: 0;
+}
+
+.routine-name {
+  font-weight: 600;
+}
+
+.routine-cron,
+.routine-agent {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  color: #a8a8b3;
+}
+
+.routine-off {
+  color: #e3b341;
+  font-size: 0.7rem;
+  border: 1px solid #e3b341;
+  border-radius: 999px;
+  padding: 0 0.4rem;
+}
+
+.routine-actions {
+  display: flex;
+  gap: 0.3rem;
+}
+
+.routine-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  background: transparent;
+  border: 1px solid #2a2a33;
+  color: #c8c8d0;
+  border-radius: 6px;
+  padding: 0.2rem 0.5rem;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.routine-actions button:hover {
+  border-color: #3d3d4a;
+}
+
+.routine-actions button.danger:hover {
+  color: #ff6b6b;
+}
+
+.routine-runs {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  max-height: 60vh;
+  overflow: auto;
+}
+
+.routine-run-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.75rem;
+  border-bottom: 1px solid #23232b;
+  padding: 0.25rem 0;
+}
+
+.routine-run-time {
+  color: #6f6f7a;
+  font-family: monospace;
+}
+
+.routine-run-trigger {
+  color: #a8a8b3;
+  text-transform: uppercase;
+  font-size: 0.65rem;
+}
+
+.routine-run-summary {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #c8c8d0;
+}
+
+.routine-enabled {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.8rem;
+  color: #a8a8b3;
+}
+
+/* ---- routine modal (clean form layout) ---- */
+.routine-modal {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+.routine-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.routine-field > label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #8a8a96;
+}
+
+.routine-field input,
+.routine-field select,
+.routine-field textarea {
+  background: #1a1a22;
+  border: 1px solid #2a2a33;
+  border-radius: 8px;
+  color: #e6e6ea;
+  padding: 0.45rem 0.6rem;
+  font-size: 0.85rem;
+}
+
+.routine-field input:focus,
+.routine-field select:focus,
+.routine-field textarea:focus {
+  outline: none;
+  border-color: #4a4a5a;
+}
+
+.routine-field-schedule {
+  border: 1px solid #23232b;
+  border-radius: 10px;
+  padding: 0.6rem 0.7rem;
+  background: #16161d;
+}
+
+.routine-field-schedule .routine-editor {
+  margin: 0;
+}
+
+.routine-field-toggle {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.routine-field-toggle > label {
+  font-size: 0.8rem;
+  text-transform: none;
+  letter-spacing: 0;
+  color: #c8c8d0;
+}
+
+.routine-switch {
+  width: 36px;
+  height: 20px;
+  border-radius: 999px;
+  border: 1px solid #2a2a33;
+  background: #1a1a22;
+  cursor: pointer;
+  position: relative;
+  padding: 0;
+}
+
+.routine-switch-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #6f6f7a;
+  transition: left 0.15s ease, background 0.15s ease;
+}
+
+.routine-switch.on {
+  background: #2d4a3a;
+  border-color: #3a6a4f;
+}
+
+.routine-switch.on .routine-switch-knob {
+  left: 18px;
+  background: #7bd88f;
+}
+
+.routine-modal-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  padding-top: 0.4rem;
+  border-top: 1px solid #23232b;
+}
+
+.routine-modal-foot button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  border: 1px solid #2a2a33;
+  background: transparent;
+  color: #c8c8d0;
+  border-radius: 8px;
+  padding: 0.4rem 0.8rem;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.routine-modal-foot button.primary {
+  background: #2f6f4f;
+  border-color: #2f6f4f;
+  color: #f0fff5;
+}
+
+.routine-modal-foot button.primary:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.routine-modal-foot button:hover:not(:disabled) {
+  filter: brightness(1.15);
+}
+
+/* embedded schedule editor: tighter, no inner chrome */
+.routine-editor.embedded {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.routine-editor.embedded .cron-builder {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0;
+}
+
+/* ---- routines page empty state ---- */
+.routine-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.5rem;
+  border: 1px dashed #2a2a33;
+  border-radius: 12px;
+  padding: 2.2rem 1rem;
+  margin-top: 0.8rem;
+  color: #8a8a96;
+}
+
+.routine-empty-title {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #c8c8d0;
+}
+
+.routine-empty-hint {
+  font-size: 0.78rem;
+  max-width: 40ch;
+  text-align: left;
+  margin: 0;
+}
+
+.routine-empty .btn {
+  margin-top: 0.4rem;
+}
+
+/* settings page: wider so the providers split layout can breathe */
+.settings-page {
+  max-width: 1080px;
 }

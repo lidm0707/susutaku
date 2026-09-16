@@ -13,18 +13,18 @@ use axum::{
         IntoResponse, Response,
         sse::{Event, Sse},
     },
-    routing::{delete, get, post, put},
+    routing::{delete, get, patch, post, put},
 };
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
 use tokio_stream::wrappers::ReceiverStream;
 use utoipa::OpenApi;
 
-use crate::app::kanban::{CardView, KanbanApp};
+use crate::app::task::TaskApp;
 use crate::app::{BoardService, ChatUseCase};
 use crate::domain::{
-    AgentConfigDraft, CancelFlag, CardMove, CardPatch, ChatCmd, NewCard, NewPipeline, NewProject,
-    NewWorkspace, ResourceService, SearchMode, TOOL_KIND_NAMES, ToolEvent, ToolSet, ToolUse,
+    AgentConfigDraft, CancelFlag, CardMove, CardPatch, ChatCmd, NewCard, NewProject, NewWorkspace,
+    ResourceService, SearchMode, TOOL_KIND_NAMES, ToolEvent, ToolSet, ToolUse,
 };
 use crate::infra::claude::auth::{ClaudeAuth, LoginStatus as ClaudeLoginStatus};
 use crate::infra::claude::chat as claude_chat;
@@ -39,8 +39,8 @@ use crate::infra::zai::chat::{STREAM_EVENT_CAPACITY, StreamEvent, ZaiEngine};
 use crate::infra::zai::settings::{SettingsState, ZaiSettings};
 use crate::port::inbound::ChatHandling;
 use crate::port::outbound::{
-    AgentConfigRepo, AgentGit, BoardOps, ChatMemory, Fetcher, Inference, ModelEndpoint,
-    ModelSwitch, ProjectGit, Runner, Searcher,
+    AgentConfigRepo, AgentGit, AgentRun, BoardOps, ChatMemory, Fetcher, Inference, ModelEndpoint,
+    ModelEngines, ModelSwitch, ProjectGit, Runner, Searcher, ThreadEnvs,
 };
 use prompt_sys::{MAX_PROMPT_CHARS, PromptBuilder, Role as PromptRole};
 use proto_rs::AgentBrief;
@@ -61,8 +61,10 @@ struct ZaiChatDeps {
     board: Arc<dyn BoardOps>,
     agents: Arc<dyn AgentConfigRepo>,
     settings: Arc<SettingsState>,
-    store: std::sync::Arc<kanban_rs::Store>,
+    store: std::sync::Arc<task_rs::Store>,
     agent_git: Arc<dyn AgentGit>,
+    agent_run: Arc<dyn AgentRun>,
+    thread_envs: Arc<dyn ThreadEnvs>,
     project_git: Arc<dyn ProjectGit>,
     /// Persists tool artifacts onto the turn's target card.
     resources: Arc<ResourceService>,
@@ -79,7 +81,7 @@ const PROJECT_SKILL_MD: &str = include_str!("../../.agents/skills/susutaku-proje
 
 /// Seeds (and refreshes) the project skill, then attaches it to every agent
 /// that does not have it yet, so every chat embeds the project skill sheet.
-pub async fn seed_project_skill(store: &kanban_rs::Store) {
+pub async fn seed_project_skill(store: &task_rs::Store) {
     let body = strip_frontmatter(PROJECT_SKILL_MD);
     let skill_id = match store.list_skills().await {
         Ok(rows) => match rows.iter().find(|s| s.name == PROJECT_SKILL_NAME) {
@@ -90,7 +92,7 @@ pub async fn seed_project_skill(store: &kanban_rs::Store) {
                 row.id
             }
             None => match store
-                .create_skill(kanban_rs::NewSkill {
+                .create_skill(task_rs::NewSkill {
                     name: PROJECT_SKILL_NAME,
                     body: &body,
                 })
@@ -134,11 +136,11 @@ fn strip_frontmatter(md: &str) -> String {
 fn zai_chat_deps<T: ChatHandling + ModelSwitch + 'static>(
     models: Arc<T>,
     runner: Arc<dyn Runner>,
-    kanban_store: std::sync::Arc<kanban_rs::Store>,
+    task_store: std::sync::Arc<task_rs::Store>,
     settings: Arc<SettingsState>,
     manager: Arc<manager_rs::manager::Manager>,
 ) -> Arc<ZaiChatDeps> {
-    let kanban_store_for_resources = kanban_store.clone();
+    let task_store_for_resources = task_store.clone();
     let engine = models.inference();
     Arc::new(ZaiChatDeps {
         searcher: Arc::new(DuckDuckGo),
@@ -146,18 +148,26 @@ fn zai_chat_deps<T: ChatHandling + ModelSwitch + 'static>(
         runner,
         models: models as Arc<dyn ModelSwitch>,
         memory: crate::infra::chat_memory::from_env().map(|m| Arc::new(m) as Arc<dyn ChatMemory>),
-        board: Arc::new(BoardService::new(kanban_store.clone(), engine)),
-        agents: Arc::new(crate::infra::postgres::kanban::PgKanban::new(
-            kanban_store.clone(),
+        board: Arc::new(BoardService::new(
+            task_store.clone(),
+            engine,
+            Some(Arc::new(crate::infra::zai::router::ZaiRouter::new(
+                settings.clone(),
+            ))),
+        )),
+        agents: Arc::new(crate::infra::postgres::task::PgTask::new(
+            task_store.clone(),
         )),
         settings,
         project_git: Arc::new(crate::infra::project_git::SettingsProjectGit::new(
-            kanban_store.clone(),
+            task_store.clone(),
         )),
-        store: kanban_store,
-        agent_git: Arc::new(crate::infra::manager_git::ManagerGit::new(manager)),
+        store: task_store,
+        agent_git: Arc::new(crate::infra::manager_git::ManagerGit::new(manager.clone())),
+        agent_run: Arc::new(crate::infra::manager_run::ManagerRun::new(manager)),
+        thread_envs: Arc::new(crate::infra::thread_env::ThreadEnvManager::new()),
         resources: Arc::new(ResourceService::new(Arc::new(
-            crate::infra::postgres::kanban::PgKanban::new(kanban_store_for_resources),
+            crate::infra::postgres::task::PgTask::new(task_store_for_resources),
         ))),
         cancels: Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),
     })
@@ -169,12 +179,12 @@ pub fn router<T: ChatHandling + ModelSwitch + 'static>(
     catalog: Arc<dyn crate::infra::model_client::ModelCatalog>,
     codex_workspace: PathBuf,
     runner: Arc<dyn Runner>,
-    kanban_store: std::sync::Arc<kanban_rs::Store>,
+    task_store: std::sync::Arc<task_rs::Store>,
     usage_store: std::sync::Arc<codex_usage_rs::Store>,
     manager: Arc<manager_rs::manager::Manager>,
     model_cfg: Arc<dyn ModelEndpoint>,
 ) -> Router {
-    let kanban_store_for_sched = kanban_store.clone();
+    let task_store_for_sched = task_store.clone();
     let core = Router::new()
         .route("/api/health", get(health))
         .route("/api/models/select", post(select_model))
@@ -203,7 +213,7 @@ pub fn router<T: ChatHandling + ModelSwitch + 'static>(
         )
         .with_state(ManagerState {
             manager: manager.clone(),
-            store: kanban_store.clone(),
+            store: task_store.clone(),
             settings: settings_state.clone(),
         });
     let core = core.merge(manager_router);
@@ -239,7 +249,7 @@ pub fn router<T: ChatHandling + ModelSwitch + 'static>(
     let zai_deps = zai_chat_deps(
         use_case.clone(),
         runner,
-        kanban_store.clone(),
+        task_store.clone(),
         settings_state.clone(),
         manager.clone(),
     );
@@ -309,9 +319,13 @@ pub fn router<T: ChatHandling + ModelSwitch + 'static>(
     let quota = Router::new()
         .route("/api/quota", get(quota_board))
         .with_state((settings_state.clone(), usage_store));
+    let engines = std::sync::Arc::new(crate::infra::zai::router::ZaiRouter::new(
+        settings_state.clone(),
+    ));
     let sched = std::sync::Arc::new(crate::app::schedule_work::spawn(
-        std::sync::Arc::new(crate::app::kanban::build(kanban_store_for_sched)),
+        std::sync::Arc::new(crate::app::task::build(task_store_for_sched)),
         use_case.inference(),
+        Some(engines.clone()),
     ));
     let engine = use_case.inference();
     core.merge(auth)
@@ -320,12 +334,17 @@ pub fn router<T: ChatHandling + ModelSwitch + 'static>(
         .merge(local_settings_router)
         .merge(usage)
         .merge(quota)
-        .merge(kanban_router(kanban_state(kanban_store, sched, engine)))
+        .merge(task_router(task_state(
+            task_store,
+            sched,
+            engine,
+            Some(engines),
+        )))
         .layer(tower_http::trace::TraceLayer::new_for_http())
         .layer(Extension(manager))
 }
 
-fn kanban_router(state: KanbanStore) -> Router {
+fn task_router(state: TaskStore) -> Router {
     Router::new()
         .route("/api/auth/login", post(login))
         .route("/api/auth/logout", post(logout))
@@ -344,26 +363,29 @@ fn kanban_router(state: KanbanStore) -> Router {
         .route("/api/projects/{id}", delete(delete_project))
         .route("/api/projects/{id}/agents", get(project_agents))
         .route("/api/agent-results", post(agent_results))
-        .route("/api/kanban/cards", get(list_cards).post(create_card))
+        .route("/api/task/cards", get(list_cards).post(create_card))
+        .route("/api/tasks", get(list_tasks).post(create_task))
+        .route("/api/tasks/{id}/status", patch(set_task_status))
+        .route("/api/task/cards/{id}", delete(remove_card).put(update_card))
+        .route("/api/task/cards/{id}/move", post(move_card))
         .route(
-            "/api/kanban/cards/{id}",
-            delete(remove_card).put(update_card),
-        )
-        .route("/api/kanban/cards/{id}/move", post(move_card))
-        .route(
-            "/api/kanban/cards/{id}/comments",
+            "/api/task/cards/{id}/comments",
             get(list_comments).post(add_comment),
         )
-        .route(
-            "/api/kanban/cards/{id}/agent",
-            get(get_agent).put(set_agent),
-        )
-        .route("/api/kanban/cards/{id}/resources", get(list_card_resources))
-        .route("/api/pipelines/schema", get(pipeline_schema))
-        .route("/api/kanban/cards/{id}/pipeline", put(set_card_pipeline))
-        .route("/api/kanban/cards/{id}/run", post(run_card))
-        .route("/api/kanban/cards/{id}/schedule", put(set_card_schedule))
+        .route("/api/task/cards/{id}/agent", get(get_agent).put(set_agent))
+        .route("/api/task/cards/{id}/runs", get(list_card_runs))
+        .route("/api/task/cards/{id}/resources", get(list_card_resources))
+        .route("/api/task/cards/{id}/image", put(set_card_image))
+        .route("/api/task/cards/{id}/run", post(run_card))
+        .route("/api/task/cards/{id}/schedule", put(set_card_schedule))
         .route("/api/cronjobs", get(list_cronjobs))
+        .route("/api/routines", get(list_routines).post(create_routine))
+        .route(
+            "/api/routines/{id}",
+            axum::routing::put(update_routine).delete(delete_routine),
+        )
+        .route("/api/routines/{id}/run", post(run_routine_now))
+        .route("/api/routines/{id}/runs", get(list_routine_runs))
         .route("/api/activity", get(list_activity))
         .route("/api/events", get(events_ws))
         .route(
@@ -374,12 +396,6 @@ fn kanban_router(state: KanbanStore) -> Router {
                 .layer(DefaultBodyLimit::max(ATTACHMENT_MAX_BYTES)),
         )
         .route("/api/attachments/file", get(serve_attachment))
-        .route("/api/pipelines", get(list_pipelines).post(create_pipeline))
-        .route(
-            "/api/pipelines/{id}",
-            put(update_pipeline).delete(remove_pipeline),
-        )
-        .route("/api/pipelines/{id}/test", post(test_pipeline))
         .route("/api/agents", get(list_agents).post(create_agent))
         .route(
             "/api/agents/{id}",
@@ -396,7 +412,10 @@ fn kanban_router(state: KanbanStore) -> Router {
             delete(detach_agent_skill),
         )
         .route("/api/agent-outputs", get(list_agent_outputs_handler))
-        .route("/api/agent-outputs/{id}", get(get_agent_output_handler))
+        .route(
+            "/api/agent-outputs/{id}",
+            get(get_agent_output_handler).delete(remove_agent_output_handler),
+        )
         .route(
             "/api/agent-outputs/{id}/status",
             post(set_agent_output_status_handler),
@@ -405,7 +424,7 @@ fn kanban_router(state: KanbanStore) -> Router {
 }
 
 /// Bearer-token auth extractor: resolves the session to a user.
-struct AuthUser(kanban_rs::UserRow);
+struct AuthUser(task_rs::UserRow);
 
 const BEARER_PREFIX: &str = "Bearer ";
 const UNAUTHORIZED_MSG: &str = "unauthorized";
@@ -477,7 +496,7 @@ fn store_chat_image(data_url: &str) {
 
 /// A card "holds" an attachment when the attachment path appears in the
 /// card title, description, or agent state JSON.
-fn cards_holding(path: &str, cards: &[kanban_rs::CardRow]) -> Vec<AttachmentCardRef> {
+fn cards_holding(path: &str, cards: &[task_rs::CardRow]) -> Vec<AttachmentCardRef> {
     cards
         .iter()
         .filter(|c| {
@@ -528,7 +547,7 @@ fn attachment_mime(name: &str) -> &'static str {
     responses((status = 200, body = [AttachmentInfo]), (status = 403, body = str))
 )]
 async fn list_attachments(
-    State(state): State<KanbanStore>,
+    State(state): State<TaskStore>,
     user: AuthUser,
 ) -> Result<Json<Vec<AttachmentInfo>>, ApiError> {
     require_edit(&user)?;
@@ -599,7 +618,7 @@ async fn list_attachments(
     responses((status = 200), (status = 400, body = str), (status = 403, body = str), (status = 404, body = str))
 )]
 async fn delete_attachment(
-    State(_state): State<KanbanStore>,
+    State(_state): State<TaskStore>,
     user: AuthUser,
     Query(params): Query<std::collections::HashMap<String, String>>,
 ) -> Result<StatusCode, ApiError> {
@@ -682,7 +701,7 @@ fn sanitize_name(raw: &str) -> String {
     responses((status = 200, body = UploadReply), (status = 400, body = str), (status = 403, body = str))
 )]
 async fn upload_attachment(
-    State(_state): State<KanbanStore>,
+    State(_state): State<TaskStore>,
     user: AuthUser,
     mut form: Multipart,
 ) -> Result<Json<UploadReply>, ApiError> {
@@ -718,12 +737,12 @@ async fn upload_attachment(
     Err(ApiError::bad_request("missing upload field"))
 }
 
-impl FromRequestParts<KanbanStore> for AuthUser {
+impl FromRequestParts<TaskStore> for AuthUser {
     type Rejection = Response;
 
     async fn from_request_parts(
         parts: &mut Parts,
-        store: &KanbanStore,
+        store: &TaskStore,
     ) -> Result<Self, Self::Rejection> {
         let header = parts
             .headers
@@ -755,22 +774,33 @@ fn require_edit(user: &AuthUser) -> Result<(), ApiError> {
         .ok_or_else(|| ApiError(FORBIDDEN_MSG.to_string(), StatusCode::FORBIDDEN))
 }
 
-/// Bearer-token auth extractor for agents: resolves a run ticket.
-struct AuthAgent(kanban_rs::AgentRunTokenRow);
+/// Routines are owner-handled: create/edit/run/delete need the owner role;
+/// viewers may list.
+fn require_owner(user: &AuthUser) -> Result<(), ApiError> {
+    let role = parse_role(&user.0.role)?;
+    if role == task_rs::Role::Owner {
+        Ok(())
+    } else {
+        Err(ApiError(FORBIDDEN_MSG.to_string(), StatusCode::FORBIDDEN))
+    }
+}
 
-impl FromRequestParts<KanbanStore> for AuthAgent {
+/// Bearer-token auth extractor for agents: resolves a run ticket.
+struct AuthAgent(task_rs::AgentRunTokenRow);
+
+impl FromRequestParts<TaskStore> for AuthAgent {
     type Rejection = Response;
 
     async fn from_request_parts(
         parts: &mut Parts,
-        store: &KanbanStore,
+        store: &TaskStore,
     ) -> Result<Self, Self::Rejection> {
         let token = parts
             .headers
             .get(http::header::AUTHORIZATION)
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.strip_prefix(BEARER_PREFIX))
-            .filter(|t| t.starts_with(kanban_rs::TOKEN_PREFIX))
+            .filter(|t| t.starts_with(task_rs::TOKEN_PREFIX))
             .ok_or_else(|| (StatusCode::UNAUTHORIZED, UNAUTHORIZED_MSG).into_response())?;
         let row = store
             .store
@@ -790,7 +820,7 @@ fn valid_tools(names: &[String]) -> Result<Vec<String>, ApiError> {
 }
 
 async fn auth_from_headers(
-    state: &KanbanStore,
+    state: &TaskStore,
     headers: &http::HeaderMap,
 ) -> Result<AuthUser, ApiError> {
     let token = headers
@@ -814,9 +844,9 @@ fn require_users(user: &AuthUser) -> Result<(), ApiError> {
         .ok_or_else(|| ApiError(FORBIDDEN_MSG.to_string(), StatusCode::FORBIDDEN))
 }
 
-fn parse_role(role: &str) -> Result<kanban_rs::Role, ApiError> {
+fn parse_role(role: &str) -> Result<task_rs::Role, ApiError> {
     role.parse()
-        .map_err(|e: kanban_rs::StoreError| ApiError::internal(e.to_string()))
+        .map_err(|e: task_rs::StoreError| ApiError::internal(e.to_string()))
 }
 
 #[utoipa::path(
@@ -826,7 +856,7 @@ fn parse_role(role: &str) -> Result<kanban_rs::Role, ApiError> {
     responses((status = 200, body = LoginReply), (status = 401, body = str))
 )]
 async fn login(
-    State(state): State<KanbanStore>,
+    State(state): State<TaskStore>,
     Json(req): Json<LoginRequest>,
 ) -> Result<Json<LoginReply>, ApiError> {
     let token = state
@@ -857,7 +887,7 @@ async fn login(
     responses((status = 200, body = str), (status = 400, body = str), (status = 401, body = str))
 )]
 async fn change_password(
-    State(state): State<KanbanStore>,
+    State(state): State<TaskStore>,
     user: AuthUser,
     Json(req): Json<ChangePasswordRequest>,
 ) -> Result<&'static str, ApiError> {
@@ -866,7 +896,7 @@ async fn change_password(
         .change_password(user.0.id, &req.old_password, &req.new_password)
         .await
         .map_err(|e| match e {
-            kanban_rs::StoreError::PasswordTooShort | kanban_rs::StoreError::BadCredentials => {
+            task_rs::StoreError::PasswordTooShort | task_rs::StoreError::BadCredentials => {
                 ApiError::bad_request(e.to_string())
             }
             other => ApiError::internal(other.to_string()),
@@ -876,7 +906,7 @@ async fn change_password(
 
 #[utoipa::path(post, path = "/api/auth/logout", responses((status = 200, body = str)))]
 async fn logout(
-    State(state): State<KanbanStore>,
+    State(state): State<TaskStore>,
     parts: axum::extract::RawQuery,
     req: Request,
 ) -> &'static str {
@@ -894,7 +924,7 @@ async fn logout(
 
 #[utoipa::path(get, path = "/api/auth/bootstrap", responses((status = 200, body = BootstrapReply)))]
 async fn bootstrap(
-    State(state): State<KanbanStore>,
+    State(state): State<TaskStore>,
     _user: AuthUser,
 ) -> Result<Json<BootstrapReply>, ApiError> {
     let count = state.store.user_count().await.map_err(store_err)?;
@@ -905,7 +935,7 @@ async fn bootstrap(
 
 #[utoipa::path(get, path = "/api/auth/users", responses((status = 200, body = [UserDto]), (status = 403, body = str)))]
 async fn list_users(
-    State(state): State<KanbanStore>,
+    State(state): State<TaskStore>,
     user: AuthUser,
 ) -> Result<Json<Vec<UserDto>>, ApiError> {
     require_users(&user)?;
@@ -920,7 +950,7 @@ async fn list_users(
     responses((status = 200, body = UserDto), (status = 400, body = str), (status = 403, body = str))
 )]
 async fn create_user(
-    State(state): State<KanbanStore>,
+    State(state): State<TaskStore>,
     headers: http::HeaderMap,
     Json(req): Json<CreateUserRequest>,
 ) -> Result<Json<UserDto>, ApiError> {
@@ -934,20 +964,20 @@ async fn create_user(
     }
     let role = parse_role(&req.role)?;
     let role = if needs_setup {
-        kanban_rs::Role::Owner
+        task_rs::Role::Owner
     } else {
         role
     };
     let row = state
         .store
-        .create_user(&kanban_rs::NewUser {
+        .create_user(&task_rs::NewUser {
             username: &req.username,
             password: &req.password,
             role,
         })
         .await
         .map_err(|e| match e {
-            kanban_rs::StoreError::UsernameTaken | kanban_rs::StoreError::PasswordTooShort => {
+            task_rs::StoreError::UsernameTaken | task_rs::StoreError::PasswordTooShort => {
                 ApiError::bad_request(e.to_string())
             }
             other => ApiError::internal(other.to_string()),
@@ -1051,6 +1081,7 @@ async fn chat<T: ChatHandling>(
             image: None,
             thread_id: req.thread_id.map(|id| id.to_string()),
             card_id: req.card_id,
+            project_id: req.project_id,
         })
         .await
         .map_err(ApiError::internal)?;
@@ -1712,6 +1743,8 @@ async fn chat_zai(
         deps.agents.clone(),
     )
     .with_agent_git(zai_deps_.agent_git.clone())
+    .with_agent_run(zai_deps_.agent_run.clone())
+    .with_thread_envs(zai_deps_.thread_envs.clone())
     .with_project_git(zai_deps_.project_git.clone())
     .with_resources(deps.resources.clone());
     let message = match build_system_message(&req.system)? {
@@ -1735,6 +1768,7 @@ async fn chat_zai(
             image: gated_image,
             thread_id: req.thread_id.map(|id| id.to_string()),
             card_id: req.card_id,
+            project_id: req.project_id,
         })
         .await
         .map_err(ApiError::internal)?;
@@ -1781,7 +1815,7 @@ fn stream_event(name: &str, data: &str) -> Result<Event, Infallible> {
 }
 
 async fn persist_transcript(
-    store: std::sync::Arc<kanban_rs::Store>,
+    store: std::sync::Arc<task_rs::Store>,
     thread_id: i64,
     user_text: &str,
     reply_text: &str,
@@ -1838,6 +1872,8 @@ async fn chat_zai_stream(
         deps.agents.clone(),
     )
     .with_agent_git(deps.agent_git.clone())
+    .with_agent_run(deps.agent_run.clone())
+    .with_thread_envs(deps.thread_envs.clone())
     .with_project_git(deps.project_git.clone())
     .with_resources(deps.resources.clone())
     .with_tool_events(tool_tx);
@@ -1861,6 +1897,7 @@ async fn chat_zai_stream(
         image: gated_image,
         thread_id: req.thread_id.map(|id| id.to_string()),
         card_id: req.card_id,
+        project_id: req.project_id,
     };
     let (done_tx, done_rx) = tokio::sync::oneshot::channel::<Result<ChatReply, String>>();
     let store = deps.store.clone();
@@ -1991,7 +2028,7 @@ async fn chat_zai_cancel(
 async fn list_chat_threads(
     Extension(deps): Extension<Arc<ZaiChatDeps>>,
     Query(query): Query<ChatThreadQuery>,
-) -> Result<Json<Vec<kanban_rs::ChatThreadRow>>, ApiError> {
+) -> Result<Json<Vec<task_rs::ChatThreadRow>>, ApiError> {
     let rows = deps
         .store
         .list_chat_threads(query.project_id)
@@ -2016,7 +2053,7 @@ struct NewChatThread {
 async fn create_chat_thread(
     Extension(deps): Extension<Arc<ZaiChatDeps>>,
     Json(req): Json<NewChatThread>,
-) -> Result<Json<kanban_rs::ChatThreadRow>, ApiError> {
+) -> Result<Json<task_rs::ChatThreadRow>, ApiError> {
     let row = deps
         .store
         .create_chat_thread(&req.agent, &req.title, req.project_id)
@@ -2028,7 +2065,7 @@ async fn create_chat_thread(
 async fn list_chat_messages(
     Extension(deps): Extension<Arc<ZaiChatDeps>>,
     Path(id): Path<i64>,
-) -> Result<Json<Vec<kanban_rs::ChatMessageRow>>, ApiError> {
+) -> Result<Json<Vec<task_rs::ChatMessageRow>>, ApiError> {
     let rows = deps.store.list_chat_messages(id).await.map_err(store_err)?;
     Ok(Json(rows))
 }
@@ -2160,41 +2197,44 @@ fn build_system_message(
     build_prompt(sections).map(|p| Some(ai_interface_layer::message::Message::system(p.render())))
 }
 
-/// Shared handler state: the composed kanban app plus the raw store for auth.
-struct KanbanState {
-    app: KanbanApp,
-    store: std::sync::Arc<kanban_rs::Store>,
+/// Shared handler state: the composed task app plus the raw store for auth.
+struct TaskState {
+    app: TaskApp,
+    store: std::sync::Arc<task_rs::Store>,
     sched: std::sync::Arc<crate::app::schedule_work::ScheduleHandle>,
     engine: Option<std::sync::Arc<dyn Inference>>,
+    engines: Option<std::sync::Arc<dyn ModelEngines>>,
 }
 
-type KanbanStore = std::sync::Arc<KanbanState>;
+type TaskStore = std::sync::Arc<TaskState>;
 
 /// State for the manager routes: the process table + where finished task
 /// output is stored.
 #[derive(Clone)]
 struct ManagerState {
     manager: Arc<manager_rs::manager::Manager>,
-    store: std::sync::Arc<kanban_rs::Store>,
+    store: std::sync::Arc<task_rs::Store>,
     settings: Arc<SettingsState>,
 }
 
-fn kanban_state(
-    store: std::sync::Arc<kanban_rs::Store>,
+fn task_state(
+    store: std::sync::Arc<task_rs::Store>,
     sched: std::sync::Arc<crate::app::schedule_work::ScheduleHandle>,
     engine: Option<std::sync::Arc<dyn Inference>>,
-) -> KanbanStore {
-    std::sync::Arc::new(KanbanState {
-        app: crate::app::kanban::build(store.clone()),
+    engines: Option<std::sync::Arc<dyn ModelEngines>>,
+) -> TaskStore {
+    std::sync::Arc::new(TaskState {
+        app: crate::app::task::build(store.clone()),
         store,
         sched,
         engine,
+        engines,
     })
 }
 
 #[utoipa::path(get, path = "/api/workspaces", responses((status = 200, body = [WorkspaceDto])))]
 async fn list_workspaces(
-    State(state): State<KanbanStore>,
+    State(state): State<TaskStore>,
     _user: AuthUser,
 ) -> Result<Json<Vec<WorkspaceDto>>, ApiError> {
     let rows = state.app.workspaces.list().await.map_err(store_err)?;
@@ -2208,7 +2248,7 @@ async fn list_workspaces(
     responses((status = 200, body = WorkspaceDto), (status = 400, body = str))
 )]
 async fn create_workspace(
-    State(state): State<KanbanStore>,
+    State(state): State<TaskStore>,
     user: AuthUser,
     Json(req): Json<CreateWorkspaceRequest>,
 ) -> Result<Json<WorkspaceDto>, ApiError> {
@@ -2232,7 +2272,7 @@ async fn create_workspace(
 
 #[utoipa::path(delete, path = "/api/workspaces/{id}", responses((status = 200, body = str), (status = 404, body = str)))]
 async fn delete_workspace(
-    State(state): State<KanbanStore>,
+    State(state): State<TaskStore>,
     axum::extract::Path(id): axum::extract::Path<i64>,
     user: AuthUser,
 ) -> Result<&'static str, ApiError> {
@@ -2243,7 +2283,7 @@ async fn delete_workspace(
 
 #[utoipa::path(get, path = "/api/workspaces/{id}/projects", responses((status = 200, body = [ProjectDto])))]
 async fn list_projects(
-    State(state): State<KanbanStore>,
+    State(state): State<TaskStore>,
     axum::extract::Path(id): axum::extract::Path<i64>,
     _user: AuthUser,
 ) -> Result<Json<Vec<ProjectDto>>, ApiError> {
@@ -2258,7 +2298,7 @@ async fn list_projects(
     responses((status = 200, body = ProjectDto), (status = 400, body = str))
 )]
 async fn create_project(
-    State(state): State<KanbanStore>,
+    State(state): State<TaskStore>,
     axum::extract::Path(id): axum::extract::Path<i64>,
     user: AuthUser,
     Json(req): Json<CreateProjectRequest>,
@@ -2284,7 +2324,7 @@ async fn create_project(
 
 #[utoipa::path(delete, path = "/api/projects/{id}", responses((status = 200, body = str), (status = 404, body = str)))]
 async fn delete_project(
-    State(state): State<KanbanStore>,
+    State(state): State<TaskStore>,
     axum::extract::Path(id): axum::extract::Path<i64>,
     user: AuthUser,
 ) -> Result<&'static str, ApiError> {
@@ -2293,35 +2333,36 @@ async fn delete_project(
     Ok("ok")
 }
 
-#[utoipa::path(get, path = "/api/kanban/cards", responses((status = 200, body = [CardDto])))]
+#[utoipa::path(get, path = "/api/task/cards", responses((status = 200, body = [CardDto])))]
 async fn list_cards(
-    State(state): State<KanbanStore>,
+    State(state): State<TaskStore>,
     axum::extract::Query(query): axum::extract::Query<ListCardsQuery>,
     _user: AuthUser,
 ) -> Result<Json<Vec<CardDto>>, ApiError> {
-    let views = state
+    let cards = state
         .app
-        .card_views(query.project_id)
+        .cards
+        .list(query.project_id)
         .await
-        .map_err(kanban_err)?;
-    Ok(Json(views.into_iter().map(CardDto::from).collect()))
+        .map_err(task_err)?;
+    Ok(Json(cards.into_iter().map(CardDto::from).collect()))
 }
 
 #[utoipa::path(
     post,
-    path = "/api/kanban/cards",
+    path = "/api/task/cards",
     request_body = CreateCardRequest,
     responses((status = 200, body = CardDto), (status = 400, body = str))
 )]
 async fn create_card(
-    State(state): State<KanbanStore>,
+    State(state): State<TaskStore>,
     user: AuthUser,
     Json(req): Json<CreateCardRequest>,
 ) -> Result<Json<CardDto>, ApiError> {
     require_edit(&user)?;
     let priority = req
         .priority
-        .unwrap_or_else(|| kanban_rs::PRIORITY_NORMAL.to_string());
+        .unwrap_or_else(|| task_rs::PRIORITY_NORMAL.to_string());
     let row = state
         .app
         .cards
@@ -2336,7 +2377,7 @@ async fn create_card(
             estimate: req.estimate,
         })
         .await
-        .map_err(kanban_err)?;
+        .map_err(task_err)?;
     record_activity(
         &state.store,
         "card",
@@ -2344,20 +2385,17 @@ async fn create_card(
     )
     .await;
     crate::app::events::publish(crate::app::events::EventKind::Card);
-    Ok(Json(CardDto::from(CardView {
-        card: row,
-        pipeline_name: None,
-    })))
+    Ok(Json(CardDto::from(row)))
 }
 
 #[utoipa::path(
     post,
-    path = "/api/kanban/cards/{id}/move",
+    path = "/api/task/cards/{id}/move",
     request_body = MoveCardRequest,
     responses((status = 200, body = str), (status = 404, body = str))
 )]
 async fn move_card(
-    State(state): State<KanbanStore>,
+    State(state): State<TaskStore>,
     axum::extract::Path(id): axum::extract::Path<i64>,
     user: AuthUser,
     Json(req): Json<MoveCardRequest>,
@@ -2372,7 +2410,7 @@ async fn move_card(
             position: req.position,
         })
         .await
-        .map_err(kanban_err)?;
+        .map_err(task_err)?;
     record_activity(
         &state.store,
         "card",
@@ -2383,45 +2421,143 @@ async fn move_card(
     Ok("ok")
 }
 
-#[utoipa::path(delete, path = "/api/kanban/cards/{id}", responses((status = 200, body = str), (status = 404, body = str)))]
+#[utoipa::path(get, path = "/api/tasks", responses((status = 200, body = [CardDto])))]
+async fn list_tasks(
+    State(state): State<TaskStore>,
+    axum::extract::Query(query): axum::extract::Query<ListCardsQuery>,
+    user: AuthUser,
+) -> Result<Json<Vec<CardDto>>, ApiError> {
+    list_cards(State(state), axum::extract::Query(query), user).await
+}
+
+/// Create a Task from the Board (or chat, or any external source).
+/// Status defaults to TODO; the new task lands in the board's first column.
+#[utoipa::path(
+    post,
+    path = "/api/tasks",
+    request_body = CreateTaskRequest,
+    responses((status = 200, body = CardDto), (status = 400, body = str))
+)]
+async fn create_task(
+    State(state): State<TaskStore>,
+    user: AuthUser,
+    Json(req): Json<CreateTaskRequest>,
+) -> Result<Json<CardDto>, ApiError> {
+    require_edit(&user)?;
+    let status = match req.status.as_deref() {
+        None => task_rs::TaskStatus::Todo,
+        Some(raw) => task_rs::TaskStatus::parse(raw),
+    };
+    let priority = req
+        .priority
+        .unwrap_or_else(|| task_rs::PRIORITY_NORMAL.to_string());
+    let row = state
+        .app
+        .cards
+        .create(NewCard {
+            project_id: req.project_id,
+            column_id: status.column().to_owned(),
+            title: req.title,
+            description: req.description.unwrap_or_default(),
+            priority,
+            labels: None,
+            checklist: None,
+            estimate: None,
+        })
+        .await
+        .map_err(task_err)?;
+    record_activity(
+        &state.store,
+        "card",
+        format!("created task \"{}\"", row.title),
+    )
+    .await;
+    crate::app::events::publish(crate::app::events::EventKind::Card);
+    Ok(Json(CardDto::from(row)))
+}
+
+/// Move a task between workflow statuses. The backend validates the
+/// transition; the frontend is never the authority.
+#[utoipa::path(
+    patch,
+    path = "/api/tasks/{id}/status",
+    request_body = SetTaskStatusRequest,
+    responses((status = 200, body = CardDto), (status = 400, body = str), (status = 404, body = str))
+)]
+async fn set_task_status(
+    State(state): State<TaskStore>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+    user: AuthUser,
+    Json(req): Json<SetTaskStatusRequest>,
+) -> Result<Json<CardDto>, ApiError> {
+    require_edit(&user)?;
+    let to = task_rs::TaskStatus::parse(&req.status);
+    let row = state.app.cards.set_status(id, to).await.map_err(task_err)?;
+    record_activity(
+        &state.store,
+        "card",
+        format!("moved task {id} to {}", to.as_str()),
+    )
+    .await;
+    crate::app::events::publish(crate::app::events::EventKind::Card);
+    Ok(Json(CardDto::from(row)))
+}
+
+#[utoipa::path(delete, path = "/api/task/cards/{id}", responses((status = 200, body = str), (status = 404, body = str)))]
 async fn remove_card(
-    State(state): State<KanbanStore>,
+    State(state): State<TaskStore>,
     axum::extract::Path(id): axum::extract::Path<i64>,
     user: AuthUser,
 ) -> Result<&'static str, ApiError> {
     require_edit(&user)?;
-    state.app.cards.remove(id).await.map_err(kanban_err)?;
+    state.app.cards.remove(id).await.map_err(task_err)?;
     crate::app::events::publish(crate::app::events::EventKind::Card);
     Ok("ok")
 }
 
-#[utoipa::path(get, path = "/api/kanban/cards/{id}/agent", responses((status = 200, body = AgentDto), (status = 404, body = str)))]
+#[utoipa::path(get, path = "/api/task/cards/{id}/agent", responses((status = 200, body = AgentDto), (status = 404, body = str)))]
 async fn get_agent(
-    State(state): State<KanbanStore>,
+    State(state): State<TaskStore>,
     axum::extract::Path(id): axum::extract::Path<i64>,
     _user: AuthUser,
 ) -> Result<Json<AgentDto>, ApiError> {
+    let card = state
+        .app
+        .cards
+        .get(id)
+        .await
+        .map_err(task_err)?
+        .ok_or(ApiError(
+            ApiError::NOT_FOUND_MSG.to_string(),
+            StatusCode::NOT_FOUND,
+        ))?;
     let agent = state
         .app
         .cards
         .agent(id)
         .await
-        .map_err(kanban_err)?
-        .ok_or(ApiError(
-            ApiError::NOT_FOUND_MSG.to_string(),
-            StatusCode::NOT_FOUND,
-        ))?;
-    Ok(Json(AgentDto::from(agent)))
+        .map_err(task_err)?
+        .unwrap_or(task_rs::AgentState {
+            name: String::new(),
+            state: serde_json::Value::Null,
+        });
+    Ok(Json(AgentDto {
+        name: agent.name,
+        state: agent.state,
+        runner: card.runner().as_kind().to_owned(),
+        run_status: card.run_status,
+        last_agent: card.last_agent,
+    }))
 }
 
 #[utoipa::path(
     put,
-    path = "/api/kanban/cards/{id}/agent",
+    path = "/api/task/cards/{id}/agent",
     request_body = SetAgentRequest,
     responses((status = 200, body = str), (status = 404, body = str))
 )]
 async fn set_agent(
-    State(state): State<KanbanStore>,
+    State(state): State<TaskStore>,
     axum::extract::Path(id): axum::extract::Path<i64>,
     user: AuthUser,
     Json(req): Json<SetAgentRequest>,
@@ -2432,113 +2568,94 @@ async fn set_agent(
         .cards
         .set_agent(
             id,
-            &kanban_rs::AgentState {
+            &task_rs::AgentState {
                 name: req.name,
                 state: req.state.unwrap_or(serde_json::Value::Null),
             },
         )
         .await
-        .map_err(kanban_err)?;
+        .map_err(task_err)?;
+    crate::app::events::publish(crate::app::events::EventKind::Card);
+    Ok("ok")
+}
+
+#[utoipa::path(
+    put,
+    path = "/api/task/cards/{id}/image",
+    request_body = SetCardImageRequest,
+    responses((status = 200, body = str), (status = 404, body = str))
+)]
+async fn set_card_image(
+    State(state): State<TaskStore>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+    user: AuthUser,
+    Json(req): Json<SetCardImageRequest>,
+) -> Result<&'static str, ApiError> {
+    require_edit(&user)?;
+    state
+        .app
+        .cards
+        .set_card_image(id, req.image.as_deref())
+        .await
+        .map_err(task_err)?;
     crate::app::events::publish(crate::app::events::EventKind::Card);
     Ok("ok")
 }
 
 #[utoipa::path(
     get,
-    path = "/api/kanban/cards/{id}/resources",
+    path = "/api/task/cards/{id}/runs",
+    responses((status = 200, body = [CardRunDto]), (status = 404, body = str))
+)]
+async fn list_card_runs(
+    State(state): State<TaskStore>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+    _user: AuthUser,
+) -> Result<Json<Vec<CardRunDto>>, ApiError> {
+    let runs = state.app.cards.card_runs(id).await.map_err(task_err)?;
+    Ok(Json(
+        runs.iter().map(|r| CardRunDto::from(r.clone())).collect(),
+    ))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/task/cards/{id}/resources",
     responses((status = 200, body = [ResourceDto]), (status = 404, body = str))
 )]
 async fn list_card_resources(
-    State(state): State<KanbanStore>,
+    State(state): State<TaskStore>,
     axum::extract::Path(id): axum::extract::Path<i64>,
     _user: AuthUser,
 ) -> Result<Json<Vec<ResourceDto>>, ApiError> {
-    let rows = state.app.resources.list(id).await.map_err(kanban_err)?;
+    let rows = state.app.resources.list(id).await.map_err(task_err)?;
     Ok(Json(rows.iter().map(ResourceDto::from).collect()))
 }
 
 #[utoipa::path(
     post,
-    path = "/api/pipelines/schema",
-    responses((status = 200, body = str))
-)]
-async fn pipeline_schema(_user: AuthUser) -> Json<serde_json::Value> {
-    Json(piplines::port::schema())
-}
-
-#[derive(Deserialize, utoipa::ToSchema)]
-struct TestPipelineRequest {
-    #[serde(default)]
-    input: String,
-}
-
-pub const TEST_SEED_DEFAULT: &str = "test";
-
-#[utoipa::path(
-    post,
-    path = "/api/pipelines/{id}/test",
-    request_body = TestPipelineRequest,
-    responses((status = 200, body = crate::app::pipeline_run::RunRecord), (status = 404, body = str), (status = 400, body = str))
-)]
-async fn test_pipeline(
-    State(state): State<KanbanStore>,
-    axum::extract::Path(id): axum::extract::Path<i64>,
-    user: AuthUser,
-    body: Option<Json<TestPipelineRequest>>,
-) -> Result<Json<crate::app::pipeline_run::RunRecord>, ApiError> {
-    require_edit(&user)?;
-    let input = body
-        .map(|Json(req)| req.input)
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| TEST_SEED_DEFAULT.to_owned());
-    let record =
-        crate::app::pipeline_run::test_pipeline(&state.app, state.engine.clone(), id, &input)
-            .await
-            .map_err(kanban_err)?;
-    Ok(Json(record))
-}
-
-#[utoipa::path(
-    put,
-    path = "/api/kanban/cards/{id}/pipeline",
-    request_body = SetCardPipelineRequest,
-    responses((status = 200, body = str), (status = 404, body = str))
-)]
-async fn set_card_pipeline(
-    State(state): State<KanbanStore>,
-    axum::extract::Path(id): axum::extract::Path<i64>,
-    user: AuthUser,
-    Json(req): Json<SetCardPipelineRequest>,
-) -> Result<&'static str, ApiError> {
-    require_edit(&user)?;
-    state
-        .app
-        .cards
-        .set_pipeline(id, req.pipeline_id)
-        .await
-        .map_err(kanban_err)?;
-    crate::app::events::publish(crate::app::events::EventKind::Card);
-    Ok("ok")
-}
-
-#[utoipa::path(
-    post,
-    path = "/api/kanban/cards/{id}/run",
-    responses((status = 200, body = crate::app::pipeline_run::RunRecord), (status = 404, body = str), (status = 400, body = str))
+    path = "/api/task/cards/{id}/run",
+    responses((status = 200, body = crate::app::card_run::RunRecord), (status = 404, body = str), (status = 400, body = str))
 )]
 async fn run_card(
-    State(state): State<KanbanStore>,
+    State(state): State<TaskStore>,
     axum::extract::Path(id): axum::extract::Path<i64>,
     user: AuthUser,
-) -> Result<Json<crate::app::pipeline_run::RunRecord>, ApiError> {
+) -> Result<Json<crate::app::card_run::RunRecord>, ApiError> {
     require_edit(&user)?;
-    let record = crate::app::pipeline_run::run_card_pipeline(&state.app, state.engine.clone(), id)
-        .await
-        .map_err(kanban_err)?;
+    let record = crate::app::card_run::run_card(
+        &state.app,
+        state.engine.clone(),
+        state.engines.as_deref(),
+        id,
+        task_rs::TRIGGER_MANUAL,
+    )
+    .await
+    .map_err(task_err)?;
     record_activity(
         &state.store,
         "run",
-        format!("started pipeline run for task {id}"),
+        format!("started agent run for task {id}"),
     )
     .await;
     crate::app::events::publish(crate::app::events::EventKind::Card);
@@ -2547,12 +2664,12 @@ async fn run_card(
 
 #[utoipa::path(
     put,
-    path = "/api/kanban/cards/{id}/schedule",
+    path = "/api/task/cards/{id}/schedule",
     request_body = SetScheduleRequest,
     responses((status = 200, body = str), (status = 404, body = str), (status = 400, body = str))
 )]
 async fn set_card_schedule(
-    State(state): State<KanbanStore>,
+    State(state): State<TaskStore>,
     axum::extract::Path(id): axum::extract::Path<i64>,
     user: AuthUser,
     Json(req): Json<SetScheduleRequest>,
@@ -2567,7 +2684,7 @@ async fn set_card_schedule(
         .cards
         .set_cron(id, req.cron.clone())
         .await
-        .map_err(kanban_err)?;
+        .map_err(task_err)?;
     crate::app::events::publish(crate::app::events::EventKind::Cron);
     Ok("ok")
 }
@@ -2577,7 +2694,7 @@ struct CronJobDto {
     card_id: i64,
     title: String,
     cron: String,
-    pipeline_name: Option<String>,
+    agent_name: Option<String>,
     next_run: u64,
 }
 
@@ -2587,7 +2704,7 @@ struct CronJobDto {
     responses((status = 200, body = [CronJobDto]))
 )]
 async fn list_cronjobs(
-    State(state): State<KanbanStore>,
+    State(state): State<TaskStore>,
     _user: AuthUser,
 ) -> Result<Json<Vec<CronJobDto>>, ApiError> {
     let next: std::collections::HashMap<i64, u64> = state
@@ -2598,18 +2715,19 @@ async fn list_cronjobs(
         .collect();
     let jobs = state
         .app
-        .card_views(None)
+        .cards
+        .list(None)
         .await
-        .map_err(kanban_err)?
+        .map_err(task_err)?
         .into_iter()
-        .filter_map(|v| {
-            let cron = v.card.cron.clone()?;
+        .filter_map(|card| {
+            let cron = card.cron.clone()?;
             Some(CronJobDto {
-                card_id: v.card.id,
-                title: v.card.title,
+                card_id: card.id,
+                title: card.title,
                 cron,
-                pipeline_name: v.pipeline_name,
-                next_run: next.get(&v.card.id).copied().unwrap_or(0),
+                agent_name: card.agent_name,
+                next_run: next.get(&card.id).copied().unwrap_or(0),
             })
         })
         .collect::<Vec<_>>();
@@ -2618,12 +2736,12 @@ async fn list_cronjobs(
 
 #[utoipa::path(
     put,
-    path = "/api/kanban/cards/{id}",
+    path = "/api/task/cards/{id}",
     request_body = UpdateCardRequest,
     responses((status = 200, body = str), (status = 404, body = str))
 )]
 async fn update_card(
-    State(state): State<KanbanStore>,
+    State(state): State<TaskStore>,
     axum::extract::Path(id): axum::extract::Path<i64>,
     user: AuthUser,
     Json(req): Json<UpdateCardRequest>,
@@ -2644,42 +2762,43 @@ async fn update_card(
             estimate: req.estimate,
         })
         .await
-        .map_err(kanban_err)?;
+        .map_err(task_err)?;
     crate::app::events::publish(crate::app::events::EventKind::Card);
-    let view = state
+    let card = state
         .app
-        .card_view(id)
+        .cards
+        .get(id)
         .await
-        .map_err(kanban_err)?
+        .map_err(task_err)?
         .ok_or(ApiError(
             ApiError::NOT_FOUND_MSG.to_string(),
             StatusCode::NOT_FOUND,
         ))?;
-    Ok(Json(CardDto::from(view)))
+    Ok(Json(CardDto::from(card)))
 }
 
 #[utoipa::path(
     get,
-    path = "/api/kanban/cards/{id}/comments",
+    path = "/api/task/cards/{id}/comments",
     responses((status = 200, body = [CommentDto]), (status = 404, body = str))
 )]
 async fn list_comments(
-    State(state): State<KanbanStore>,
+    State(state): State<TaskStore>,
     axum::extract::Path(id): axum::extract::Path<i64>,
     _user: AuthUser,
 ) -> Result<Json<Vec<CommentDto>>, ApiError> {
-    let rows = state.app.comments.list(id).await.map_err(kanban_err)?;
+    let rows = state.app.comments.list(id).await.map_err(task_err)?;
     Ok(Json(rows.into_iter().map(CommentDto::from).collect()))
 }
 
 #[utoipa::path(
     post,
-    path = "/api/kanban/cards/{id}/comments",
+    path = "/api/task/cards/{id}/comments",
     request_body = AddCommentRequest,
     responses((status = 200, body = CommentDto), (status = 404, body = str))
 )]
 async fn add_comment(
-    State(state): State<KanbanStore>,
+    State(state): State<TaskStore>,
     axum::extract::Path(id): axum::extract::Path<i64>,
     user: AuthUser,
     Json(req): Json<AddCommentRequest>,
@@ -2690,108 +2809,13 @@ async fn add_comment(
         .comments
         .add(id, user.0.username, req.body.trim().to_string())
         .await
-        .map_err(kanban_err)?;
+        .map_err(task_err)?;
     Ok(Json(CommentDto::from(row)))
-}
-
-#[utoipa::path(get, path = "/api/pipelines", responses((status = 200, body = [PipelineDto])))]
-async fn list_pipelines(
-    State(state): State<KanbanStore>,
-    _user: AuthUser,
-) -> Result<Json<Vec<PipelineDto>>, ApiError> {
-    let rows = state.app.pipelines.list().await.map_err(cfg_err)?;
-    Ok(Json(rows.into_iter().map(PipelineDto::from).collect()))
-}
-
-#[utoipa::path(
-    post,
-    path = "/api/pipelines",
-    request_body = SavePipelineRequest,
-    responses((status = 200, body = PipelineDto), (status = 400, body = str))
-)]
-async fn create_pipeline(
-    State(state): State<KanbanStore>,
-    user: AuthUser,
-    Json(req): Json<SavePipelineRequest>,
-) -> Result<Json<PipelineDto>, ApiError> {
-    require_edit(&user)?;
-    let row = state
-        .app
-        .pipelines
-        .create(NewPipeline {
-            name: req.name.trim().to_string(),
-            spec: serde_json::to_string(&req.spec)
-                .map_err(|e| ApiError::internal(e.to_string()))?,
-        })
-        .await
-        .map_err(cfg_err)?;
-    record_activity(
-        &state.store,
-        "pipeline",
-        format!("created pipeline {}", row.name),
-    )
-    .await;
-    crate::app::events::publish(crate::app::events::EventKind::Pipeline);
-    let spec = serde_json::from_str(&row.spec).unwrap_or(serde_json::Value::Null);
-    Ok(Json(PipelineDto {
-        id: row.id,
-        name: row.name,
-        spec,
-    }))
-}
-
-#[utoipa::path(
-    put,
-    path = "/api/pipelines/{id}",
-    request_body = SavePipelineRequest,
-    responses((status = 200, body = str), (status = 404, body = str), (status = 400, body = str))
-)]
-async fn update_pipeline(
-    State(state): State<KanbanStore>,
-    axum::extract::Path(id): axum::extract::Path<i64>,
-    user: AuthUser,
-    Json(req): Json<SavePipelineRequest>,
-) -> Result<&'static str, ApiError> {
-    require_edit(&user)?;
-    let spec = serde_json::to_string(&req.spec).map_err(|e| ApiError::internal(e.to_string()))?;
-    state
-        .app
-        .pipelines
-        .update(
-            id,
-            NewPipeline {
-                name: req.name.trim().to_string(),
-                spec,
-            },
-        )
-        .await
-        .map_err(cfg_err)?;
-    record_activity(
-        &state.store,
-        "pipeline",
-        format!("updated pipeline {}", req.name),
-    )
-    .await;
-    crate::app::events::publish(crate::app::events::EventKind::Pipeline);
-    Ok("ok")
-}
-
-#[utoipa::path(delete, path = "/api/pipelines/{id}", responses((status = 200, body = str), (status = 404, body = str)))]
-async fn remove_pipeline(
-    State(state): State<KanbanStore>,
-    axum::extract::Path(id): axum::extract::Path<i64>,
-    user: AuthUser,
-) -> Result<&'static str, ApiError> {
-    require_edit(&user)?;
-    state.app.pipelines.remove(id).await.map_err(cfg_err)?;
-    record_activity(&state.store, "pipeline", format!("removed pipeline {id}")).await;
-    crate::app::events::publish(crate::app::events::EventKind::Pipeline);
-    Ok("ok")
 }
 
 #[utoipa::path(get, path = "/api/agents", responses((status = 200, body = [AgentConfigDto])))]
 async fn list_agents(
-    State(state): State<KanbanStore>,
+    State(state): State<TaskStore>,
     _user: AuthUser,
 ) -> Result<Json<Vec<AgentConfigDto>>, ApiError> {
     let rows = state.app.agents.list().await.map_err(cfg_err)?;
@@ -2805,12 +2829,13 @@ async fn list_agents(
     responses((status = 200, body = AgentConfigDto), (status = 400, body = str))
 )]
 async fn create_agent(
-    State(state): State<KanbanStore>,
+    State(state): State<TaskStore>,
     user: AuthUser,
     Json(req): Json<AgentConfigRequest>,
 ) -> Result<Json<AgentConfigDto>, ApiError> {
     require_edit(&user)?;
     let allowed_tools = valid_tools(&req.allowed_tools)?;
+    let thinking = valid_thinking(req.thinking.as_deref())?;
     let row = state
         .app
         .agents
@@ -2822,6 +2847,7 @@ async fn create_agent(
             output: req.output.unwrap_or_default(),
             allowed_tools,
             receive_images: req.receive_images,
+            thinking,
         })
         .await
         .map_err(cfg_err)?;
@@ -2835,13 +2861,14 @@ async fn create_agent(
     responses((status = 200, body = str), (status = 404, body = str), (status = 400, body = str))
 )]
 async fn update_agent_cfg(
-    State(state): State<KanbanStore>,
+    State(state): State<TaskStore>,
     axum::extract::Path(id): axum::extract::Path<i64>,
     user: AuthUser,
     Json(req): Json<AgentConfigRequest>,
 ) -> Result<&'static str, ApiError> {
     require_edit(&user)?;
     let allowed_tools = valid_tools(&req.allowed_tools)?;
+    let thinking = valid_thinking(req.thinking.as_deref())?;
     state
         .app
         .agents
@@ -2855,6 +2882,7 @@ async fn update_agent_cfg(
                 output: req.output.unwrap_or_default(),
                 allowed_tools,
                 receive_images: req.receive_images,
+                thinking,
             },
         )
         .await
@@ -2864,7 +2892,7 @@ async fn update_agent_cfg(
 
 #[utoipa::path(delete, path = "/api/agents/{id}", responses((status = 200, body = str), (status = 404, body = str)))]
 async fn remove_agent_cfg(
-    State(state): State<KanbanStore>,
+    State(state): State<TaskStore>,
     axum::extract::Path(id): axum::extract::Path<i64>,
     user: AuthUser,
 ) -> Result<&'static str, ApiError> {
@@ -2875,7 +2903,7 @@ async fn remove_agent_cfg(
 
 #[utoipa::path(get, path = "/api/skills", responses((status = 200, body = [SkillDto])))]
 async fn list_skills(
-    State(state): State<KanbanStore>,
+    State(state): State<TaskStore>,
     _user: AuthUser,
 ) -> Result<Json<Vec<SkillDto>>, ApiError> {
     let rows = state.app.skills.list().await.map_err(cfg_err)?;
@@ -2889,7 +2917,7 @@ async fn list_skills(
     responses((status = 200, body = SkillDto), (status = 400, body = str))
 )]
 async fn create_skill(
-    State(state): State<KanbanStore>,
+    State(state): State<TaskStore>,
     user: AuthUser,
     Json(req): Json<SkillRequest>,
 ) -> Result<Json<SkillDto>, ApiError> {
@@ -2910,7 +2938,7 @@ async fn create_skill(
     responses((status = 200, body = str), (status = 404, body = str))
 )]
 async fn update_skill(
-    State(state): State<KanbanStore>,
+    State(state): State<TaskStore>,
     axum::extract::Path(id): axum::extract::Path<i64>,
     user: AuthUser,
     Json(req): Json<SkillRequest>,
@@ -2927,7 +2955,7 @@ async fn update_skill(
 
 #[utoipa::path(delete, path = "/api/skills/{id}", responses((status = 200, body = str), (status = 404, body = str)))]
 async fn remove_skill(
-    State(state): State<KanbanStore>,
+    State(state): State<TaskStore>,
     axum::extract::Path(id): axum::extract::Path<i64>,
     user: AuthUser,
 ) -> Result<&'static str, ApiError> {
@@ -2942,7 +2970,7 @@ async fn remove_skill(
     responses((status = 200, body = [SkillDto]), (status = 404, body = str))
 )]
 async fn list_agent_skills(
-    State(state): State<KanbanStore>,
+    State(state): State<TaskStore>,
     axum::extract::Path(id): axum::extract::Path<i64>,
     _user: AuthUser,
 ) -> Result<Json<Vec<SkillDto>>, ApiError> {
@@ -2957,7 +2985,7 @@ async fn list_agent_skills(
     responses((status = 200, body = str), (status = 404, body = str))
 )]
 async fn attach_agent_skill(
-    State(state): State<KanbanStore>,
+    State(state): State<TaskStore>,
     axum::extract::Path(id): axum::extract::Path<i64>,
     user: AuthUser,
     Json(req): Json<AgentSkillRequest>,
@@ -2978,7 +3006,7 @@ async fn attach_agent_skill(
     responses((status = 200, body = str), (status = 404, body = str))
 )]
 async fn detach_agent_skill(
-    State(state): State<KanbanStore>,
+    State(state): State<TaskStore>,
     axum::extract::Path(ids): axum::extract::Path<(i64, i64)>,
     user: AuthUser,
 ) -> Result<&'static str, ApiError> {
@@ -2994,12 +3022,12 @@ async fn detach_agent_skill(
 
 #[utoipa::path(get, path = "/api/activity", responses((status = 200, body = [ActivityDto])))]
 async fn list_activity(
-    State(state): State<KanbanStore>,
+    State(state): State<TaskStore>,
     _user: AuthUser,
 ) -> Result<Json<Vec<ActivityDto>>, ApiError> {
     let rows = state
         .store
-        .list_activity(kanban_rs::ACTIVITY_LIST_DEFAULT)
+        .list_activity(task_rs::ACTIVITY_LIST_DEFAULT)
         .await
         .map_err(store_err)?;
     Ok(Json(rows.into_iter().map(ActivityDto::from).collect()))
@@ -3019,8 +3047,8 @@ struct AgentOutputDto {
     created_at: String,
 }
 
-impl From<kanban_rs::AgentOutputRow> for AgentOutputDto {
-    fn from(r: kanban_rs::AgentOutputRow) -> Self {
+impl From<task_rs::AgentOutputRow> for AgentOutputDto {
+    fn from(r: task_rs::AgentOutputRow) -> Self {
         Self {
             id: r.id,
             agent: r.agent,
@@ -3045,7 +3073,7 @@ struct AgentOutputStatusRequest {
     responses((status = 200, body = [AgentOutputDto]), (status = 401, body = str))
 )]
 async fn list_agent_outputs_handler(
-    State(state): State<KanbanStore>,
+    State(state): State<TaskStore>,
     axum::extract::Query(q): axum::extract::Query<AgentOutputStatusQuery>,
     _user: AuthUser,
 ) -> Result<Json<Vec<AgentOutputDto>>, ApiError> {
@@ -3069,7 +3097,7 @@ struct AgentOutputStatusQuery {
     responses((status = 200, body = AgentOutputDto), (status = 404, body = str))
 )]
 async fn get_agent_output_handler(
-    State(state): State<KanbanStore>,
+    State(state): State<TaskStore>,
     axum::extract::Path(id): axum::extract::Path<i64>,
     _user: AuthUser,
 ) -> Result<Json<AgentOutputDto>, ApiError> {
@@ -3089,16 +3117,16 @@ async fn get_agent_output_handler(
     responses((status = 200, body = str), (status = 400, body = str), (status = 404, body = str))
 )]
 async fn set_agent_output_status_handler(
-    State(state): State<KanbanStore>,
+    State(state): State<TaskStore>,
     axum::extract::Path(id): axum::extract::Path<i64>,
     user: AuthUser,
     Json(req): Json<AgentOutputStatusRequest>,
 ) -> Result<&'static str, ApiError> {
     require_edit(&user)?;
     let status = match req.status.as_str() {
-        kanban_rs::OUTPUT_STATUS_APPROVED => kanban_rs::OUTPUT_STATUS_APPROVED,
-        kanban_rs::OUTPUT_STATUS_REJECTED => kanban_rs::OUTPUT_STATUS_REJECTED,
-        kanban_rs::OUTPUT_STATUS_PENDING => kanban_rs::OUTPUT_STATUS_PENDING,
+        task_rs::OUTPUT_STATUS_APPROVED => task_rs::OUTPUT_STATUS_APPROVED,
+        task_rs::OUTPUT_STATUS_REJECTED => task_rs::OUTPUT_STATUS_REJECTED,
+        task_rs::OUTPUT_STATUS_PENDING => task_rs::OUTPUT_STATUS_PENDING,
         _ => {
             return Err(ApiError::bad_request(
                 "status must be approved | rejected | pending",
@@ -3109,7 +3137,7 @@ async fn set_agent_output_status_handler(
         .store
         .set_agent_output_status(id, status)
         .await
-        .map_err(kanban_err)?;
+        .map_err(task_err)?;
     record_activity(
         &state.store,
         "agent-output",
@@ -3119,13 +3147,228 @@ async fn set_agent_output_status_handler(
     Ok("ok")
 }
 
+#[utoipa::path(
+    delete,
+    path = "/api/agent-outputs/{id}",
+    responses((status = 200, body = str), (status = 404, body = str))
+)]
+async fn remove_agent_output_handler(
+    State(state): State<TaskStore>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+    user: AuthUser,
+) -> Result<&'static str, ApiError> {
+    require_edit(&user)?;
+    state
+        .store
+        .remove_agent_output(id)
+        .await
+        .map_err(task_err)?;
+    record_activity(
+        &state.store,
+        "agent-output",
+        format!("output #{id} deleted by {}", user.0.username),
+    )
+    .await;
+    Ok("ok")
+}
+
+// ---- Routines: recurring automation, separate from tasks (owner-handled) ----
+
+#[derive(Serialize, utoipa::ToSchema)]
+struct RoutineDto {
+    id: i64,
+    name: String,
+    cron: String,
+    agent: String,
+    instruction: String,
+    enabled: bool,
+    created_at: String,
+}
+
+impl From<task_rs::RoutineRow> for RoutineDto {
+    fn from(r: task_rs::RoutineRow) -> Self {
+        Self {
+            id: r.id,
+            name: r.name,
+            cron: r.cron,
+            agent: r.agent,
+            instruction: r.instruction,
+            enabled: r.enabled,
+            created_at: r.created_at,
+        }
+    }
+}
+
+#[derive(Serialize, utoipa::ToSchema)]
+struct RoutineRunDto {
+    id: i64,
+    routine_id: i64,
+    trigger: String,
+    started_at: String,
+    finished_at: Option<String>,
+    ok: bool,
+    summary: String,
+}
+
+impl From<task_rs::RoutineRunRow> for RoutineRunDto {
+    fn from(r: task_rs::RoutineRunRow) -> Self {
+        Self {
+            id: r.id,
+            routine_id: r.routine_id,
+            trigger: r.trigger,
+            started_at: r.started_at,
+            finished_at: r.finished_at,
+            ok: r.ok,
+            summary: r.summary,
+        }
+    }
+}
+
+#[derive(Deserialize, utoipa::ToSchema)]
+struct RoutineRequest {
+    name: String,
+    /// 5-field UTC cron expression.
+    cron: String,
+    /// Agent persona to run with; empty = default engine.
+    #[serde(default)]
+    agent: String,
+    #[serde(default)]
+    instruction: String,
+    #[serde(default = "default_true")]
+    enabled: bool,
+}
+
+impl RoutineRequest {
+    fn draft(&self) -> task_rs::RoutineDraft {
+        task_rs::RoutineDraft {
+            name: self.name.clone(),
+            cron: self.cron.clone(),
+            agent: self.agent.clone(),
+            instruction: self.instruction.clone(),
+            enabled: self.enabled,
+        }
+    }
+}
+
+async fn list_routines(
+    State(state): State<TaskStore>,
+    _user: AuthUser,
+) -> Result<Json<Vec<RoutineDto>>, ApiError> {
+    let rows = state.store.list_routines().await.map_err(store_err)?;
+    Ok(Json(rows.into_iter().map(RoutineDto::from).collect()))
+}
+
+async fn create_routine(
+    State(state): State<TaskStore>,
+    user: AuthUser,
+    Json(req): Json<RoutineRequest>,
+) -> Result<Json<RoutineDto>, ApiError> {
+    require_owner(&user)?;
+    validate_routine_cron(&req.cron)?;
+    let id = state
+        .store
+        .add_routine(&req.draft())
+        .await
+        .map_err(store_err)?;
+    let row = state
+        .store
+        .get_routine(id)
+        .await
+        .map_err(store_err)?
+        .ok_or_else(routine_not_found)?;
+    record_activity(
+        &state.store,
+        "routine",
+        format!("created routine \"{}\"", req.name),
+    )
+    .await;
+    Ok(Json(RoutineDto::from(row)))
+}
+
+async fn update_routine(
+    State(state): State<TaskStore>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+    user: AuthUser,
+    Json(req): Json<RoutineRequest>,
+) -> Result<Json<RoutineDto>, ApiError> {
+    require_owner(&user)?;
+    validate_routine_cron(&req.cron)?;
+    state
+        .store
+        .update_routine(id, &req.draft())
+        .await
+        .map_err(store_err)?;
+    let row = state
+        .store
+        .get_routine(id)
+        .await
+        .map_err(store_err)?
+        .ok_or_else(routine_not_found)?;
+    Ok(Json(RoutineDto::from(row)))
+}
+
+async fn delete_routine(
+    State(state): State<TaskStore>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+    user: AuthUser,
+) -> Result<&'static str, ApiError> {
+    require_owner(&user)?;
+    state.store.remove_routine(id).await.map_err(store_err)?;
+    record_activity(&state.store, "routine", format!("deleted routine #{id}")).await;
+    Ok("ok")
+}
+
+/// Run a routine right now; the run record is stored for owner review.
+async fn run_routine_now(
+    State(state): State<TaskStore>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+    user: AuthUser,
+) -> Result<Json<RoutineRunDto>, ApiError> {
+    require_owner(&user)?;
+    let routine = state
+        .store
+        .get_routine(id)
+        .await
+        .map_err(store_err)?
+        .ok_or_else(routine_not_found)?;
+    let (_, row) = crate::app::routine_run::run_routine_manual(
+        &state.app,
+        &state.store,
+        state.engine.as_ref(),
+        state.engines.as_deref(),
+        &routine,
+    )
+    .await
+    .map_err(task_err)?;
+    Ok(Json(RoutineRunDto::from(row)))
+}
+
+async fn list_routine_runs(
+    State(state): State<TaskStore>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+    _user: AuthUser,
+) -> Result<Json<Vec<RoutineRunDto>>, ApiError> {
+    let rows = state.store.routine_runs(id).await.map_err(store_err)?;
+    Ok(Json(rows.into_iter().map(RoutineRunDto::from).collect()))
+}
+
+fn validate_routine_cron(expr: &str) -> Result<(), ApiError> {
+    work::services::cron::Cron::parse(expr)
+        .map(|_| ())
+        .map_err(|e| ApiError::bad_request(format!("invalid cron: {e}")))
+}
+
+fn routine_not_found() -> ApiError {
+    ApiError(ApiError::NOT_FOUND_MSG.to_string(), StatusCode::NOT_FOUND)
+}
+
 #[derive(Deserialize)]
 struct EventTokenQuery {
     token: Option<String>,
 }
 
 async fn events_ws(
-    State(state): State<KanbanStore>,
+    State(state): State<TaskStore>,
     axum::extract::Query(q): axum::extract::Query<EventTokenQuery>,
     ws: WebSocketUpgrade,
 ) -> Response {
@@ -3164,50 +3407,46 @@ async fn events_ws(
     })
 }
 
-async fn record_activity(store: &kanban_rs::Store, kind: &str, message: impl std::fmt::Display) {
+async fn record_activity(store: &task_rs::Store, kind: &str, message: impl std::fmt::Display) {
     if let Err(e) = store.record_activity(kind, &message.to_string()).await {
         tracing::warn!(kind, error = %e, "activity log write failed");
     }
 }
 
-fn store_err(e: kanban_rs::StoreError) -> ApiError {
+fn store_err(e: task_rs::StoreError) -> ApiError {
     ApiError::internal(e.to_string())
 }
 
-fn workspace_err(e: kanban_rs::StoreError) -> ApiError {
+fn workspace_err(e: task_rs::StoreError) -> ApiError {
     match e {
-        kanban_rs::StoreError::WorkspaceTaken => {
+        task_rs::StoreError::WorkspaceTaken => {
             ApiError::bad_request("workspace name already taken")
         }
-        kanban_rs::StoreError::ProjectTaken => ApiError::bad_request("project name already taken"),
+        task_rs::StoreError::ProjectTaken => ApiError::bad_request("project name already taken"),
         other => ApiError::internal(other.to_string()),
     }
 }
 
-fn cfg_err(e: kanban_rs::StoreError) -> ApiError {
+fn cfg_err(e: task_rs::StoreError) -> ApiError {
     match e {
-        kanban_rs::StoreError::NoSuchCard
-        | kanban_rs::StoreError::NoSuchPipeline
-        | kanban_rs::StoreError::NoSuchAgent
-        | kanban_rs::StoreError::NoSuchSkill => {
+        task_rs::StoreError::NoSuchCard
+        | task_rs::StoreError::NoSuchAgent
+        | task_rs::StoreError::NoSuchSkill => {
             ApiError(ApiError::NOT_FOUND_MSG.to_string(), StatusCode::NOT_FOUND)
         }
-        kanban_rs::StoreError::PipelineTaken => {
-            ApiError::bad_request("pipeline name already taken")
-        }
-        kanban_rs::StoreError::AgentTaken => ApiError::bad_request("agent name already taken"),
-        kanban_rs::StoreError::SkillTaken => ApiError::bad_request("skill name already taken"),
-        kanban_rs::StoreError::BadSpec(msg) => ApiError::bad_request(msg),
+        task_rs::StoreError::AgentTaken => ApiError::bad_request("agent name already taken"),
+        task_rs::StoreError::SkillTaken => ApiError::bad_request("skill name already taken"),
+        task_rs::StoreError::BadSpec(msg) => ApiError::bad_request(msg),
         other => ApiError::internal(other.to_string()),
     }
 }
 
-fn kanban_err(e: kanban_rs::StoreError) -> ApiError {
+fn task_err(e: task_rs::StoreError) -> ApiError {
     match e {
-        kanban_rs::StoreError::NoSuchCard | kanban_rs::StoreError::NoSuchColumn => {
+        task_rs::StoreError::NoSuchCard | task_rs::StoreError::NoSuchColumn => {
             ApiError(ApiError::NOT_FOUND_MSG.to_string(), StatusCode::NOT_FOUND)
         }
-        kanban_rs::StoreError::BadSpec(msg) => ApiError::bad_request(msg),
+        task_rs::StoreError::BadSpec(msg) => ApiError::bad_request(msg),
         other => ApiError::internal(other.to_string()),
     }
 }
@@ -3606,6 +3845,7 @@ struct MachineAgentGitRequest {
     title: Option<String>,
     head: Option<String>,
     base: Option<String>,
+    project_id: Option<i64>,
 }
 
 #[utoipa::path(
@@ -3628,6 +3868,7 @@ async fn run_machine_git(
         title: req.title,
         head: req.head,
         base: req.base,
+        project_id: req.project_id,
     }
     .tool()?;
     if agent.is_empty() {
@@ -3802,7 +4043,7 @@ async fn issue_agent_run_token(
     require_edit(&AuthUser(user))?;
     let issued = state
         .store
-        .issue_agent_token(&kanban_rs::NewAgentRunToken {
+        .issue_agent_token(&task_rs::NewAgentRunToken {
             agent: &agent,
             project_id: req.project_id,
             card_id: req.card_id,
@@ -3822,14 +4063,14 @@ async fn issue_agent_run_token(
 }
 
 async fn auth_user_from_store(
-    store: &std::sync::Arc<kanban_rs::Store>,
+    store: &std::sync::Arc<task_rs::Store>,
     headers: &http::HeaderMap,
-) -> Result<kanban_rs::UserRow, ApiError> {
+) -> Result<task_rs::UserRow, ApiError> {
     let token = headers
         .get(http::header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix(BEARER_PREFIX))
-        .filter(|t| !t.starts_with(kanban_rs::TOKEN_PREFIX))
+        .filter(|t| !t.starts_with(task_rs::TOKEN_PREFIX))
         .ok_or_else(|| ApiError(UNAUTHORIZED_MSG.to_string(), StatusCode::UNAUTHORIZED))?;
     store
         .auth(token)
@@ -3852,7 +4093,7 @@ struct AgentResultReply {
 /// Agent callback authenticated by a run ticket: routes the result to the
 /// card and/or thread bound to the ticket, then consumes the ticket.
 async fn agent_results(
-    State(state): State<KanbanStore>,
+    State(state): State<TaskStore>,
     AuthAgent(ticket): AuthAgent,
     Json(req): Json<AgentResultRequest>,
 ) -> Result<Json<AgentResultReply>, ApiError> {
@@ -3869,7 +4110,7 @@ async fn agent_results(
     if let Some(thread_id) = ticket.thread_id {
         state
             .store
-            .add_chat_message(thread_id, kanban_rs::ROLE_ASSISTANT, &req.result)
+            .add_chat_message(thread_id, task_rs::ROLE_ASSISTANT, &req.result)
             .await
             .map_err(|e| ApiError::bad_request(e.to_string()))?;
         thread_message = true;
@@ -3902,7 +4143,7 @@ struct ProjectAgentsReply {
 /// Who works in this project: agents attached to cards, agents owning chat
 /// threads, and agents currently holding a live run ticket.
 async fn project_agents(
-    State(state): State<KanbanStore>,
+    State(state): State<TaskStore>,
     axum::extract::Path(id): axum::extract::Path<i64>,
     _user: AuthUser,
 ) -> Result<Json<ProjectAgentsReply>, ApiError> {
@@ -3924,19 +4165,34 @@ async fn project_agents(
     let mut merged: std::collections::BTreeMap<String, ProjectAgentDto> =
         std::collections::BTreeMap::new();
     for card in &cards {
-        let Some(name) = card.agent_name.as_deref() else {
-            continue;
-        };
-        let entry = merged
-            .entry(name.to_owned())
-            .or_insert_with(|| ProjectAgentDto {
-                name: name.to_owned(),
-                card_ids: Vec::new(),
-                threads: 0,
-                running: false,
-                machine: None,
-            });
-        entry.card_ids.push(card.id);
+        if let Some(name) = card.agent_name.as_deref() {
+            let entry = merged
+                .entry(name.to_owned())
+                .or_insert_with(|| ProjectAgentDto {
+                    name: name.to_owned(),
+                    card_ids: Vec::new(),
+                    threads: 0,
+                    running: false,
+                    machine: None,
+                });
+            entry.card_ids.push(card.id);
+        }
+        // A run record (last_agent) also surfaces the agent on the project,
+        // without being a preference on the card.
+        if let Some(name) = card.last_agent.as_deref()
+            && card.run_status == task_rs::RUN_STATUS_RUNNING
+        {
+            let entry = merged
+                .entry(name.to_owned())
+                .or_insert_with(|| ProjectAgentDto {
+                    name: name.to_owned(),
+                    card_ids: Vec::new(),
+                    threads: 0,
+                    running: false,
+                    machine: None,
+                });
+            entry.running = true;
+        }
     }
     for thread in &threads {
         let entry = merged
@@ -3977,7 +4233,8 @@ async fn project_agents(
 struct AgentGitRequest {
     /// `clone` needs `url`; `branch` needs `name`; `commit` needs `message`;
     /// `push` takes `branch`; `pr` takes `title`/`head`/`base`; `status` and
-    /// `diff` take no arguments.
+    /// `diff` take no arguments. `project_id` supplies the stored repo
+    /// secret when `push`/`pr` carry no explicit `token`.
     op: String,
     url: Option<String>,
     token: Option<String>,
@@ -3987,6 +4244,7 @@ struct AgentGitRequest {
     title: Option<String>,
     head: Option<String>,
     base: Option<String>,
+    project_id: Option<i64>,
 }
 
 impl AgentGitRequest {
@@ -4047,8 +4305,13 @@ impl AgentGitRequest {
 async fn run_agent_git(
     State(state): State<ManagerState>,
     Path(agent): Path<String>,
-    Json(req): Json<AgentGitRequest>,
+    Json(mut req): Json<AgentGitRequest>,
 ) -> Result<Json<AgentRunReply>, ApiError> {
+    if req.token.is_none()
+        && let Some(id) = req.project_id
+    {
+        req.token = state.settings.git_repo(id).and_then(|r| r.secret);
+    }
     let tool = req.tool()?;
     let manager = Arc::clone(&state.manager);
     let git_agent = agent.clone();
@@ -4132,18 +4395,52 @@ async fn agent_whereis(
     }
 }
 
+/// Optional body for the finish route: `{ push: true, project_id?, branch? }`.
+/// Pushes the task's branch (repo + token from the project's bound git repo)
+/// before the work tree is torn down.
+#[derive(Deserialize, utoipa::ToSchema)]
+struct FinishRequest {
+    #[serde(default)]
+    push: bool,
+    /// Project whose bound git repo supplies the push url + token.
+    #[serde(default)]
+    project_id: Option<i64>,
+    /// Overrides the pushed branch (default: task branch, else current).
+    #[serde(default)]
+    branch: Option<String>,
+}
+
+impl FinishRequest {
+    fn finish_push(&self, settings: &SettingsState) -> Option<manager_rs::manager::FinishPush> {
+        if !self.push {
+            return None;
+        }
+        let repo = self.project_id.and_then(|id| settings.git_repo(id));
+        Some(manager_rs::manager::FinishPush {
+            repo_url: repo.as_ref().map(|r| r.url.clone()),
+            token: repo.and_then(|r| r.secret).unwrap_or_default(),
+            branch: self.branch.clone(),
+        })
+    }
+}
+
 async fn finish_agent(
     State(state): State<ManagerState>,
     Path(agent): Path<String>,
+    req: Option<Json<FinishRequest>>,
 ) -> Result<Json<StoredOutcome>, ApiError> {
     const STATUS_FINISHED: &str = "finished";
     const STATUS_ERROR: &str = "error";
     let settings = Arc::new(SettingsState::load());
     let finish_agent_name = agent.clone();
     let manager = Arc::clone(&state.manager);
-    let outcome = tokio::task::spawn_blocking(move || manager.finish(&finish_agent_name))
-        .await
-        .map_err(|e| ApiError::bad_request(e.to_string()))?;
+    // Optional push: repo + token come from the project's bound git repo.
+    let finish_push = req.and_then(|Json(r)| r.finish_push(&state.settings));
+    let outcome = tokio::task::spawn_blocking(move || {
+        manager.finish_with_push(&finish_agent_name, finish_push)
+    })
+    .await
+    .map_err(|e| ApiError::bad_request(e.to_string()))?;
     match &outcome {
         Ok(out) => {
             let (settings, agent, status) =
@@ -4188,6 +4485,17 @@ async fn finish_agent(
         patch: outcome.patch,
         commit: outcome.commit,
         output_id,
+        push: outcome.push.map(|r| match r {
+            Ok(out) => {
+                let out = out.trim();
+                if out.is_empty() {
+                    "pushed".to_string()
+                } else {
+                    out.to_string()
+                }
+            }
+            Err(e) => format!("push failed: {e}"),
+        }),
     }))
 }
 
@@ -4198,6 +4506,10 @@ struct StoredOutcome {
     patch: String,
     commit: Option<String>,
     output_id: i64,
+    /// Present when the finish asked for a push: remote output, or the
+    /// failure reason prefixed with "push failed:".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    push: Option<String>,
 }
 
 /// Installer for remote sandbox clients; `role` selects auto/model/worker.
@@ -4281,8 +4593,9 @@ async fn install_script(
         remove_card,
         get_agent,
         set_agent,
+        list_card_runs,
         run_card,
-        test_pipeline,
+        set_card_image,
         set_card_schedule,
         list_cronjobs,
         list_comments,
@@ -4339,9 +4652,7 @@ async fn install_script(
         SandboxSweepReply,
         CardDto,
         AgentDto,
-        crate::app::pipeline_run::RunRecord,
-        crate::app::pipeline_run::RunStage,
-        crate::app::pipeline_run::StageStatus,
+        crate::app::card_run::RunRecord,
         CreateCardRequest,
         ListCardsQuery,
         MoveCardRequest,
@@ -4382,10 +4693,12 @@ struct ChatRequest {
     agent: Option<String>,
     /// Chat thread id; scopes long-term memory recall/remember to the thread.
     thread_id: Option<i64>,
-    /// Target kanban card: tool artifacts produced this turn (written files,
+    /// Target task card: tool artifacts produced this turn (written files,
     /// images, text output) are attached to it as card resources.
-    #[serde(default)]
     card_id: Option<i64>,
+    /// Chat's project: with a bound agent, a no-tool answer to a work request
+    /// is escalated to an opened card + run in this project.
+    project_id: Option<i64>,
 }
 /// One tool call the agent made, for display in the chat UI.
 #[derive(Serialize, utoipa::ToSchema)]
@@ -4592,10 +4905,14 @@ struct ZaiChatRequest {
     /// agent's `receive_images` flag.
     #[serde(default)]
     image: Option<String>,
-    /// Target kanban card: tool artifacts produced this turn are attached to
+    /// Target task card: tool artifacts produced this turn are attached to
     /// it as card resources.
     #[serde(default)]
     card_id: Option<i64>,
+    /// Chat's project: with a bound agent, a no-tool answer to a work request
+    /// is escalated to an opened card + run in this project.
+    #[serde(default)]
+    project_id: Option<i64>,
     /// Client-generated id for this run; when set, the run can be cancelled
     /// via `/api/chat/zai/cancel`.
     #[serde(default)]
@@ -4659,6 +4976,26 @@ struct MoveCardRequest {
     position: i32,
 }
 
+/// Create-task body for `POST /api/tasks`; `status` defaults to todo.
+#[derive(Deserialize, utoipa::ToSchema)]
+struct CreateTaskRequest {
+    title: String,
+    description: Option<String>,
+    /// "low" | "normal" | "high" | "critical" (default: normal).
+    priority: Option<String>,
+    /// Owning project — a task lives in exactly one project.
+    project_id: Option<i64>,
+    /// todo | in_progress | review | conflict | done | failed (default: todo).
+    status: Option<String>,
+}
+
+/// Body of `PATCH /api/tasks/{id}/status`.
+#[derive(Deserialize, utoipa::ToSchema)]
+struct SetTaskStatusRequest {
+    /// todo | in_progress | review | conflict | done | failed.
+    status: String,
+}
+
 #[derive(Deserialize, utoipa::ToSchema)]
 struct SetAgentRequest {
     name: String,
@@ -4678,9 +5015,13 @@ struct CardDto {
     agent_name: Option<String>,
     /// JSON-encoded agent state, if an agent is attached.
     agent_state: Option<serde_json::Value>,
+    /// Last recorded run status; a record, not a preference.
+    run_status: String,
+    /// Agent that executed the most recent run.
+    last_agent: Option<String>,
     assignee: Option<String>,
-    pipeline_id: Option<i64>,
-    pipeline_name: Option<String>,
+    /// Sandbox image used by the card's runs; null = default.
+    image: Option<String>,
     cron: Option<String>,
     deadline: Option<String>,
     /// JSON array of label strings.
@@ -4688,10 +5029,13 @@ struct CardDto {
     /// JSON array of {text, done} objects.
     checklist: Option<String>,
     estimate: Option<i32>,
+    /// Canonical workflow status (todo | in_progress | review | conflict | done | failed).
+    status: String,
 }
 
-impl From<kanban_rs::CardRow> for CardDto {
-    fn from(r: kanban_rs::CardRow) -> Self {
+impl From<task_rs::CardRow> for CardDto {
+    fn from(r: task_rs::CardRow) -> Self {
+        let status = task_rs::TaskStatus::parse(&r.column_id);
         Self {
             id: r.id,
             column_id: r.column_id,
@@ -4702,23 +5046,17 @@ impl From<kanban_rs::CardRow> for CardDto {
             position: r.position,
             agent_name: r.agent_name,
             agent_state: r.agent_state.and_then(|s| serde_json::from_str(&s).ok()),
+            run_status: r.run_status,
+            last_agent: r.last_agent,
             assignee: r.assignee,
-            pipeline_id: r.pipeline_id,
-            pipeline_name: None,
+            image: r.image,
             cron: r.cron,
             deadline: r.deadline,
             labels: r.labels,
             checklist: r.checklist,
             estimate: r.estimate,
+            status: status.as_str().to_owned(),
         }
-    }
-}
-
-impl From<CardView> for CardDto {
-    fn from(v: CardView) -> Self {
-        let mut dto = CardDto::from(v.card);
-        dto.pipeline_name = v.pipeline_name;
-        dto
     }
 }
 
@@ -4749,8 +5087,8 @@ struct CommentDto {
     created_at: String,
 }
 
-impl From<kanban_rs::CommentRow> for CommentDto {
-    fn from(c: kanban_rs::CommentRow) -> Self {
+impl From<task_rs::CommentRow> for CommentDto {
+    fn from(c: task_rs::CommentRow) -> Self {
         Self {
             id: c.id,
             card_id: c.card_id,
@@ -4769,8 +5107,8 @@ struct ActivityDto {
     created_at: String,
 }
 
-impl From<kanban_rs::ActivityRow> for ActivityDto {
-    fn from(r: kanban_rs::ActivityRow) -> Self {
+impl From<task_rs::ActivityRow> for ActivityDto {
+    fn from(r: task_rs::ActivityRow) -> Self {
         Self {
             id: r.id,
             kind: r.kind,
@@ -4786,40 +5124,15 @@ struct AddCommentRequest {
 }
 
 #[derive(Deserialize, utoipa::ToSchema)]
-struct SetCardPipelineRequest {
-    /// Pipeline to run on this card; null to unassign.
-    pipeline_id: Option<i64>,
+struct SetCardImageRequest {
+    /// Sandbox image name, or null to clear.
+    image: Option<String>,
 }
 
 #[derive(Deserialize, utoipa::ToSchema)]
 struct SetScheduleRequest {
     /// 5-field cron expression (UTC), or null to unschedule the card.
     cron: Option<String>,
-}
-
-#[derive(Deserialize, utoipa::ToSchema)]
-struct SavePipelineRequest {
-    name: String,
-    /// piplines::graph::PipelineSpec: {nodes: [{id, stage, params}], links: [{from, to}]}
-    spec: serde_json::Value,
-}
-
-#[derive(Serialize, utoipa::ToSchema)]
-struct PipelineDto {
-    id: i64,
-    name: String,
-    spec: serde_json::Value,
-}
-
-impl From<kanban_rs::PipelineRow> for PipelineDto {
-    fn from(r: kanban_rs::PipelineRow) -> Self {
-        let spec = serde_json::from_str(&r.spec).unwrap_or(serde_json::Value::Null);
-        Self {
-            id: r.id,
-            name: r.name,
-            spec,
-        }
-    }
 }
 
 #[derive(Serialize, utoipa::ToSchema)]
@@ -4831,8 +5144,8 @@ struct ResourceDto {
     created_at: String,
 }
 
-impl From<&kanban_rs::ResourceRow> for ResourceDto {
-    fn from(r: &kanban_rs::ResourceRow) -> Self {
+impl From<&task_rs::ResourceRow> for ResourceDto {
+    fn from(r: &task_rs::ResourceRow) -> Self {
         Self {
             id: r.id,
             card_id: r.card_id,
@@ -4856,10 +5169,22 @@ struct AgentConfigRequest {
     /// False = the agent must never receive images. Defaults to true.
     #[serde(default = "default_true")]
     receive_images: bool,
+    /// Reasoning depth: "off" (default) | "low" | "medium" | "high".
+    #[serde(default)]
+    thinking: Option<String>,
 }
 
 fn default_true() -> bool {
     true
+}
+
+fn valid_thinking(level: Option<&str>) -> Result<String, ApiError> {
+    let Some(level) = level.map(str::trim).filter(|l| !l.is_empty()) else {
+        return Ok(task_rs::ThinkLevel::default().as_str().to_owned());
+    };
+    task_rs::ThinkLevel::parse(level)
+        .map(|l| l.as_str().to_owned())
+        .ok_or_else(|| ApiError::bad_request(format!("unknown thinking level: {level}")))
 }
 
 #[derive(Serialize, utoipa::ToSchema)]
@@ -4872,10 +5197,11 @@ struct AgentConfigDto {
     output: String,
     allowed_tools: Vec<String>,
     receive_images: bool,
+    thinking: String,
 }
 
-impl From<kanban_rs::AgentConfigRow> for AgentConfigDto {
-    fn from(r: kanban_rs::AgentConfigRow) -> Self {
+impl From<task_rs::AgentConfigRow> for AgentConfigDto {
+    fn from(r: task_rs::AgentConfigRow) -> Self {
         Self {
             id: r.id,
             name: r.name,
@@ -4885,6 +5211,7 @@ impl From<kanban_rs::AgentConfigRow> for AgentConfigDto {
             output: r.output,
             allowed_tools: r.allowed_tools,
             receive_images: r.receive_images,
+            thinking: r.thinking,
         }
     }
 }
@@ -4896,8 +5223,8 @@ struct SkillDto {
     body: String,
 }
 
-impl From<kanban_rs::SkillRow> for SkillDto {
-    fn from(s: kanban_rs::SkillRow) -> Self {
+impl From<task_rs::SkillRow> for SkillDto {
+    fn from(s: task_rs::SkillRow) -> Self {
         Self {
             id: s.id,
             name: s.name,
@@ -4921,13 +5248,45 @@ struct AgentSkillRequest {
 struct AgentDto {
     name: String,
     state: serde_json::Value,
+    /// Runner kind: "human" | "pinned".
+    runner: String,
+    run_status: String,
+    last_agent: Option<String>,
 }
 
-impl From<kanban_rs::AgentState> for AgentDto {
-    fn from(a: kanban_rs::AgentState) -> Self {
+impl From<task_rs::AgentState> for AgentDto {
+    fn from(a: task_rs::AgentState) -> Self {
         Self {
             name: a.name,
             state: a.state,
+            runner: task_rs::RUNNER_HUMAN.into(),
+            run_status: task_rs::RUN_STATUS_IDLE.into(),
+            last_agent: None,
+        }
+    }
+}
+
+#[derive(Serialize, utoipa::ToSchema)]
+struct CardRunDto {
+    id: i64,
+    trigger: String,
+    agent: String,
+    ok: bool,
+    summary: String,
+    started_at: String,
+    finished_at: Option<String>,
+}
+
+impl From<task_rs::RunRecordRow> for CardRunDto {
+    fn from(r: task_rs::RunRecordRow) -> Self {
+        Self {
+            id: r.id,
+            trigger: r.trigger,
+            agent: r.agent,
+            ok: r.ok,
+            summary: r.summary,
+            started_at: r.started_at.to_rfc3339(),
+            finished_at: r.finished_at.map(|t| t.to_rfc3339()),
         }
     }
 }
@@ -4976,8 +5335,8 @@ struct UserDto {
     must_change_password: bool,
 }
 
-impl From<kanban_rs::UserRow> for UserDto {
-    fn from(u: kanban_rs::UserRow) -> Self {
+impl From<task_rs::UserRow> for UserDto {
+    fn from(u: task_rs::UserRow) -> Self {
         Self {
             id: u.id,
             username: u.username,
@@ -4993,8 +5352,8 @@ struct WorkspaceDto {
     name: String,
 }
 
-impl From<kanban_rs::WorkspaceRow> for WorkspaceDto {
-    fn from(w: kanban_rs::WorkspaceRow) -> Self {
+impl From<task_rs::WorkspaceRow> for WorkspaceDto {
+    fn from(w: task_rs::WorkspaceRow) -> Self {
         Self {
             id: w.id,
             name: w.name,
@@ -5009,8 +5368,8 @@ struct ProjectDto {
     name: String,
 }
 
-impl From<kanban_rs::ProjectRow> for ProjectDto {
-    fn from(p: kanban_rs::ProjectRow) -> Self {
+impl From<task_rs::ProjectRow> for ProjectDto {
+    fn from(p: task_rs::ProjectRow) -> Self {
         Self {
             id: p.id,
             workspace_id: p.workspace_id,

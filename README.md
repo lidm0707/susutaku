@@ -35,13 +35,12 @@ plan → pipeline of stages → manager process spawns sandboxed agents → resu
 | Path | Description |
 |---|---|
 | `backend/` | HTTP backend: harness/agent API, sandbox adapter, auth, settings |
-| `crates/manager-rs` | Manager process: per-agent sandboxed work trees, spawn/run/finish, scaling |
-| `crates/piplines` | Plan automation: stages wired into a graph, payload passed stage to stage |
-| `crates/core-agent` | Agent state, sandbox (macOS/Linux/Windows), web search |
+| `crates/manager-rs` | Manager process: per-agent/per-task sandboxed work trees, spawn/run/finish + push/PR, scaling |
+| `crates/core-agent` | Agent state, rootless podman sandbox (`podman/`), toolcalls, web search |
 | `crates/local_model` | **Local model server**: HTTP API + TCP hub, engine pool (MLX/GGUF) |
 | `crates/mlx-rs` | MLX inference backend |
-| `crates/hf_loader` | Model dir scanning + loadability filter (size ≥ 30 GiB, 4-bit) |
-| `crates/kanban-rs` | Kanban model + Postgres store (plan/task tracking) |
+| `crates/hf_loader` | Model dir scanning + loadability filter (size/quant policy: see `local_model` AGENTS.md) |
+| `crates/task-rs` | Task board model + Postgres store (plan/task tracking) |
 | `crates/pdf-rs` | PDF parsing |
 | `crates/gguf-rs` | GGUF model file parsing |
 | `crates/agent_3th_cli/` | `claude_cli`, `codex_cli` |
@@ -49,6 +48,8 @@ plan → pipeline of stages → manager process spawns sandboxed agents → resu
 | `crates/work` | Applications/services built on the crates above |
 | `crates/queue-rs` | Queueing |
 | `crates/prompt-sys` | Prompt handling |
+| `crates/math` · `physic` · `bio` · `chemi` · `quatum` | Engine-free domain libraries (math, simulations, qubit gates) |
+| `crates/plan` · `text_ide` · `git-rs` · `lsp-rs` | Plan model, text editor kit, git2 work-tree control, LSP client/tools |
 | `web_ui/` | Web UI, including the Kanban board page |
 | `docker/` | Backend container image + compose stacks |
 | `models/` | Local model directories |
@@ -69,8 +70,9 @@ plan → pipeline of stages → manager process spawns sandboxed agents → resu
   (inference requests fail per-job), e.g. for a hub-only container.
 
 Model discovery goes through `hf_loader::loadable_models` — never hardcode
-model paths. Policy: only models **larger than 30 GiB** on disk, **4-bit (Q4)**
-quantized; select at runtime via `POST /api/models/select`.
+model paths. Policy (`crates/hf_loader/src/lib.rs`): MLX models must be
+**4-bit and at most 30 GiB** on disk; GGUF models must be **Q4** quantized;
+select at runtime via `POST /api/models/select`.
 
 ### Running
 
@@ -86,15 +88,19 @@ itself never runs inside the backend container.
 
 ## Sandboxed agent execution
 
-- **macOS** — Seatbelt sandbox.
-- **Linux** — rootless sandbox: userns + mount ns + chroot jail + seccomp
-  deny-list. The backend can run agents fully inside Docker
-  (`docker/compose/sandbox.yml`); required compose flags:
-  `security_opt: [seccomp=unconfined, apparmor=unconfined]` — the sandbox
-  refuses to run unsandboxed.
-- Sandbox network is loopback-only: agent commands inside the sandbox have no
-  internet; `claude`/`codex` CLIs must be baked into the image and run outside
-  the sandbox.
+- Every agent command runs in a **rootless podman container**
+  (`crates/core-agent/src/podman/`), workspace bind-mounted, env allow-list,
+  rlimits, timeout kill. The sandbox contract is `sandbox_abstract_layer.rs`;
+  podman is the shipping backend on all host OSes (macOS needs
+  `podman machine`).
+- The backend can run agents fully inside Docker (`docker/compose/deploy.yml`,
+  or the standalone `docker/compose/sandbox.yml`): nested podman requires
+  `security_opt: [seccomp=unconfined, apparmor=unconfined]`, `privileged: true`
+  and `/dev/fuse` — the sandbox refuses to run unsandboxed. See
+  `docs/podman-sandbox.md`.
+- Sandbox network defaults to `--network=none`: agent commands have no internet
+  unless a run explicitly enables it (in-sandbox git push/PR); `claude`/`codex`
+  CLIs must be baked into the image to be usable.
 
 ## Kanban board (plan tracking)
 
@@ -105,11 +111,14 @@ postgres://susutaku:susutaku@localhost:5434/susutaku
 ```
 
 > `sqlx` macros compile against the live DB — keep the container up when
-> running `cargo check` on `kanban-rs` / `backend`.
+> running `cargo check` on `task-rs` / `backend`.
 
 API: `/api/workspaces`, `/api/workspaces/{id}/projects`,
-`/api/kanban/cards?project_id=`, `/api/kanban/cards/{id}/move`,
-`/api/kanban/cards/{id}/agent` (per-card agent name/state JSON).
+`/api/task/cards?project_id=`, `/api/task/cards/{id}/move`,
+`/api/task/cards/{id}/agent` (per-card agent name/state JSON),
+`/api/task/cards/{id}/schedule` (cron), `/api/task/cards/{id}/image`,
+`/api/task/cards/{id}/run` + `/runs` (run the assigned agent, view history).
+Durable review artifacts: `/api/agent-outputs` (+ `/{id}/status` approve/reject).
 
 Auth: argon2 password hashing, ranked roles
 (`owner > super_admin > admin > editor > viewer`), bearer tokens

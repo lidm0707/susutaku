@@ -1,5 +1,8 @@
 # Git toolcalls: "there is no TLS stream available" and how agent git works
 
+For the user-facing review flow built on these ops (diff fallbacks, artifact
+capture, review page e2e) see `docs/review-flow.md`.
+
 ## Symptom
 
 The agent's `GIT CLONE` failed instantly with:
@@ -60,19 +63,23 @@ Split of responsibilities — host = network + credentials, container = files
 
 | op | runs where | why |
 |---|---|---|
-| `GIT CLONE` | host (git-rs/git2) into the agent's workspace | bootstrap; token lives in the project repo binding |
-| `GIT STATUS` / `GIT DIFF` | host (git-rs/git2) | read-only inspection |
-| `GIT BRANCH` / `GIT COMMIT` / `GIT PUSH` / `GIT PR` | inside the agent's own podman container (`NetworkPolicyChoice::Enabled`) | the agent does its git work in its own environment; host never commits or pushes for it |
+| `GIT CLONE` | host (git-rs/git2) into the agent's work tree (`manager-rs/src/git_state.rs`) | bootstrap; with **no url**, the repo bound to the chat's project is used (`backend/src/infra/project_git.rs`: thread → project → repo setting, token stays host-side) |
+| `GIT STATUS` / `GIT DIFF` | host (git-rs/git2) | read-only inspection; a clone is only allowed into a fresh workspace (anything beyond the spawn's `.git`/`snapshots` is refused) |
+| `GIT BRANCH` / `GIT COMMIT` / `GIT PUSH` / `GIT PR` | inside the agent's own podman container (`NetworkPolicyChoice::Enabled`) | the agent does its git work in its own environment; host never commits or pushes for it. The agent is selected by naming it last on the tool line: `TOOL: GIT COMMIT my message @<agent>` (`prompt.rs` `TOOL_GIT_INSTRUCTION`) |
 
 In-container auth uses a container-local GIT_ASKPASS reading `$GIT_TOKEN`
 (injected per run via `Sandbox::run_with_env`), so the token never lands in
-the workspace, `.git/config`, argv, or the transcript. PRs go through the
-GitHub API with curl; `$GIT_TOKEN` is expanded by the shell at runtime — the
-header must stay in **double quotes** in the generated script or curl sends
-the literal string `$GIT_TOKEN`.
+the workspace, `.git/config`, argv, or the transcript. Commits are a clean
+no-op when there is nothing staged (`git diff --quiet --cached` fallback).
+PRs go through the GitHub API with curl (`owner/repo` slug parsed from the
+remote url, base defaults to `PR_BASE_DEFAULT = "main"`, overridable API base
+via `SUSUTAKU_GH_API_BASE` for e2e); `$GIT_TOKEN` is expanded by the shell at
+runtime — the header must stay in **double quotes** in the generated script
+or curl sends the literal string `$GIT_TOKEN`.
 
 See `.plans/106-agent-in-sandbox-git-work.md` and
-`crates/core-agent/src/podman/git_in_sandbox.rs`.
+`crates/core-agent/src/toolcall/git_in_sandbox.rs` (manager-rs keeps its own
+copy of the same module: `crates/manager-rs/src/git_in_sandbox.rs`).
 
 ## Checklist when git clone fails again
 

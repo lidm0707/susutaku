@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use kanban_rs::{SkillRow, StoreError};
+use task_rs::{SkillRow, StoreError};
 
 use crate::port::outbound::SkillRepo;
 

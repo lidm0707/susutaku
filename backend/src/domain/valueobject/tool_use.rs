@@ -12,7 +12,7 @@ const IMAGE_EXTENSIONS: [&str; 5] = ["png", "jpg", "jpeg", "webp", "gif"];
 const TEXT_EXTENSIONS: [&str; 6] = ["txt", "json", "csv", "md", "log", "html"];
 
 /// What a tool call produced on disk: a picture, readable text, or any other
-/// file. Paths are workspace-relative; the artifact targets a kanban card as
+/// file. Paths are workspace-relative; the artifact targets a task card as
 /// a card resource when the turn carries a card id.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Artifact {

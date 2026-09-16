@@ -53,7 +53,7 @@ pub fn script_for(tool: &GitTool) -> Result<(String, Option<String>), String> {
         }
         GitTool::Commit { message } => Ok((
             work(&format!(
-                "git add -A && git -c user.name={n} -c user.email={e} commit -m {m}",
+                "git add -A && (git -c user.name={n} -c user.email={e} commit -m {m} || git diff --quiet --cached)",
                 n = shq(GIT_IDENTITY_NAME),
                 e = shq(GIT_IDENTITY_EMAIL),
                 m = shq(message),

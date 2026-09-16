@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE task_cards\n               SET run_status = $2, last_agent = $3, last_run_id = $4\n               WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "8af858ba23fc7ec41d4023b8942f52ec0280135e3181bd045f4141338d1cc4ad"
+}

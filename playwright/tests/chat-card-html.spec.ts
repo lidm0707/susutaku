@@ -29,7 +29,7 @@ test.describe("chat card chip + html fence", () => {
     await page.fill('input[placeholder="username"]', username);
     await page.fill('input[placeholder="password"]', password);
     await page.click('button[type="submit"]');
-    await page.waitForURL("**/kanban");
+    await page.waitForURL("**/task");
     token = await page.evaluate(() => localStorage.getItem("susutaku_token") || "");
     await page.close();
 
@@ -61,7 +61,7 @@ test.describe("chat card chip + html fence", () => {
   });
 
   async function open_board(page: Page) {
-    await page.goto("/kanban");
+    await page.goto("/task");
     // Workspace/project selection lives in the profile modal (radio groups).
     await page.click('button[title="profile"]');
     await page
@@ -118,10 +118,10 @@ test.describe("chat card chip + html fence", () => {
       page.waitForEvent("popup"),
       chip.click(),
     ]);
-    expect(popup.url()).toMatch(/kanban\?project=\d+&card=\d+$/);
-    await expect(popup.locator(".kanban-detail")).toBeVisible({ timeout: 10_000 });
+    expect(popup.url()).toMatch(/task\?project=\d+&card=\d+$/);
+    await expect(popup.locator(".task-detail")).toBeVisible({ timeout: 10_000 });
     await expect(
-      popup.locator('.kanban-detail input[placeholder="title"]')
+      popup.locator('.task-detail input[placeholder="title"]')
     ).toHaveValue(CARD_TITLE);
   });
 

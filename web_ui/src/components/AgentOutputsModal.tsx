@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, FileDiff, Play, Square, X } from "lucide-react";
+import { Check, FileDiff, Play, Square, Trash2, Upload, X } from "lucide-react";
 import {
+  delete_agent_output,
   fetch_agent_logs,
   fetch_agent_outputs,
   fetch_manager_agents,
@@ -11,6 +12,7 @@ import {
   type ManagerAgent,
   type StoredOutcome,
 } from "../lib.js";
+import { use_projects } from "./ProjectContext.js";
 import { Modal, SlideOver } from "../ui/Overlay.js";
 import { toast } from "../ui/Toast.js";
 
@@ -28,10 +30,12 @@ function OutputDetail({
   output,
   on_close,
   on_decide,
+  on_delete,
 }: {
   output: AgentOutput | null;
   on_close: () => void;
   on_decide: (id: number, status: AgentOutput["status"]) => void;
+  on_delete: (id: number) => void;
 }) {
   return (
     <SlideOver open={output != null} title={`output #${output?.id ?? ""} — ${output?.agent ?? ""}`} on_close={on_close}>
@@ -78,6 +82,11 @@ function OutputDetail({
               </button>
             </footer>
           )}
+          <footer className="output-actions">
+            <button className="danger" onClick={() => on_delete(output.id)}>
+              <Trash2 size={14} /> delete output
+            </button>
+          </footer>
         </article>
       )}
     </SlideOver>
@@ -141,7 +150,7 @@ function RunningList({
   runs: ManagerAgent[];
   stream_agent: string | null;
   on_stream: (agent: string) => void;
-  on_finish: (agent: string) => void;
+  on_finish: (agent: string, push: boolean) => void;
   finishing: string | null;
 }) {
   if (runs.length === 0) return <p className="empty">no agents running</p>;
@@ -158,9 +167,18 @@ function RunningList({
           <button
             className="agent-run-finish"
             disabled={finishing === r.agent}
-            onClick={() => on_finish(r.agent)}
+            onClick={() => on_finish(r.agent, false)}
           >
             {finishing === r.agent ? "finishing…" : "finish"}
+          </button>
+          <button
+            className="agent-run-finish"
+            disabled={finishing === r.agent}
+            onClick={() => on_finish(r.agent, true)}
+            title="finish and push the branch to the bound repo"
+            aria-label={`finish and push ${r.agent}`}
+          >
+            <Upload size={12} /> finish + push
           </button>
         </li>
       ))}
@@ -169,6 +187,7 @@ function RunningList({
 }
 
 export function AgentOutputsModal({ open, on_close }: { open: boolean; on_close: () => void }) {
+  const { project_id } = use_projects();
   const [runs, set_runs] = useState<ManagerAgent[] | null>(null);
   const [stream_agent, set_stream_agent] = useState<string | null>(null);
   const [finishing, set_finishing] = useState<string | null>(null);
@@ -197,12 +216,18 @@ export function AgentOutputsModal({ open, on_close }: { open: boolean; on_close:
       .catch((err: unknown) => set_error(err instanceof Error ? err.message : String(err)));
   }, [open]);
 
-  async function finish(agent: string) {
+  async function finish(agent: string, push: boolean) {
     set_finishing(agent);
     try {
-      const outcome: StoredOutcome = await finish_manager_agent(agent);
+      const outcome: StoredOutcome = await finish_manager_agent(agent, {
+        push,
+        project_id: project_id ?? undefined,
+      });
       if (stream_agent === agent) set_stream_agent(null);
-      toast(`agent ${agent} finished — output #${outcome.output_id} stored`);
+      const pushed = outcome.push
+        ? ` — ${outcome.push.startsWith("push failed") ? outcome.push : "pushed"}`
+        : "";
+      toast(`agent ${agent} finished — output #${outcome.output_id} stored${pushed}`);
       const fresh = await fetch_agent_outputs();
       set_outputs(fresh);
       const stored = fresh.find((o) => o.id === outcome.output_id);
@@ -221,6 +246,17 @@ export function AgentOutputsModal({ open, on_close }: { open: boolean; on_close:
         (prev ?? []).map((o) => (o.id === id ? { ...o, status } : o)),
       );
       set_selected((prev) => (prev && prev.id === id ? { ...prev, status } : prev));
+    } catch (err: unknown) {
+      toast(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function remove(id: number) {
+    try {
+      await delete_agent_output(id);
+      set_outputs((prev) => (prev ?? []).filter((o) => o.id !== id));
+      set_selected((prev) => (prev && prev.id === id ? null : prev));
+      toast(`output #${id} deleted`);
     } catch (err: unknown) {
       toast(err instanceof Error ? err.message : String(err));
     }
@@ -268,19 +304,34 @@ export function AgentOutputsModal({ open, on_close }: { open: boolean; on_close:
                 <p className="empty">no outputs yet — finish an agent task first</p>
               ) : (
                 visible.map((o) => (
-                  <button key={o.id} className="output-row" onClick={() => set_selected(o)}>
-                    <span className="output-id">#{o.id}</span>
-                    <span className="output-agent">{o.agent}</span>
-                    <span className="output-patch-size">{o.patch ? `${o.patch.split("\n").length} lines` : "no diff"}</span>
-                    <span className={status_badge_class(o.status)}>{o.status}</span>
-                  </button>
+                  <div key={o.id} className="output-row output-row-compact">
+                    <button className="output-row-main" onClick={() => set_selected(o)}>
+                      <span className="output-id">#{o.id}</span>
+                      <span className="output-agent">{o.agent}</span>
+                      <span className="output-patch-size">{o.patch ? `${o.patch.split("\n").length} lines` : "no diff"}</span>
+                      <span className={status_badge_class(o.status)}>{o.status}</span>
+                    </button>
+                    <button
+                      className="output-row-delete"
+                      onClick={() => remove(o.id)}
+                      aria-label={`delete output #${o.id}`}
+                      title="delete output"
+                    >
+                      <X size={12} />
+                    </button>
+                  </div>
                 ))
               )}
             </div>
           )}
         </section>
       </Modal>
-      <OutputDetail output={selected} on_close={() => set_selected(null)} on_decide={decide} />
+      <OutputDetail
+        output={selected}
+        on_close={() => set_selected(null)}
+        on_decide={decide}
+        on_delete={remove}
+      />
     </>
   );
 }

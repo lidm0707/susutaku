@@ -35,7 +35,7 @@ test.describe("schedule worker", () => {
     let res = await request.get("/api/cronjobs");
     expect(res.status()).toBe(401);
 
-    res = await request.put("/api/kanban/cards/1/schedule", {
+    res = await request.put("/api/task/cards/1/schedule", {
       data: { cron: EVERY_MINUTE },
     });
     expect(res.status()).toBe(401);
@@ -44,7 +44,7 @@ test.describe("schedule worker", () => {
     test.skip(viewer === null, "e2e user cannot manage users on this database");
     const vHeaders = { Authorization: `Bearer ${viewer}` };
 
-    res = await request.put("/api/kanban/cards/1/schedule", {
+    res = await request.put("/api/task/cards/1/schedule", {
       headers: vHeaders,
       data: { cron: EVERY_MINUTE },
     });
@@ -54,7 +54,7 @@ test.describe("schedule worker", () => {
     expect(res.ok()).toBeTruthy();
   });
 
-  test("backend worker picks up a scheduled card and runs its pipeline", async ({
+  test("backend worker picks up a scheduled card and runs it", async ({
     request,
   }) => {
     test.setTimeout(WORKER_TIMEOUT_MS + 60_000);
@@ -74,39 +74,21 @@ test.describe("schedule worker", () => {
     expect(res.ok()).toBeTruthy();
     const project = await res.json();
 
-    const spec = {
-      nodes: [
-        { id: "seed", stage: "ingest", params: {} },
-        { id: "shout", stage: "transform", params: { op: "upper" } },
-      ],
-      links: [{ from: "seed", to: "shout" }],
-    };
-    res = await request.post("/api/pipelines", {
-      headers,
-      data: { name: `e2e-worker-pipeline-${Date.now()}`, spec },
-    });
-    expect(res.ok()).toBeTruthy();
-    const pipeline = await res.json();
-
-    res = await request.post("/api/kanban/cards", {
+    res = await request.post("/api/task/cards", {
       headers,
       data: {
         project_id: project.id,
         column_id: "todo",
         title: "worker e2e card",
-        description: "scheduled pipeline run",
+        description: "scheduled card run",
       },
     });
     expect(res.ok()).toBeTruthy();
     const card = await res.json();
 
-    res = await request.put(`/api/kanban/cards/${card.id}/pipeline`, {
-      headers,
-      data: { pipeline_id: pipeline.id },
-    });
-    expect(res.ok()).toBeTruthy();
-
-    res = await request.put(`/api/kanban/cards/${card.id}/schedule`, {
+    // No agent assigned: the run must fail with the no-agent note, which is
+    // exactly what makes this check deterministic (no model, no sandbox).
+    res = await request.put(`/api/task/cards/${card.id}/schedule`, {
       headers,
       data: { cron: EVERY_MINUTE },
     });
@@ -127,12 +109,13 @@ test.describe("schedule worker", () => {
       .toBeGreaterThan(0);
     expect(listed?.cron).toBe(EVERY_MINUTE);
 
-    // The worker runs the due pipeline and records it on the card's agent state.
+    // The worker runs the due card and records the (failed) run on the
+    // card's agent state.
     let record: RunRecord | undefined;
     await expect
       .poll(
         async () => {
-          const agentRes = await request.get(`/api/kanban/cards/${card.id}/agent`, {
+          const agentRes = await request.get(`/api/task/cards/${card.id}/agent`, {
             headers,
           });
           if (!agentRes.ok()) return "";
@@ -142,12 +125,11 @@ test.describe("schedule worker", () => {
         },
         { timeout: WORKER_TIMEOUT_MS, intervals: [WORKER_POLL_MS] },
       )
-      .toBe("ok");
-    expect(record?.output).toBe("WORKER E2E CARD\n\nSCHEDULED PIPELINE RUN");
-    expect(record?.stages.map((s) => s.stage)).toEqual(["ingest", "transform"]);
+      .toContain("fail");
+    expect(record?.output ?? "").toContain("no agent");
 
     // Unschedule: the worker drops the card from its cron registry.
-    res = await request.put(`/api/kanban/cards/${card.id}/schedule`, {
+    res = await request.put(`/api/task/cards/${card.id}/schedule`, {
       headers,
       data: { cron: null },
     });

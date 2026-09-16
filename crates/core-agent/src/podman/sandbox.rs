@@ -42,6 +42,9 @@ pub struct Sandbox {
     /// `run` holds a read guard; `purge` takes the write guard, so a
     /// workspace can never be deleted mid-command.
     run_gate: RwLock<()>,
+    /// When set, dropping the handle leaves the work tree on disk (the
+    /// owner — e.g. a thread-environment manager — handles deletion).
+    keep_on_drop: bool,
 }
 
 /// One-shot sandbox: create, run, purge.
@@ -159,7 +162,15 @@ impl Sandbox {
             lifecycle: RwLock::new(Lifecycle::Idle),
             run_seq: AtomicU64::new(0),
             run_gate: RwLock::new(()),
+            keep_on_drop: false,
         })
+    }
+
+    /// Dropping this handle must not delete the work tree: the caller owns
+    /// the directory lifecycle (thread environments swept on idle TTL).
+    pub fn keep_on_drop(mut self) -> Self {
+        self.keep_on_drop = true;
+        self
     }
 
     /// Remove leftovers of dead backend instances (call at startup).
@@ -409,8 +420,9 @@ impl SandboxLayer for Sandbox {
 
 impl Drop for Sandbox {
     fn drop(&mut self) {
-        if self.run_gate.try_write().is_ok() {
-            let _ = fs::remove_dir_all(&self.root);
+        if self.keep_on_drop || self.run_gate.try_write().is_err() {
+            return;
         }
+        let _ = fs::remove_dir_all(&self.root);
     }
 }

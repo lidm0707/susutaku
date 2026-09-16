@@ -111,15 +111,28 @@ sequenceDiagram
     B->>S: sandbox.run(cmd) + transcript
     B-->>U: { output } (kept as pending result)
     U->>B: POST /api/manager/agents/{agent}/finish
-    B-->>U: TaskOutcome { result, state, work_tree }
-    B->>S: purge sandbox + work tree
+    B-->>U: TaskOutcome { result, state, work_tree, patch, commit, branch, push }
+    B->>S: purge sandbox + work tree, remove agent slot
 ```
 
 - `spawn` is idempotent — an already-running agent keeps its work tree.
+  Spawns can also carry a task (`spawn_task`): the slot key becomes
+  `agent|task`, the tree is seeded (optionally by cloning a repo), and when
+  the repo has commits a `task/<task>-<agent>` branch is checked out so
+  task work lands isolated.
+- The sandbox runs from the agent's cached image
+  (`localhost/susutaku-agent-cache:<agent>` — each run is committed back
+  into it), else the default coding image.
 - Stale non-empty work trees (crashed run, backend restart) are reclaimed on
   the next spawn of the same agent name.
-- `state` returned on finish carries the cwd + full transcript, ready to be
-  persisted (e.g. into the kanban card's `agent_state`).
+- `finish` captures the task patch first (`git-rs::task_patch`: commits
+  pending work, diffs against the spawn-time base commit — or the empty
+  tree on an unborn HEAD), optionally **pushes the branch before teardown**
+  (`finish_with_push`; push failure does not fail the finish), then tears
+  down the sandbox and its work tree and removes the slot. `state` carries
+  the cwd + full transcript, ready to be persisted (e.g. into the task
+  card's `agent_state`); `patch` + `commit` preserve the work as an
+  artifact after the tree is gone.
 
 ## 5. Commands
 
@@ -199,7 +212,7 @@ Implemented as of the podman sandbox work:
 - `POST /api/clients/{id}/kick` disconnects the client from the hub.
 - New backend endpoints drive shared machines by hostname:
   `POST /api/machines/{hostname}/agents/{agent}/run { cmd }`.
-- Web UI machines modal (agent sandboxes tab) lists every machine with the
+- Web UI runtime modal (agent sandboxes tab) lists every machine with the
   agents it runs (`agents: …`) and its sandbox count; remote machines can be
   kicked (disconnected) from there.
   machines; picking one opens an agent console (agent name + command →
@@ -220,45 +233,36 @@ sequenceDiagram
     B->>H: Command { agent, cmd }
     H->>C: Envelope { id, Command { agent, cmd } }
     C->>A: run(agent, cmd)
-    A->>A: sandbox work/agents/<agent> (podman)
+    C->>A: sandbox work/agents/<agent> (podman)
     C->>H: Result { output }
 ```
 
-```mermaid
-sequenceDiagram
-    participant B as backend
-    participant H as hub
-    participant C as client machine
-    participant A as ManagerProcess on client
-    B->>H: Command { agent, cmd }
-    H->>C: Envelope { id, Command { agent, cmd } }
-    C->>A: run(agent, cmd)
-    A->>A: sandbox work/agents/<agent>
-    C->>H: Result { output }
-```
+### 6.3 Timeouts (implemented) & failure path (partly planned)
 
-### 6.3 Failure path for a wrong agent
+Run-with-timeout is **implemented on all platforms**: every sandbox command
+runs under a host-side deadline (`SandboxLimits::timeout`, default 30 s) in
+the podman runner — on timeout the container process is killed and a stray
+container is force-removed (`podman rm -f`), so the command fails instead
+of blocking forever. `manager-rs` git toolcalls pass their own longer limit
+and run with network enabled.
 
-Today a failing `run` returns `Err` but nothing records it, and only Windows
-has a command timeout — a hung command blocks the agent's slot forever.
-Recovery is passive (stale tree reclaimed on next spawn). Planned:
+Still missing / planned:
 
-- Run-with-timeout on all platforms (macOS/Linux get the same
-  `SandboxLimits.timeout_secs` idea Windows already has); on timeout the
-  process tree is killed and the command fails.
-- `fail(agent, reason)` path: marks the agent `Failed`, records the error
-  into its transcript and pending result, then `finish` returns that state
-  so callers can audit what went wrong.
+- A `fail(agent, reason)` path: today a failing `run` returns `Err` but
+  nothing records it; recovery is passive (stale tree reclaimed on next
+  spawn). Planned: mark the agent `Failed`, record the error into its
+  transcript and pending result, and let `finish` return that state for
+  audit.
 - Startup sweep of orphaned `work/agents/*` dirs (agents not in the map),
   mirroring `AgentSandbox::sweep()`.
 
 ```mermaid
 flowchart TD
     R[run agent cmd] --> T{timeout?}
-    T -->|yes| K[kill process tree]
+    T -->|yes| K[kill process + podman rm -f<br/>implemented]
     T -->|no, ok| Ok[output kept as result]
     T -->|no, error| K2[error returned]
-    K --> F[fail agent: mark Failed + transcript entry]
+    K --> F[fail agent: mark Failed + transcript entry<br/>planned]
     K2 --> F
     F --> Fi[finish returns state incl. failure]
     Fi --> P[purge sandbox + work tree]

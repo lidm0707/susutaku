@@ -82,6 +82,16 @@ impl GitRepo {
         Ok(head.peel_to_commit()?.id())
     }
 
+    /// Short name of the checked-out branch (e.g. `task/zai-1`).
+    pub fn current_branch(&self) -> Result<String, GitError> {
+        let head = self.inner.head()?;
+        let name = head.shorthand().unwrap_or_default();
+        if name.is_empty() {
+            return Err(GitError::Git("HEAD is not on a branch".to_string()));
+        }
+        Ok(name.to_string())
+    }
+
     pub(crate) fn empty_tree_oid(&self) -> Result<git2::Oid, GitError> {
         let tb = self.inner.treebuilder(None)?;
         Ok(tb.write()?)

@@ -1,0 +1,58 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, routine_id, \"trigger\",\n                      to_char(started_at, 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS \"started_at!\",\n                      to_char(finished_at, 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS finished_at,\n                      ok, summary\n               FROM routine_runs WHERE routine_id = $1 ORDER BY id DESC",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "routine_id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "trigger",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "started_at!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "finished_at",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "ok",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 6,
+        "name": "summary",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      null,
+      null,
+      false,
+      false
+    ]
+  },
+  "hash": "81a17512af1fab9ae2283590f0f5cd5d4a4feaa88e0d1a7db92811098282c6e7"
+}

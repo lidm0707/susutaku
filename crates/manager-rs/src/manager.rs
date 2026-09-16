@@ -75,6 +75,20 @@ pub struct TaskOutcome {
     pub commit: Option<String>,
     /// Task branch the work landed on, when the slot was task-scoped.
     pub branch: Option<String>,
+    /// Set when the finish request asked for a push: remote output, or the
+    /// failure reason. The outcome (and artifact) is complete either way.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub push: Option<Result<String, String>>,
+}
+
+/// Push request attached to a finish: push the task branch to the bound
+/// repo before the work tree is torn down. `branch` overrides the slot's
+/// task branch (or current branch) when given.
+#[derive(Debug, Clone)]
+pub struct FinishPush {
+    pub repo_url: Option<String>,
+    pub token: String,
+    pub branch: Option<String>,
 }
 
 struct AgentSlot {
@@ -147,13 +161,17 @@ impl Manager {
         repo: Option<&RemoteRepo>,
     ) -> Result<PathBuf, String> {
         let key = slot_key(agent, task);
-        let mut agents = self
+        if let Some(slot) = self
             .agents
-            .write()
-            .map_err(|_| "agent map poisoned".to_string())?;
-        if let Some(slot) = agents.get(&key) {
+            .read()
+            .map_err(|_| "agent map poisoned".to_string())?
+            .get(&key)
+        {
             return Ok(slot.work_tree.clone());
         }
+        // Heavy setup (sandbox create, repo seed — a clone can block on the
+        // network) runs WITHOUT the agents write lock held; a snapshot()
+        // must never wait on it.
         let work_tree = PathBuf::from(AGENTS_ROOT).join(sanitize(&key));
         reclaim_stale(&work_tree);
         // Run from the agent's cached image when one exists (installs from a
@@ -174,6 +192,13 @@ impl Manager {
             .ok()
             .and_then(|repo| repo.head_oid().ok())
             .map(|oid| oid.to_string());
+        let mut agents = self
+            .agents
+            .write()
+            .map_err(|_| "agent map poisoned".to_string())?;
+        if let Some(slot) = agents.get(&key) {
+            return Ok(slot.work_tree.clone());
+        }
         agents.insert(
             key,
             Arc::new(AgentSlot {
@@ -213,22 +238,26 @@ impl Manager {
     /// pr run inside the agent's own container with network + run-scoped
     /// token env.
     pub fn git_tool(&self, agent: &str, tool: &GitTool) -> Result<String, String> {
-        let slot = self
+        // The first read guard must drop before spawning: re-entering the
+        // lock while a queued writer waits deadlocks on itself.
+        let cached = self
             .agents
             .read()
             .map_err(|_| "agent map poisoned".to_string())?
             .get(agent)
-            .cloned()
-            .map(Ok)
-            .unwrap_or_else(|| {
+            .cloned();
+        let slot = match cached {
+            Some(slot) => slot,
+            None => {
                 self.spawn(agent)?;
                 self.agents
                     .read()
                     .map_err(|_| "agent map poisoned".to_string())?
                     .get(agent)
                     .cloned()
-                    .ok_or_else(|| format!("agent {agent} failed to spawn"))
-            })?;
+                    .ok_or_else(|| format!("agent {agent} failed to spawn"))?
+            }
+        };
         match tool {
             GitTool::Branch { .. }
             | GitTool::Commit { .. }
@@ -295,8 +324,22 @@ impl Manager {
     /// work first), returns result + sandbox state (cwd and transcript), then
     /// tears the sandbox and its work tree down.
     pub fn finish(&self, agent: &str) -> Result<TaskOutcome, String> {
+        self.finish_with_push(agent, None)
+    }
+
+    /// Like [`Manager::finish`], but optionally pushes the work to the
+    /// remote first — the last step before the work tree disappears, so a
+    /// commit can never be stranded on a deleted tree. Push failure does not
+    /// fail the finish: the patch artifact is already captured and is
+    /// reported in `TaskOutcome::push`.
+    pub fn finish_with_push(
+        &self,
+        agent: &str,
+        push: Option<FinishPush>,
+    ) -> Result<TaskOutcome, String> {
         let slot = self.slot(agent)?;
         let (patch, commit) = capture_patch(&slot.sandbox.root(), &slot.base_commit, agent);
+        let push_result = push.map(|p| self.push_before_teardown(&slot, &p));
         let state = SandboxState {
             cwd: slot
                 .sandbox
@@ -314,12 +357,39 @@ impl Manager {
             patch,
             commit,
             branch: slot.branch.clone(),
+            push: push_result,
         };
         slot.sandbox.purge();
+        let _ = fs::remove_dir_all(&slot.work_tree);
         if let Ok(mut agents) = self.agents.write() {
             agents.remove(agent);
         }
         Ok(outcome)
+    }
+
+    /// Pushes the branch the task's commits landed on. Chooses the explicit
+    /// override, else the task branch, else the current branch; a repo with
+    /// no commits has nothing to push and is reported as such.
+    fn push_before_teardown(&self, slot: &AgentSlot, push: &FinishPush) -> Result<String, String> {
+        let repo = GitRepo::open(&slot.sandbox.root()).map_err(|e| e.to_string())?;
+        if !repo.has_commits() {
+            return Ok("(nothing to push: no commits)".to_string());
+        }
+        let branch = match push.branch.as_deref().filter(|b| !b.is_empty()) {
+            Some(b) => b.to_owned(),
+            None => slot
+                .branch
+                .clone()
+                .unwrap_or_else(|| repo.current_branch().unwrap_or_else(|_| "main".to_owned())),
+        };
+        core_agent::toolcall::git_in_sandbox::apply(
+            &slot.sandbox,
+            &GitTool::Push {
+                branch,
+                url: push.repo_url.clone(),
+                token: Some(push.token.clone()),
+            },
+        )
     }
 
     pub fn logs(&self, agent: &str) -> Result<AgentLogs, String> {

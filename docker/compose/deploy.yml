@@ -63,6 +63,8 @@ services:
     volumes:
       - codex-home:/data/codex-home
       - settings:/data/settings
+      # agent work trees (AGENTS_ROOT = work/agents) survive redeploys
+      - work:/app/work
       # podman storage + sandbox image cache survive redeploys
       - podman-storage:/var/lib/containers/storage
     security_opt:
@@ -99,4 +101,5 @@ volumes:
   deploy-qdrant:
   codex-home:
   settings:
+  work:
   podman-storage:

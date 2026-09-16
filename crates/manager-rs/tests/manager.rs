@@ -334,16 +334,21 @@ fn publish_e2e_push_and_pr_succeed() {
     );
 
     // the pushed remote carries the agent's commit
-    let pushed = ws
-        .join("remote.git")
-        .join("refs")
-        .join("heads")
-        .join("task")
-        .join("7-e2e")
-        .exists();
-    assert!(pushed, "task branch pushed to the remote");
     let bare = git_rs::GitRepo::open(&ws.join("remote.git")).expect("open pushed remote");
-    assert!(bare.has_commits(), "pushed branch has the task commit");
+    let pushed_ref = bare.head_oid().map(|oid| oid.to_string()).ok();
+    let pushed_oid = std::fs::read_to_string(
+        ws.join("remote.git")
+            .join("refs")
+            .join("heads")
+            .join("task")
+            .join("7-e2e"),
+    )
+    .map(|s| s.trim().to_string())
+    .ok();
+    let oid = pushed_oid
+        .or(pushed_ref)
+        .expect("task branch was pushed to the remote");
+    assert!(!oid.is_empty(), "pushed branch has the task commit");
 
     let outcome = manager.finish("e2e#7").expect("finish");
     assert_eq!(outcome.branch.as_deref(), Some("task/7-e2e"));

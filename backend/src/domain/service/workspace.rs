@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use kanban_rs::{StoreError, WorkspaceRow};
+use task_rs::{StoreError, WorkspaceRow};
 
 use crate::domain::NewWorkspace;
 use crate::port::outbound::WorkspaceRepo;

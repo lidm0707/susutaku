@@ -34,6 +34,18 @@ impl AgentSandbox {
         })
     }
 
+    /// A sandbox rooted at an explicit directory (thread environments).
+    /// Idempotent: an existing work tree keeps its content.
+    pub fn for_work_tree(work_tree: &std::path::Path) -> Result<Self, String> {
+        let inner = Sandbox::new_in(work_tree)
+            .map_err(|e| e.to_string())?
+            .keep_on_drop();
+        Ok(Self {
+            inner,
+            step: AtomicUsize::new(0),
+        })
+    }
+
     /// Workspace root of the underlying macOS sandbox.
     pub fn root(&self) -> PathBuf {
         self.inner.root()

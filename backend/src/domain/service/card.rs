@@ -2,7 +2,9 @@
 
 use std::sync::Arc;
 
-use kanban_rs::{AgentState, CardRow, StoreError};
+use task_rs::{
+    AgentState, CardRow, RunRecordNew, RunRecordRow, StoreError, TaskStatus, transition_allowed,
+};
 
 use crate::domain::{CardMove, CardPatch, NewCard};
 use crate::port::outbound::CardRepo;
@@ -10,6 +12,8 @@ use crate::port::outbound::CardRepo;
 pub struct CardService {
     repo: Arc<dyn CardRepo>,
 }
+
+pub const MOVE_STATUS_TOP: i32 = 0;
 
 impl CardService {
     pub fn new(repo: Arc<dyn CardRepo>) -> Self {
@@ -47,6 +51,30 @@ impl CardService {
         self.repo.move_card(mv).await
     }
 
+    /// Move a task to a new workflow status, validating the transition
+    /// server-side. Reuses move/get — no new SQL.
+    pub async fn set_status(&self, id: i64, to: TaskStatus) -> Result<CardRow, StoreError> {
+        let row = self.repo.get(id).await?.ok_or(StoreError::NoSuchCard)?;
+        let from = TaskStatus::parse(&row.column_id);
+        if from != to {
+            if !transition_allowed(from, to) {
+                return Err(StoreError::BadSpec(format!(
+                    "illegal task status transition {} -> {}",
+                    from.as_str(),
+                    to.as_str()
+                )));
+            }
+            self.repo
+                .move_card(CardMove {
+                    id,
+                    column_id: to.column().to_owned(),
+                    position: MOVE_STATUS_TOP,
+                })
+                .await?;
+        }
+        self.repo.get(id).await?.ok_or(StoreError::NoSuchCard)
+    }
+
     pub async fn remove(&self, id: i64) -> Result<(), StoreError> {
         self.repo.remove(id).await
     }
@@ -55,19 +83,31 @@ impl CardService {
         self.repo.set_agent(id, agent).await
     }
 
+    pub async fn set_agent_state(&self, id: i64, state_json: &str) -> Result<(), StoreError> {
+        self.repo.set_agent_state(id, state_json).await
+    }
+
     pub async fn agent(&self, id: i64) -> Result<Option<AgentState>, StoreError> {
         self.repo.agent(id).await
     }
 
-    pub async fn set_pipeline(
-        &self,
-        card_id: i64,
-        pipeline_id: Option<i64>,
-    ) -> Result<(), StoreError> {
-        self.repo.set_pipeline(card_id, pipeline_id).await
+    pub async fn record_run(&self, r: RunRecordNew) -> Result<i64, StoreError> {
+        self.repo.record_run(r).await
+    }
+
+    pub async fn card_runs(&self, card_id: i64) -> Result<Vec<RunRecordRow>, StoreError> {
+        self.repo.card_runs(card_id).await
     }
 
     pub async fn set_cron(&self, card_id: i64, cron: Option<String>) -> Result<(), StoreError> {
         self.repo.set_cron(card_id, cron).await
+    }
+
+    pub async fn set_card_image(
+        &self,
+        card_id: i64,
+        image: Option<&str>,
+    ) -> Result<(), StoreError> {
+        self.repo.set_card_image(card_id, image).await
     }
 }

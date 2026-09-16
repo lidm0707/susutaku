@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO run_records (card_id, \"trigger\", agent, ok, summary, finished_at)\n               VALUES ($1, $2, $3, $4, $5, now())\n               RETURNING id AS \"id: i64\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id: i64",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Text",
+        "Bool",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "02930b7c3b4b429833dd535ecec90ec11e45d047a121ace9e5e07c5b081a920c"
+}

@@ -22,10 +22,12 @@ const TOOL_DONE_REPLY = "TOOLCALL-OK: shell tool ran and returned toolcall-ok.";
 const SUMMARY_REPLY = "MOCK-SUMMARY: e2e context compacted by the mock model.";
 const ECHO_PREFIX = "echo:";
 
-// Scripted "do task:" flow (see .plans/110-chat-task-to-card.md): the mock
+// Scripted "do task:" flow (card+agent flow, pipelines removed): the mock
 // walks the same tool sequence a real model would — BOARD_LIST, CARD_FIND,
-// CARD_CREATE (or reuse), PIPELINE_CREATE (single agent node), CARD_LINK,
-// CARD_ROUTINE — driven by the tool results accumulated in the prompt.
+// CARD_CREATE (or reuse), CARD_AGENT (ALWAYS assign an agent), CARD_ROUTINE —
+// driven by the tool results accumulated in the prompt. Steps are keyed on
+// the number of "Tool results:" headers (one per round), so no assumption
+// about individual tool result wording is needed beyond find-or-create.
 const TASK_TRIGGER = "do task:";
 const TASK_AGENT_PARAM = "default";
 const TASK_CRON = "0 * * * *";
@@ -40,43 +42,25 @@ function taskFlow(prompt) {
   const topic = new RegExp(`${TASK_TRIGGER}\\s*(.+)`, "i").exec(prompt)[1].trim();
   const title = topic.split(/\s+/).slice(0, 6).join(" ");
   const esc = title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  // Every tool round appends its own "Tool results:" header, so slice from
-  // the FIRST one to see the whole accumulated history.
+  // Every tool round appends its own "Tool results:" header.
+  const rounds = (prompt.match(/Tool results:/g) || []).length;
+  if (rounds === 0) return "TOOL: BOARD_LIST";
   const markerIdx = prompt.indexOf("Tool results:");
-  const results = markerIdx >= 0 ? prompt.slice(markerIdx) : "";
-  if (!lastMatch("project (\\d+) `", results)) return "TOOL: BOARD_LIST";
+  const results = prompt.slice(markerIdx);
+  if (rounds === 1) return `TOOL: CARD_FIND ${title}`;
+
   const created = lastMatch("card (\\d+) created in project", results);
   const found = lastMatch("card (\\d+) `" + esc + "`", results);
-  const findDone = /no cards match/.test(results) || created || found;
-  if (!findDone) return `TOOL: CARD_FIND ${title}`;
-
   const cardId = created ? created[1] : found ? found[1] : null;
   if (!cardId) {
     const pid = lastMatch("project (\\d+) `", results);
     return `TOOL: CARD_CREATE ${pid[1]} ${title} | plan: ${topic}`;
   }
 
-  if (new RegExp("card " + cardId + " routine set").test(results)) return `${TASK_OK_PREFIX} task stored on card ${cardId}: ${title}`;
-  const line = lastMatch(
-    "card " + cardId + " `[^`]*` \\(project (\\d+|-), pipeline (\\d+|none), cron ([^)\\]]+)",
-    results,
-  );
-  const pipeAttached =
-    lastMatch("pipeline (\\d+) attached to card " + cardId + "(?! \\d)", results) ||
-    (line && line[2] !== "none" ? line : null);
-  if (pipeAttached) {
-    const cronDone = line && line[3] && line[3] !== "none";
-    return cronDone
-      ? `${TASK_OK_PREFIX} task stored on card ${cardId}: ${title}`
-      : `TOOL: CARD_ROUTINE ${cardId} ${TASK_CRON}`;
-  }
-  const pipeCreated = lastMatch("pipeline (\\d+) created", results);
-  if (pipeCreated) return `TOOL: CARD_LINK ${cardId} ${pipeCreated[1]}`;
-  const spec = JSON.stringify({
-    nodes: [{ id: "a", stage: "agent", params: { agent: TASK_AGENT_PARAM } }],
-    links: [],
-  });
-  return `TOOL: PIPELINE_CREATE task-${cardId} ${spec}`;
+  // find-or-create done -> ALWAYS assign an agent, then set the routine.
+  if (rounds === 2) return `TOOL: CARD_AGENT ${cardId} ${TASK_AGENT_PARAM}`;
+  if (rounds === 3) return `TOOL: CARD_ROUTINE ${cardId} ${TASK_CRON}`;
+  return `${TASK_OK_PREFIX} task stored on card ${cardId}: ${title}`;
 }
 
 const STATS = {

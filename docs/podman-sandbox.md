@@ -1,9 +1,12 @@
 # Podman sandbox: deployment requirements
 
 The agent sandbox (`core_agent::podman`) runs every agent command in a
-fresh rootless podman container (`podman run --rm`, image
-`localhost/susutaku-sandbox:latest`). Where the backend process lives
-determines what must be installed and which container flags are needed.
+fresh rootless podman container (`podman run --rm`). The image is chosen
+per agent (`podman::image::resolve`): the agent's cache tag
+`localhost/susutaku-agent-cache:<agent>` when one exists, else the default
+coding image `localhost/susutaku-sandbox:latest` (override with
+`SUSUTAKU_SANDBOX_IMAGE`). Where the backend process lives determines what
+must be installed and which container flags are needed.
 
 ## Topology
 
@@ -32,8 +35,8 @@ determines what must be installed and which container flags are needed.
 | `podman` on PATH | the sandbox shells out to `podman run`; it never falls back to unsandboxed execution |
 | unprivileged userns enabled | rootless podman creates a user namespace (`sysctl kernel.unprivileged_userns_clone=1` on Debian/Ubuntu kernels) |
 | subuid/subgid for the backend user | `/etc/subuid` + `/etc/subgid` need a range like `backend:100000:65536`, or podman falls back to a single-uid mapping with reduced isolation |
-| sandbox image | `make sandbox-image` (builds `docker/sandbox/Containerfile` → `localhost/susutaku-sandbox:latest`) |
-| `SUSUTAKU_SANDBOX_IMAGE` (optional) | point at a custom image/registry |
+| sandbox image | `make sandbox-image` (builds `docker/sandbox/Containerfile` → `localhost/susutaku-sandbox:latest`); per-agent cache tags are created automatically | 
+| `SUSUTAKU_SANDBOX_IMAGE` (optional) | point the default coding image at a custom image/registry |
 
 If `podman` is missing, the sandbox auto-installs it on first run
 (`ensure_podman`: apt-get → dnf → apk on Linux, brew on macOS) — this
@@ -64,6 +67,23 @@ only the backend container is privileged; agent commands still run inside
 the *inner* rootless podman jail (workspace-only writable bind, env
 allow-list, `--network=none` by default, rlimits, timeout kill).
 
+### Sandbox images: per-agent cache and per-card image
+
+- `AgentImage` is an enum: `Coding` (the default toolchain image, resolved
+  through `SUSUTAKU_SANDBOX_IMAGE`) or `Custom(String)`.
+- Every run container is **committed after the run** into the per-agent
+  cache tag `localhost/susutaku-agent-cache:<agent>`
+  (`image::commit_and_remove`) — packages/toolchains an agent installs
+  survive its teardown and the next spawn starts from the cached image
+  (manager-rs spawns with `Sandbox::new_in_with_image(work_tree,
+  resolve_image(agent), Some(cache_tag))`).
+- **Per-card image**: the `TOOL: CARD_IMAGE <card_id> <image>` board tool
+  (`BOARD_TOOL_INSTRUCTION`) and `PUT /api/task/cards/{id}/image` store an
+  image on the card row (`cards.image`); `CARD_FIND`/board listings show
+  it and `clear` removes it. Spawn currently resolves the image from the
+  agent cache / default only — consuming `card.image` at spawn time is not
+  wired yet (planned).
+
 ### Sandbox image lifecycle in containers
 
 - `docker/backend/Dockerfile.backend` copies
@@ -71,12 +91,21 @@ allow-list, `--network=none` by default, rlimits, timeout kill).
   (`/usr/share/susutaku/sandbox/`).
 - `entrypoint-backend.sh` builds `localhost/susutaku-sandbox:latest` at
   container start **only if missing** (first start takes ~1–2 min for the
-  apt steps inside the build).
+  apt steps inside the build). The entrypoint also relays the codex OAuth
+  loopback callback (`socat` on the container IP :1455 → 127.0.0.1:1455).
 - The compose volume `podman-storage` (`/var/lib/containers/storage`)
   persists podman's storage, so redeploys skip the rebuild.
+- The compose volume `work` (`/app/work`) persists agent work trees
+  (`AGENTS_ROOT = "work/agents"`, relative to the backend CWD) — without it
+  every container recreate silently destroyed them. See
+  `docs/review-flow.md`.
 - nftables is installed in the image because podman *builds* use netavark
   + nftables for the build network (`podman run --network=none` does not
   need it).
+- The image bakes `/etc/containers/storage.conf` with `driver = "vfs"`:
+  nested overlay needs kernel mounts or `/dev/fuse`, both unreliable when
+  nested — vfs stores layers as plain directories. `fuse-overlayfs` stays
+  installed as the fallback storage driver (row 2 above).
 
 ### Build vs run network
 

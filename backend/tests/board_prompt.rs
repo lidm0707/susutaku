@@ -1,6 +1,6 @@
 //! The board tool instructions must teach the agent to resolve existing
-//! cards via BOARD_LIST before modifying routines — otherwise it invents
-//! new pipelines when asked to change an existing card's schedule.
+//! cards via BOARD_LIST before modifying routines or agents — otherwise it
+//! invents new cards when asked to change an existing card's schedule.
 
 use backend::domain::service::prompt::BOARD_TOOL_INSTRUCTION;
 

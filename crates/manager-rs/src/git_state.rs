@@ -71,7 +71,18 @@ fn status(workspace: &Path) -> Result<String, String> {
 
 fn diff(workspace: &Path) -> Result<String, String> {
     let repo = GitRepo::open(workspace).map_err(|e| e.to_string())?;
-    let patch = repo.patch_workdir().map_err(|e| e.to_string())?;
+    // unborn HEAD (fresh work tree, no commits): diff against the empty tree
+    let patch = if repo.has_commits() {
+        let patch = repo.patch_workdir().map_err(|e| e.to_string())?;
+        // clean tree: fall back to committed-but-unpushed work vs base branch
+        if patch.is_empty() {
+            repo.patch_unpushed().map_err(|e| e.to_string())?
+        } else {
+            patch
+        }
+    } else {
+        repo.patch_workdir_empty_base().map_err(|e| e.to_string())?
+    };
     if patch.is_empty() {
         Ok("(no changes)".to_string())
     } else {

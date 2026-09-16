@@ -24,6 +24,11 @@ impl CancelFlag {
     }
 }
 
+/// Appended to a partially generated reply when the run was cancelled, so
+/// the partial text is kept in the transcript/memory and the next send can
+/// see what was in progress.
+pub const INTERRUPTED_NOTE: &str = "\n\n(interrupted — run stopped, partial reply kept)";
+
 /// Driving-adapter request: one chat turn.
 pub struct ChatCmd {
     pub message: String,
@@ -33,7 +38,7 @@ pub struct ChatCmd {
     /// Emit a reasoning block (gemma `<|think|>` system turn / qwen native
     /// thinking). Default off.
     pub think: bool,
-    /// Caller bearer token; when present, kanban board tools are offered and
+    /// Caller bearer token; when present, task board tools are offered and
     /// the token is passed to them for role checks. None disables board tools.
     pub board_token: Option<String>,
     /// Chat agent name; when set, the agent's configured tool allow-list
@@ -44,9 +49,12 @@ pub struct ChatCmd {
     /// Memory scope: chat thread id. Memories are recalled/stored per thread;
     /// None disables memory entirely (no shared scope).
     pub thread_id: Option<String>,
-    /// Target kanban card: artifacts produced this turn (written files,
+    /// Target task card: artifacts produced this turn (written files,
     /// shell-created images/text) are attached to it as card resources.
     pub card_id: Option<i64>,
+    /// Chat's project; when set with a bound agent, a plain no-tool answer to
+    /// a work request is escalated: card opened, agent assigned, run once.
+    pub project_id: Option<i64>,
 }
 
 /// Driving-adapter response: one completed chat turn.

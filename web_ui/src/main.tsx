@@ -4,13 +4,13 @@ import ReactDOM from "react-dom/client";
 import { BrowserRouter, Navigate, Route, Routes, useNavigate } from "react-router-dom";
 import ChatModal, { CHAT_PARAM, use_chat_docked } from "./components/ChatModal.jsx";
 import AgentSettings from "./features/agents/AgentSettings.jsx";
-import Kanban from "./pages/Kanban.jsx";
+import Task from "./pages/Task.jsx";
 import Login from "./pages/Login.jsx";
 import Settings from "./pages/Settings.jsx";
 import Sandbox from "./pages/Sandbox.jsx";
-import Pipelines from "./pages/Pipelines.jsx";
-import Routine from "./pages/Routine.jsx";
 import Attachments from "./pages/Attachments.jsx";
+import Review from "./pages/Review.tsx";
+import Routines from "./pages/Routines.tsx";
 import { get_token } from "./lib.js";
 import { Toaster } from "./ui/Toast.jsx";
 import SideNav from "./components/SideNav.tsx";
@@ -44,13 +44,14 @@ function App() {
         <Routes>
         <Route path="/" element={<Login />} />
         <Route path="/login" element={<Navigate to="/" replace />} />
-        <Route path="/chat" element={<Navigate to={`/kanban${window.location.search}`} replace />} />
-        <Route path="/models" element={<Navigate to="/kanban" replace />} />
-        <Route path="/kanban" element={<RequireAuth><Kanban /></RequireAuth>} />
-        <Route path="/pipelines" element={<RequireAuth><Pipelines /></RequireAuth>} />
-        <Route path="/routine" element={<RequireAuth><Routine /></RequireAuth>} />
+        <Route path="/chat" element={<Navigate to={`/task${window.location.search}`} replace />} />
+        <Route path="/models" element={<Navigate to="/task" replace />} />
+        <Route path="/task" element={<RequireAuth><Task /></RequireAuth>} />
+        <Route path="/routine" element={<Navigate to="/routines" replace />} />
+        <Route path="/routines" element={<RequireAuth><Routines /></RequireAuth>} />
         <Route path="/attachments" element={<RequireAuth><Attachments /></RequireAuth>} />
         <Route path="/agents" element={<RequireAuth><AgentSettings /></RequireAuth>} />
+        <Route path="/review" element={<RequireAuth><Review /></RequireAuth>} />
         <Route path="/settings" element={<RequireAuth><Settings /></RequireAuth>} />
         <Route path="/sandbox" element={<RequireAuth><Sandbox /></RequireAuth>} />
         <Route path="*" element={<Navigate to="/" replace />} />

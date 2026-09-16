@@ -17,7 +17,7 @@ test.describe("chat dock resize", () => {
     page,
     login,
   }) => {
-    await page.goto("/kanban");
+    await page.goto("/task");
     await page.click('button[aria-label="open chat"]');
     const dialog = page.locator('[role="dialog"]');
     await expect(dialog).toBeVisible();
