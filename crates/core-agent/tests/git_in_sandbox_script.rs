@@ -12,6 +12,8 @@ fn commit_script_sets_identity_and_quotes_message() {
     assert!(script.contains("user.name='susutaku-agent'"));
     // single quotes are shell-escaped, never breaking out of the quoting
     assert!(script.contains(r"it'\''s"));
+    // a failed commit with staged changes must fail the script, never mask
+    assert!(script.contains("commit failed; exit 1"));
 }
 
 #[test]

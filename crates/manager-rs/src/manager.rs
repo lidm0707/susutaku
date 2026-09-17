@@ -271,6 +271,22 @@ impl Manager {
         }
     }
 
+    /// Whether the slot's HEAD advanced past the base commit recorded at
+    /// spawn — i.e. this task produced at least one commit. Publish (push
+    /// and PR) must be gated on this: a dirty work-dir diff alone can come
+    /// from runtime artifacts, and pushing without new commits makes the
+    /// remote branch point at main, which dead-ends every PR with
+    /// "No commits between main and <branch>".
+    pub fn task_has_commits(&self, agent: &str) -> Result<bool, String> {
+        let slot = self.slot(agent)?;
+        let Some(base) = slot.base_commit.as_deref() else {
+            return Ok(true);
+        };
+        let repo = GitRepo::open(&slot.sandbox.root()).map_err(|e| e.to_string())?;
+        let head = repo.head_oid().map_err(|e| e.to_string())?;
+        Ok(head.to_string() != base)
+    }
+
     /// Publishes a task slot's work: commits pending changes, pushes the
     /// task branch to `repo_url` (default `origin`) and opens a PR against
     /// `base` (default [`PR_BASE_DEFAULT`]) via the GitHub API. Needs a

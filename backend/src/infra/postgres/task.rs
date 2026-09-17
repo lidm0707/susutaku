@@ -168,6 +168,10 @@ impl CardRepo for PgTask {
         self.store().record_run(r).await
     }
 
+    async fn set_run_start(&self, card_id: i64, agent: &str) -> Result<(), StoreError> {
+        self.store().set_run_start(card_id, agent).await
+    }
+
     async fn card_runs(&self, card_id: i64) -> Result<Vec<RunRecordRow>, StoreError> {
         self.store().card_runs(card_id).await
     }

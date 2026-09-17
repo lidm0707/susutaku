@@ -99,6 +99,7 @@ export interface Card {
   description: string;
   column_id: string;
   priority: string;
+  project_id?: number | null;
   agent_name?: string;
   agent_state?: unknown;
   /** Last recorded run status; a record, not a preference. */
@@ -330,7 +331,7 @@ export function connect_events(on_event: (e: BoardEvent) => void): () => void {
   const connect = () => {
     const ws_base = API_BASE
       ? API_BASE.replace(/^http/, "ws")
-      : `${location.protocol === "https:" ? "wss" : "ws"}//${location.host}`;
+      : `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}`;
     const token = encodeURIComponent(get_token());
     ws = new WebSocket(`${ws_base}/api/events?token=${token}`);
     ws.onmessage = (m) => {

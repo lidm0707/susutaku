@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ArrowLeft, ArrowRight, Bot, CalendarClock, CheckCircle2, Eye, EyeOff, Flag, Hash, Image, LayoutGrid, List, ListChecks, Loader2, Play, Plus, Save, Tag, Trash2, User, X, XCircle, Zap } from "lucide-react";
+import { ArrowLeft, ArrowRight, Bot, CalendarClock, CheckCircle2, Eye, EyeOff, Flag, Hash, Image, LayoutGrid, List, ListChecks, Loader2, Play, Plus, Save, Tag, Trash2, Upload, User, X, XCircle, Zap } from "lucide-react";
 import {
   clear_token,
   connect_events,
@@ -23,6 +23,7 @@ import {
   set_card_schedule,
   run_card,
   run_of,
+  finish_manager_agent,
   set_task_status,
   update_card,
   type Agent,
@@ -31,6 +32,7 @@ import {
   type ChecklistItem,
   type Comment,
   type UserInfo,
+  type StoredOutcome,
 } from "../lib.js";
 import { Modal, SlideOver } from "../ui/Overlay.js";
 import { toast } from "../ui/Toast.js";
@@ -60,6 +62,9 @@ type ViewMode = typeof VIEW_BOARD | typeof VIEW_LIST;
 const LABEL_PALETTE = ["#7bd88f", "#e3b341", "#ff7b7b", "#6fb3ff", "#c792ea", "#64d8cb"];
 const DUE_SOON_DAYS = 2;
 const ESTIMATE_MAX = 99;
+/// Manager slot key separator: a card run's slot is `<agent>#<card id>`.
+const SLOT_SEP = "#";
+const PUSH_FAILED_PREFIX = "push failed";
 
 type DueState = "overdue" | "soon" | null;
 
@@ -148,6 +153,7 @@ export default function Task() {
   const [showDone, setShowDone] = useState(false);
   const [draggingId, setDraggingId] = useState<number | null>(null);
   const [runningId, setRunningId] = useState<number | null>(null);
+  const [finishingId, setFinishingId] = useState<number | null>(null);
   const [addOpen, setAddOpen] = useState(false);
 
   async function handle(err: unknown) {
@@ -629,6 +635,29 @@ export default function Task() {
     }
   }
 
+  /// Finish the card's agent task slot (`<agent>#<card id>`) and push its
+  /// branch to the project's bound repo.
+  async function finish_push(card: Card) {
+    if (!card.agent_name) return;
+    setFinishingId(card.id);
+    try {
+      const slot = `${card.agent_name}${SLOT_SEP}${card.id}`;
+      const outcome: StoredOutcome = await finish_manager_agent(slot, {
+        push: true,
+        project_id: card.project_id ?? undefined,
+      });
+      const pushed = outcome.push
+        ? ` — ${outcome.push.startsWith(PUSH_FAILED_PREFIX) ? outcome.push : "pushed"}`
+        : "";
+      toast(`card ${card.id} finished — output #${outcome.output_id} stored${pushed}`);
+      await refresh();
+    } catch (err) {
+      toast(err instanceof Error ? err.message : String(err));
+    } finally {
+      setFinishingId(null);
+    }
+  }
+
   async function save_agent(e: React.FormEvent) {
     e.preventDefault();
     setError("");
@@ -744,6 +773,15 @@ export default function Task() {
                     >
                       {runningId === card.id ? <Loader2 size={13} className="spin" /> : <Play size={13} />}
                     </button>
+                    {card.agent_name && (
+                      <button
+                        onClick={() => finish_push(card)}
+                        title="finish + push the task branch"
+                        disabled={finishingId != null}
+                      >
+                        {finishingId === card.id ? <Loader2 size={13} className="spin" /> : <Upload size={13} />}
+                      </button>
+                    )}
                     <button
                       onClick={() => open_img_modal(card)}
                       title="set image"
@@ -830,6 +868,15 @@ export default function Task() {
                   >
                     {runningId === card.id ? <Loader2 size={13} className="spin" /> : <Play size={13} />}
                   </button>
+                  {card.agent_name && (
+                    <button
+                      onClick={() => finish_push(card)}
+                      title="finish + push the task branch"
+                      disabled={finishingId != null}
+                    >
+                      {finishingId === card.id ? <Loader2 size={13} className="spin" /> : <Upload size={13} />}
+                    </button>
+                  )}
                   <button
                     onClick={() => open_img_modal(card)}
                     title="set image"
@@ -1014,7 +1061,10 @@ export default function Task() {
                 </form>
               </div>
             ) : (
-              <RunTimeline run={detail ? run_of(cards.find((c) => c.id === detail.id) || detail) : null} />
+              <RunLive
+                card={detail ? cards.find((c) => c.id === detail.id) ?? detail : null}
+                run={detail ? run_of(cards.find((c) => c.id === detail.id) || detail) : null}
+              />
             )}
           </section>
           <section className="task-detail-right">
@@ -1066,6 +1116,20 @@ export default function Task() {
                   disabled={runningId != null}
                 >
                   {runningId === detail.id ? <Loader2 size={13} className="spin" /> : <Play size={13} />} run now
+                </button>
+              )}
+              {detail?.agent_name && (
+                <button
+                  type="button"
+                  className="task-run-inline"
+                  onClick={() => finish_push(detail)}
+                  disabled={finishingId != null}
+                >
+                  {finishingId === detail.id ? (
+                    <Loader2 size={13} className="spin" />
+                  ) : (
+                    <Upload size={13} />
+                  )}{' '}finish + push
                 </button>
               )}
             </div>
@@ -1301,6 +1365,37 @@ function CardMeta({ card }: { card: Card }) {
       )}
     </div>
   );
+}
+
+// Live run view inside the card: while the agent is running the board
+// refreshes itself off card events, so this renders the live state; once a
+// record exists the finished run timeline takes over.
+function RunLive({ card, run }: { card: Card | null; run: CardRun | null }) {
+  const live = card?.run_status === "running";
+  if (!run && !live) return null;
+  if (live) {
+    return (
+      <section className="run-timeline" aria-label="run log">
+        <h3>
+          <Loader2 size={13} className="spin" /> run
+          <span className="run-ok-text">running{card?.last_agent ? ` · ${card.last_agent}` : ""}</span>
+        </h3>
+        <ol>
+          <li className="run-stage run-ok">
+            <span className="run-stage-icon">
+              <Loader2 size={13} className="spin" />
+            </span>
+            <span className="run-stage-body">
+              <strong>agent</strong>
+              <span className="run-stage-stage">working…</span>
+              <span className="run-stage-note">this view updates when the run finishes</span>
+            </span>
+          </li>
+        </ol>
+      </section>
+    );
+  }
+  return <RunTimeline run={run} />;
 }
 
 function RunTimeline({ run }: { run: CardRun | null }) {

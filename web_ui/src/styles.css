@@ -2955,6 +2955,44 @@ button {
   to { transform: translateX(0); }
 }
 
+.overlay.closing {
+  animation: overlay-out 0.15s ease-in forwards;
+}
+
+@keyframes overlay-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+.overlay-box.modal.closing {
+  animation: modal-out 0.2s ease-in forwards;
+}
+
+@keyframes modal-out {
+  from { transform: translateY(0) scale(1); }
+  to { transform: translateY(100vh) scale(1); }
+}
+
+.overlay-box.slideover.closing,
+.overlay-box.modal.docked-right.closing,
+.overlay-box.modal.docked-left.closing {
+  animation: slideover-out 0.22s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+@keyframes slideover-out {
+  from { transform: translateX(0); }
+  to { transform: translateX(100%); }
+}
+
+.overlay-box.modal.docked-left.closing {
+  animation: slideover-out-left 0.22s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+@keyframes slideover-out-left {
+  from { transform: translateX(0); }
+  to { transform: translateX(-100%); }
+}
+
 .slideover-body {
   display: flex;
   flex-direction: column;

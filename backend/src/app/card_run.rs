@@ -42,12 +42,12 @@ pub const NOTE_WRITE_ERR: &str = "file write failed: ";
 pub const NOTE_JOIN: &str = "manager task panicked";
 pub const DENIED_NOTE: &str =
     "tool denied in a card run: use SHELL, AGENT_RUN, GIT or the coding write_file block";
-pub const TOOL_HINT: &str = "You are working alone in a sandboxed work tree of the project's git repo (a task branch is checked out). Edit real files, one tool call per reply. Every tool line MUST start with exactly 'TOOL: ' — a line that only says 'SHELL ...' is NOT a tool call and ends the run:\n- TOOL: SHELL <cmd> - run a shell command in the work tree\n- TOOL: AGENT_RUN <cmd> - run a shell command in the work tree (alias)\n- TOOL: GIT STATUS | DIFF | BRANCH <name> | COMMIT <message> | PUSH <branch> | PR <title>\n- coding block: <invoke name=\"coding\"><parameter name=\"path\">rel/path</parameter><parameter name=\"code\">file content</parameter></invoke>\nDo the actual work (create/edit files, verify with SHELL) before finishing. When done, reply with a final text summary (no tool line); the run publishes the branch and opens a PR automatically.\n";
+pub const TOOL_HINT: &str = "You are working alone in a sandboxed work tree of the project's git repo (a task branch is checked out). Edit real files, one tool call per reply. Every tool line MUST start with exactly 'TOOL: ' — a line that only says 'SHELL ...' is NOT a tool call and ends the run:\n- TOOL: SHELL <cmd> - run a shell command in the work tree\n- TOOL: AGENT_RUN <cmd> - run a shell command in the work tree (alias)\n- TOOL: GIT STATUS | DIFF | BRANCH <name> | COMMIT <message> | PUSH <branch> | PR <title>\n- coding block: <invoke name=\"coding\"><parameter name=\"path\">rel/path</parameter><parameter name=\"code\">file content</parameter></invoke>\nDo the actual work (create/edit files, verify with SHELL) before finishing. Read-only exploration alone is NOT a finished task — if you have not changed any files, keep working. When done, reply with a final text summary (no tool line); the run publishes the branch and opens a PR automatically.\n";
 pub const PUBLISH_BRANCH: &str = "\n\nbranch: ";
 pub const PUBLISH_PUSH: &str = "\npush: ";
 pub const PUBLISH_PR: &str = "\npr: ";
 pub const PUBLISH_PR_FAILED: &str = "\npr: failed: ";
-pub const PUBLISH_NOTHING: &str = "\n\nnothing to publish: the work tree has no file changes";
+pub const PUBLISH_NOTHING: &str = "\n\nnothing to publish: the run made no commits";
 pub const PR_BASE: &str = "main";
 pub const TASK_BRANCH_PREFIX: &str = "task/";
 pub const BRANCH_SEP: char = '-';
@@ -102,6 +102,13 @@ impl WorkTree {
     pub async fn git(&self, slot: &str, tool: proto_rs::GitTool) -> Result<String, String> {
         let (m, slot) = (self.manager.clone(), slot.to_owned());
         tokio::task::spawn_blocking(move || m.git_tool(&slot, &tool))
+            .await
+            .map_err(|_| NOTE_JOIN.to_owned())?
+    }
+
+    pub async fn task_has_commits(&self, slot: &str) -> Result<bool, String> {
+        let (m, slot) = (self.manager.clone(), slot.to_owned());
+        tokio::task::spawn_blocking(move || m.task_has_commits(&slot))
             .await
             .map_err(|_| NOTE_JOIN.to_owned())?
     }
@@ -477,6 +484,15 @@ enum Publish {
 /// [`PR_BASE`]. A PR failure does not fail the run: the branch is already
 /// on the remote and review can happen there.
 async fn publish_work(wt: &WorkTree, bound: &BoundRepo, title: &str) -> Publish {
+    // Gate on commits, not on a dirty diff: a work-dir diff can be non-empty
+    // from runtime artifacts alone, and pushing with no new commits makes
+    // the remote branch point at main — every PR then dies with
+    // "No commits between main and <branch>".
+    match wt.task_has_commits(&bound.slot).await {
+        Ok(true) => {}
+        Ok(false) => return Publish::Nothing,
+        Err(e) => return Publish::Failed(e),
+    }
     let diff = match ManagerGit::to_proto(&GitOp::Diff) {
         Ok(tool) => wt.git(&bound.slot, tool).await,
         Err(e) => return Publish::Failed(e),
@@ -501,12 +517,14 @@ async fn publish_work(wt: &WorkTree, bound: &BoundRepo, title: &str) -> Publish 
         url: Some(bound.url.clone()),
         token: (!bound.token.is_empty()).then(|| bound.token.clone()),
     });
-    if let Err(e) = match push {
+    let push_out = match push {
         Ok(tool) => wt.git(&bound.slot, tool).await,
-        Err(e) => return Publish::Failed(e),
-    } {
-        return Publish::Failed(format!("push: {e}"));
-    }
+        Err(e) => return Publish::Failed(format!("push: {e}")),
+    };
+    let push = match push_out {
+        Ok(out) => out,
+        Err(e) => return Publish::Failed(format!("push: {e}")),
+    };
     let pr = match ManagerGit::to_proto(&GitOp::PullRequest {
         title: branch.clone(),
         head: branch.clone(),
@@ -515,11 +533,11 @@ async fn publish_work(wt: &WorkTree, bound: &BoundRepo, title: &str) -> Publish 
         token: (!bound.token.is_empty()).then(|| bound.token.clone()),
     }) {
         Ok(tool) => wt.git(&bound.slot, tool).await,
-        Err(e) => return Publish::Done(branch, "pushed".to_owned(), format!("failed: {e}")),
+        Err(e) => return Publish::Done(branch, push, format!("failed: {e}")),
     };
     match pr {
-        Ok(out) => Publish::Done(branch, "pushed".to_owned(), out),
-        Err(e) => Publish::Done(branch, "pushed".to_owned(), format!("failed: {e}")),
+        Ok(out) => Publish::Done(branch, push, out),
+        Err(e) => Publish::Done(branch, push, format!("failed: {e}")),
     }
 }
 
