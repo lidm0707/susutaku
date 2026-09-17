@@ -2,12 +2,12 @@
 //! by the Postgres adapter.
 
 use async_trait::async_trait;
+use mockall::automock;
 use task_rs::resource::UpsertResource;
 use task_rs::{
     AgentConfigRow, AgentState, CardRow, CommentRow, ProjectRow, ResourceRow, RunRecordNew,
     RunRecordRow, SkillRow, StoreError, WorkspaceRow,
 };
-use mockall::automock;
 
 use crate::domain::{AgentConfigDraft, CardMove, CardPatch, NewCard, NewProject, NewWorkspace};
 
@@ -40,6 +40,8 @@ pub trait CardRepo: Send + Sync {
     async fn agent(&self, id: i64) -> Result<Option<AgentState>, StoreError>;
     /// Appends a finished run and updates the card's run record fields.
     async fn record_run(&self, r: RunRecordNew) -> Result<i64, StoreError>;
+    /// Marks a run as started (running + last_agent) before inference.
+    async fn set_run_start(&self, card_id: i64, agent: &str) -> Result<(), StoreError>;
     async fn card_runs(&self, card_id: i64) -> Result<Vec<RunRecordRow>, StoreError>;
     async fn set_cron(&self, card_id: i64, cron: Option<String>) -> Result<(), StoreError>;
     /// Sets (or clears with None) the card's sandbox image.

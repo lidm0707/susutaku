@@ -95,6 +95,10 @@ impl CardService {
         self.repo.record_run(r).await
     }
 
+    pub async fn set_run_start(&self, card_id: i64, agent: &str) -> Result<(), StoreError> {
+        self.repo.set_run_start(card_id, agent).await
+    }
+
     pub async fn card_runs(&self, card_id: i64) -> Result<Vec<RunRecordRow>, StoreError> {
         self.repo.card_runs(card_id).await
     }

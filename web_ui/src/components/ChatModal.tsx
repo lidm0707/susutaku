@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
-import { Bot, Brain, Camera, Check, CircleDot, Code2, Copy, Crosshair, ExternalLink, Eye, Link2, MessageSquarePlus, PanelRight, Send, Wrench, X } from "lucide-react";
+import { Bot, Brain, Camera, Check, Code2, Copy, Crosshair, ExternalLink, Eye, Link2, MessageSquarePlus, PanelRight, Send, Wrench, X } from "lucide-react";
 import {
   API_BASE,
   ApiError,
@@ -34,7 +34,6 @@ import {
   type PromptSection,
 } from "../lib.js";
 import { Modal } from "../ui/Overlay.js";
-import AgentReview from "./AgentReview.js";
 import { use_projects } from "./ProjectContext.js";
 import GraphView from "./GraphView.tsx";
 import { parse_plot_spec } from "../features/graph.js";
@@ -613,7 +612,16 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
               updated_at: Date.parse(r.updated_at) || 0,
             };
           });
-          return [...server, ...locals];
+          // threads of another project with a run still streaming are kept
+          // too: the list refresh would otherwise drop them mid-flight and
+          // the streamed deltas would patch into a thread no longer in state
+          const inFlight = ts.filter(
+            (t) =>
+              busyTidsRef.current.includes(t.id) &&
+              !server.some((s) => s.id === t.id) &&
+              !locals.includes(t)
+          );
+          return [...server, ...locals, ...inFlight];
         })
       )
       .catch(() => {})
@@ -1196,8 +1204,6 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
           .map((a) => `${a.name}${a.model ? ` · ${pretty_name(a.model)}` : ""}`)
           .join(", ");
 
-  const [reviewOpen, setReviewOpen] = useState(false);
-
   return (
     <Modal
       open={open}
@@ -1209,16 +1215,6 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
           <img className="title-icon" src="/susutaku_jibi.png" alt="" />
           susutaku
           <span className="sub">{sub}</span>
-          <button
-            type="button"
-            className="title-circle-btn"
-            onClick={() => setReviewOpen(true)}
-            title="review agent work (diff · commit · push · pr)"
-            aria-label="review agent work"
-            disabled={selected.length === 0}
-          >
-            <CircleDot size={14} />
-          </button>
           <button
             type="button"
             onClick={toggle_dock}
@@ -1578,12 +1574,6 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
           ))}
         </aside>
       </div>
-      <AgentReview
-        open={reviewOpen}
-        agent={selected[0]?.name ?? null}
-        project_id={project_id ?? undefined}
-        on_close={() => setReviewOpen(false)}
-      />
       {toast && (
         <p className="toast run-toast" role="status">
           {toast}

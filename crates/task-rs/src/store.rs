@@ -2,7 +2,7 @@
 
 use sqlx::PgPool;
 
-use crate::card::{RUN_STATUS_ERROR, RUN_STATUS_FINISHED};
+use crate::card::{RUN_STATUS_ERROR, RUN_STATUS_FINISHED, RUN_STATUS_RUNNING};
 use crate::routine::{RoutineDraft, RoutineRow, RoutineRunRow};
 
 pub const DEFAULT_DATABASE_URL: &str = "postgres://susutaku:susutaku@localhost:5434/susutaku";
@@ -653,6 +653,23 @@ impl Store {
         .await?;
         tx.commit().await?;
         Ok(row.id)
+    }
+
+    /// Mark a run as started: `run_status` running plus the executing agent,
+    /// written before inference so watchers see the card is live.
+    pub async fn set_run_start(&self, card_id: i64, agent: &str) -> Result<(), StoreError> {
+        let res = sqlx::query!(
+            r#"UPDATE task_cards SET run_status = $2, last_agent = $3 WHERE id = $1"#,
+            card_id,
+            RUN_STATUS_RUNNING,
+            agent,
+        )
+        .execute(&self.pool)
+        .await?;
+        if res.rows_affected() == 0 {
+            return Err(StoreError::NoSuchCard);
+        }
+        Ok(())
     }
 
     /// Run history for a card, newest first.

@@ -1,9 +1,26 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 import type { ReactNode } from "react";
 
 const ESC_KEY = "Escape";
+const OVERLAY_ANIM_MS = 220;
+
+// keep the overlay mounted briefly after `open` flips false so the
+// exit animation has an element to play on
+function use_closing(open: boolean) {
+  const [mounted, set_mounted] = useState(open);
+  useEffect(() => {
+    if (open) {
+      set_mounted(true);
+      return;
+    }
+    if (!mounted) return;
+    const t = setTimeout(() => set_mounted(false), OVERLAY_ANIM_MS);
+    return () => clearTimeout(t);
+  }, [open, mounted]);
+  return mounted;
+}
 
 function use_overlay(open: boolean, on_close: () => void) {
   const box = useRef<HTMLDivElement>(null);
@@ -57,11 +74,16 @@ type ModalProps = {
 
 export function Modal({ open, title, on_close, children, wide, className, docked, docked_left }: ModalProps) {
   const box = use_overlay(open, on_close);
-  if (!open) return null;
+  const mounted = use_closing(open);
+  if (!mounted) return null;
   return (
     <Portal>
     <div
-      className={docked ? "overlay docked" : docked_left ? "overlay docked docked-left" : "overlay"}
+      className={[
+        "overlay",
+        open ? "" : "closing",
+        docked ? "docked" : docked_left ? "docked docked-left" : "",
+      ].filter(Boolean).join(" ")}
       onMouseDown={(e) => e.target === e.currentTarget && on_close()}
     >
       <div
@@ -72,6 +94,7 @@ export function Modal({ open, title, on_close, children, wide, className, docked
           wide ? "wide" : "",
           docked ? "docked-right" : "",
           docked_left ? "docked-left" : "",
+          open ? "" : "closing",
           className ?? "",
         ].filter(Boolean).join(" ")}
         role="dialog"
@@ -95,13 +118,14 @@ type SlideOverProps = {
 
 export function SlideOver({ open, title, on_close, children }: SlideOverProps) {
   const box = use_overlay(open, on_close);
-  if (!open) return null;
+  const mounted = use_closing(open);
+  if (!mounted) return null;
   return (
     <Portal>
-    <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && on_close()}>
+    <div className={`overlay${open ? "" : " closing"}`} onMouseDown={(e) => e.target === e.currentTarget && on_close()}>
       <div
         ref={box}
-        className="overlay-box slideover"
+        className={`overlay-box slideover${open ? "" : " closing"}`}
         role="dialog"
         aria-modal="true"
         tabIndex={-1}
