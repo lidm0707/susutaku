@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use manager_rs::manager::{Manager, RemoteRepo, TaskOutcome};
 use task_rs::store::{CardRow, RunRecordNew, StoreError};
-use task_rs::{AgentConfigRow, TaskStatus};
+use task_rs::{AgentConfigRow, SkillRow, TaskStatus};
 
 use crate::domain::{CardMove, GitOp, TOOL_RESULT_HEADER, TOOL_ROUNDS_MAX, ToolCall};
 use crate::infra::manager_git::ManagerGit;
@@ -31,8 +31,32 @@ pub const PROMPT_PERSONA: &str = "persona: ";
 pub const PROMPT_INSTRUCTION: &str = "instruction: ";
 pub const PROMPT_OUTPUT: &str = "output format: ";
 pub const PROMPT_TASK: &str = "\n\ntask:\n";
+pub const PROMPT_SKILLS: &str = "\n\nproject skills:\n";
 pub const TEXT_SEP: &str = "\n\n";
+/// Per-skill body cap so a long skill sheet cannot eat the prompt budget.
+pub const MAX_SKILL_CHARS: usize = 6000;
 pub const CARD_TOOL_ROUNDS: usize = TOOL_ROUNDS_MAX;
+
+/// Fed back to the model when it offers a tool that does not parse, so the
+/// run retries with a well-formed call instead of dead-ending.
+pub const CARD_TOOL_MALFORMED: &str = "malformed tool call: nothing was run. Every tool line MUST start with exactly 'TOOL: ' at the start of a line, e.g. `TOOL: SHELL cargo check`, or use a full <invoke name=\"...\"> block with every required <parameter name=\"...\">. Repeat the call well-formed.";
+
+/// What the work loop does with one model reply: run the parsed tool,
+/// retry once on a malformed tool offer, or take the text as the final
+/// answer.
+pub enum WorkStep {
+    Tool(ToolCall),
+    Retry,
+    Final(String),
+}
+
+pub fn work_step(reply: String) -> WorkStep {
+    match ToolCall::parse(&reply) {
+        Some(call) => WorkStep::Tool(call),
+        None if ToolCall::offers(&reply) => WorkStep::Retry,
+        None => WorkStep::Final(reply),
+    }
+}
 pub const WORK_MAX_TOKENS: usize = 2048;
 pub const TOOL_OUTPUT_MAX: usize = 2000;
 pub const SLOT_KEY_SEP: char = manager_rs::manager::TASK_KEY_SEP;
@@ -238,7 +262,8 @@ async fn execute(
                     .and_then(|e| e.engine_for(model))
                     .filter(|_| !model.is_empty());
                 let target = routed.as_ref().unwrap_or(engine);
-                infer(target, &cfg, card, &agent).await
+                let skills = agent_skills(app, &cfg).await;
+                infer(target, &cfg, card, &agent, &skills).await
             }
         },
     }
@@ -258,8 +283,17 @@ async fn infer(
     cfg: &AgentConfigRow,
     card: &CardRow,
     agent: &str,
+    skills: &[SkillRow],
 ) -> RunRecord {
-    match submit(engine, None, cfg, task_prompt(cfg, card), INFER_MAX_TOKENS).await {
+    match submit(
+        engine,
+        None,
+        cfg,
+        task_prompt(cfg, card, skills),
+        INFER_MAX_TOKENS,
+    )
+    .await
+    {
         Ok(text) => RunRecord {
             agent: agent.to_owned(),
             status: RunStatus::Ok,
@@ -270,7 +304,7 @@ async fn infer(
     }
 }
 
-fn prompt_head(cfg: &AgentConfigRow) -> String {
+fn prompt_head(cfg: &AgentConfigRow, skills: &[SkillRow]) -> String {
     let mut prompt = String::new();
     for (header, body) in [
         (PROMPT_PERSONA, cfg.persona.as_str()),
@@ -280,6 +314,22 @@ fn prompt_head(cfg: &AgentConfigRow) -> String {
         if !body.is_empty() {
             prompt.push_str(header);
             prompt.push_str(body);
+            prompt.push('\n');
+        }
+    }
+    if !skills.is_empty() {
+        prompt.push_str(PROMPT_SKILLS);
+        for skill in skills {
+            prompt.push_str("## ");
+            prompt.push_str(&skill.name);
+            prompt.push('\n');
+            let body = skill.body.trim();
+            let end = body
+                .char_indices()
+                .nth(MAX_SKILL_CHARS)
+                .map(|(i, _)| i)
+                .unwrap_or(body.len());
+            prompt.push_str(body.get(..end).unwrap_or(body));
             prompt.push('\n');
         }
     }
@@ -295,19 +345,34 @@ fn task_body(card: &CardRow) -> String {
     task
 }
 
-pub fn task_prompt(cfg: &AgentConfigRow, card: &CardRow) -> String {
-    let mut prompt = prompt_head(cfg);
+pub fn task_prompt(cfg: &AgentConfigRow, card: &CardRow, skills: &[SkillRow]) -> String {
+    let mut prompt = prompt_head(cfg, skills);
     prompt.push_str(PROMPT_TASK);
     prompt.push_str(&task_body(card));
     prompt
 }
 
-pub fn work_prompt(cfg: &AgentConfigRow, card: &CardRow, transcript: &str) -> String {
-    let mut prompt = task_prompt(cfg, card);
+pub fn work_prompt(
+    cfg: &AgentConfigRow,
+    card: &CardRow,
+    transcript: &str,
+    skills: &[SkillRow],
+) -> String {
+    let mut prompt = task_prompt(cfg, card, skills);
     prompt.push_str(TEXT_SEP);
     prompt.push_str(TOOL_HINT);
     prompt.push_str(transcript);
     prompt
+}
+
+/// Attached skill sheets (the seeded `susutaku-project` skill among them) —
+/// without these the worktree agent has no idea how this project builds,
+/// tests or where its rules live.
+async fn agent_skills(app: &TaskApp, cfg: &AgentConfigRow) -> Vec<SkillRow> {
+    app.store
+        .list_agent_skills(cfg.id)
+        .await
+        .unwrap_or_default()
 }
 
 /// One inference turn routed through the per-model cloud engine when known.
@@ -418,6 +483,7 @@ async fn execute_work(
     let Some(cfg) = app.agents.by_name(&agent).await.ok().flatten() else {
         return fail(&agent, NOTE_NO_AGENT);
     };
+    let skills = agent_skills(app, &cfg).await;
     let repo = RemoteRepo {
         url: bound.url.clone(),
         token: (!bound.token.is_empty()).then(|| bound.token.clone()),
@@ -432,20 +498,25 @@ async fn execute_work(
     let mut transcript = String::new();
     let mut final_text = String::new();
     for _ in 0..CARD_TOOL_ROUNDS {
-        let prompt = work_prompt(&cfg, card, &transcript);
+        let prompt = work_prompt(&cfg, card, &transcript, &skills);
         let reply = match submit(engine, engines, &cfg, prompt, WORK_MAX_TOKENS).await {
             Ok(text) => text,
             Err(e) => return fail(&agent, &format!("{NOTE_INFER_ERR}{e}")),
         };
-        match ToolCall::parse(&reply) {
-            None => {
-                final_text = reply;
-                break;
-            }
-            Some(call) => {
+        match work_step(reply) {
+            WorkStep::Tool(call) => {
                 let label = call_label(&call);
                 let out = exec_tool(wt, &bound, &work_tree, call).await;
                 append_tool(&mut transcript, &label, &out);
+            }
+            WorkStep::Retry => {
+                // offered a tool but malformed: one corrective turn while
+                // rounds remain, instead of ending the run on it
+                append_tool(&mut transcript, "malformed", CARD_TOOL_MALFORMED);
+            }
+            WorkStep::Final(text) => {
+                final_text = text;
+                break;
             }
         }
     }
