@@ -1,7 +1,9 @@
 //! Pure-helper tests for the card-run work-tree mode: the path-escape guard,
 //! the slot key, the prompt build and the bound-repo op resolution.
 
-use backend::app::card_run::{BoundRepo, bind_op, resolve_in_tree, slot_key, work_prompt};
+use backend::app::card_run::{
+    BoundRepo, bind_op, resolve_in_tree, slot_key, work_prompt,
+};
 use backend::domain::GitOp;
 use std::path::Path;
 use task_rs::{AgentConfigRow, CardRow};
@@ -99,9 +101,56 @@ fn work_prompt_carries_task_and_hint() {
         estimate: None,
         image: None,
     };
-    let prompt = work_prompt(&cfg, &card, "Tool results:\n- SHELL ls\n");
+    let prompt = work_prompt(&cfg, &card, "Tool results:\n- SHELL ls\n", &[]);
     assert!(prompt.contains("persona: tester"));
     assert!(prompt.contains("task:"));
     assert!(prompt.contains("fix the bug"));
     assert!(prompt.contains("Tool results:"));
+    assert!(!prompt.contains("project skills:"));
+}
+
+#[test]
+fn work_prompt_embeds_attached_skills() {
+    let cfg = AgentConfigRow {
+        id: 1,
+        name: "dev".into(),
+        model: String::new(),
+        persona: String::new(),
+        prompt: String::new(),
+        output: String::new(),
+        allowed_tools: Vec::new(),
+        receive_images: false,
+        thinking: "off".into(),
+    };
+    let card = CardRow {
+        id: 7,
+        column_id: "todo".into(),
+        project_id: Some(1),
+        title: "fix the bug".into(),
+        description: String::new(),
+        priority: "normal".into(),
+        position: 0,
+        agent_name: Some("dev".into()),
+        agent_state: None,
+        run_status: String::new(),
+        last_agent: None,
+        last_run_id: None,
+        assignee: None,
+        cron: None,
+        deadline: None,
+        labels: None,
+        checklist: None,
+        estimate: None,
+        image: None,
+    };
+    let skills = vec![task_rs::SkillRow {
+        id: 1,
+        name: "susutaku-project".into(),
+        body: "cargo check && cargo clippy".into(),
+    }];
+    let prompt = work_prompt(&cfg, &card, "", &skills);
+    assert!(prompt.contains("project skills:"));
+    assert!(prompt.contains("## susutaku-project"));
+    assert!(prompt.contains("cargo check && cargo clippy"));
+    assert!(prompt.ends_with("cargo check && cargo clippy\n\n") || prompt.contains("clippy\n"));
 }
