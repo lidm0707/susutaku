@@ -36,6 +36,27 @@ pub const TEXT_SEP: &str = "\n\n";
 /// Per-skill body cap so a long skill sheet cannot eat the prompt budget.
 pub const MAX_SKILL_CHARS: usize = 6000;
 pub const CARD_TOOL_ROUNDS: usize = TOOL_ROUNDS_MAX;
+
+/// Fed back to the model when it offers a tool that does not parse, so the
+/// run retries with a well-formed call instead of dead-ending.
+pub const CARD_TOOL_MALFORMED: &str = "malformed tool call: nothing was run. Every tool line MUST start with exactly 'TOOL: ' at the start of a line, e.g. `TOOL: SHELL cargo check`, or use a full <invoke name=\"...\"> block with every required <parameter name=\"...\">. Repeat the call well-formed.";
+
+/// What the work loop does with one model reply: run the parsed tool,
+/// retry once on a malformed tool offer, or take the text as the final
+/// answer.
+pub enum WorkStep {
+    Tool(ToolCall),
+    Retry,
+    Final(String),
+}
+
+pub fn work_step(reply: String) -> WorkStep {
+    match ToolCall::parse(&reply) {
+        Some(call) => WorkStep::Tool(call),
+        None if ToolCall::offers(&reply) => WorkStep::Retry,
+        None => WorkStep::Final(reply),
+    }
+}
 pub const WORK_MAX_TOKENS: usize = 2048;
 pub const TOOL_OUTPUT_MAX: usize = 2000;
 pub const SLOT_KEY_SEP: char = manager_rs::manager::TASK_KEY_SEP;
@@ -482,15 +503,20 @@ async fn execute_work(
             Ok(text) => text,
             Err(e) => return fail(&agent, &format!("{NOTE_INFER_ERR}{e}")),
         };
-        match ToolCall::parse(&reply) {
-            None => {
-                final_text = reply;
-                break;
-            }
-            Some(call) => {
+        match work_step(reply) {
+            WorkStep::Tool(call) => {
                 let label = call_label(&call);
                 let out = exec_tool(wt, &bound, &work_tree, call).await;
                 append_tool(&mut transcript, &label, &out);
+            }
+            WorkStep::Retry => {
+                // offered a tool but malformed: one corrective turn while
+                // rounds remain, instead of ending the run on it
+                append_tool(&mut transcript, "malformed", CARD_TOOL_MALFORMED);
+            }
+            WorkStep::Final(text) => {
+                final_text = text;
+                break;
             }
         }
     }

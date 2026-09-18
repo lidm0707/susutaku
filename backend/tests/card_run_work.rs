@@ -2,7 +2,7 @@
 //! the slot key, the prompt build and the bound-repo op resolution.
 
 use backend::app::card_run::{
-    BoundRepo, bind_op, resolve_in_tree, slot_key, work_prompt,
+    work_step, BoundRepo, WorkStep, bind_op, resolve_in_tree, slot_key, work_prompt,
 };
 use backend::domain::GitOp;
 use std::path::Path;
@@ -153,4 +153,23 @@ fn work_prompt_embeds_attached_skills() {
     assert!(prompt.contains("## susutaku-project"));
     assert!(prompt.contains("cargo check && cargo clippy"));
     assert!(prompt.ends_with("cargo check && cargo clippy\n\n") || prompt.contains("clippy\n"));
+}
+
+#[test]
+fn work_step_retries_malformed_tool_offer() {
+    // well-formed tool call -> executed
+    assert!(matches!(
+        work_step("TOOL: SHELL ls".to_string()),
+        WorkStep::Tool(_)
+    ));
+    // tool offered but malformed -> retry with repair hint, run continues
+    assert!(matches!(
+        work_step("TOOL: CARD_CREATE title only".to_string()),
+        WorkStep::Retry
+    ));
+    // no tool offer -> final answer, run ends
+    assert!(matches!(
+        work_step("all done, tests pass".to_string()),
+        WorkStep::Final(_)
+    ));
 }
