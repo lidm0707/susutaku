@@ -104,7 +104,8 @@ UX/snapshot suite stays on the host-backend stack from
 - The backend still needs `security_opt: [seccomp=unconfined,
   apparmor=unconfined]` — the agent sandbox refuses to run unsandboxed (by
   design, no fallback).
-- **Building** `Dockerfile.backend` compiles sqlx macros against the *host*
+- **Building** `Dockerfile.backend` compiles sqlx macros (all task SQL lives in
+  `backend/src/infra/postgres/`) against the *host*
   postgres from `docker/compose/base.yml` (port 5434) — keep it up while
   building. Runtime uses the compose postgres only. The compose `build:` must
   set `target: backend-runtime` (the Dockerfile's last stage is a hub stub).

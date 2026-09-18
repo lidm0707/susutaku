@@ -5,7 +5,8 @@
 //! Work-tree mode: when the card has an agent, a project with a bound git
 //! repo and a [`WorkTree`] is wired in, the run executes against a real
 //! manager task slot (model edits files via toolcalls), then publishes the
-//! branch and opens a GitHub PR, storing the durable agent output.
+//! branch and opens a GitHub PR; the terminal output lands on the card as a
+//! comment.
 
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
@@ -14,14 +15,16 @@ use manager_rs::manager::{Manager, RemoteRepo, TaskOutcome};
 use task_rs::store::{CardRow, RunRecordNew, StoreError};
 use task_rs::{AgentConfigRow, TaskStatus};
 
-use crate::domain::{CardMove, GitOp, TOOL_RESULT_HEADER, TOOL_ROUNDS_MAX, ToolCall};
+use crate::domain::{CardMove, GitOp, TOOL_RESULT_HEADER, ToolCall};
 use crate::infra::manager_git::ManagerGit;
 use crate::infra::zai::settings::SettingsState;
 use crate::port::outbound::{Inference, ModelEngines};
+use manager_rs::git_state::NO_CHANGES;
 
 use super::task::TaskApp;
 
 pub const RUN_KEY: &str = "run";
+pub const RUN_PROGRESS_KEY: &str = "progress";
 pub const MOVE_POSITION_TOP: i32 = 0;
 pub const NOTE_NO_AGENT: &str = "no agent assigned to the card";
 pub const NOTE_NO_ENGINE: &str = "no inference engine configured";
@@ -32,9 +35,12 @@ pub const PROMPT_INSTRUCTION: &str = "instruction: ";
 pub const PROMPT_OUTPUT: &str = "output format: ";
 pub const PROMPT_TASK: &str = "\n\ntask:\n";
 pub const TEXT_SEP: &str = "\n\n";
-pub const CARD_TOOL_ROUNDS: usize = TOOL_ROUNDS_MAX;
+pub const CARD_TOOL_ROUNDS: usize = 24;
+/// Coding runs need far more turns than chat (clone, explore, edit several
+/// files, verify, commit) — chat's TOOL_ROUNDS_MAX = 8 starves them.
 pub const WORK_MAX_TOKENS: usize = 2048;
 pub const TOOL_OUTPUT_MAX: usize = 2000;
+pub const OUTPUT_COMMENT_MAX: usize = 8000;
 pub const SLOT_KEY_SEP: char = manager_rs::manager::TASK_KEY_SEP;
 pub const NOTE_SPAWN_ERR: &str = "work tree spawn failed: ";
 pub const NOTE_PUBLISH_ERR: &str = "publish failed: ";
@@ -42,12 +48,26 @@ pub const NOTE_WRITE_ERR: &str = "file write failed: ";
 pub const NOTE_JOIN: &str = "manager task panicked";
 pub const DENIED_NOTE: &str =
     "tool denied in a card run: use SHELL, AGENT_RUN, GIT or the coding write_file block";
-pub const TOOL_HINT: &str = "You are working alone in a sandboxed work tree of the project's git repo (a task branch is checked out). Edit real files, one tool call per reply. Every tool line MUST start with exactly 'TOOL: ' — a line that only says 'SHELL ...' is NOT a tool call and ends the run:\n- TOOL: SHELL <cmd> - run a shell command in the work tree\n- TOOL: AGENT_RUN <cmd> - run a shell command in the work tree (alias)\n- TOOL: GIT STATUS | DIFF | BRANCH <name> | COMMIT <message> | PUSH <branch> | PR <title>\n- coding block: <invoke name=\"coding\"><parameter name=\"path\">rel/path</parameter><parameter name=\"code\">file content</parameter></invoke>\nDo the actual work (create/edit files, verify with SHELL) before finishing. Read-only exploration alone is NOT a finished task — if you have not changed any files, keep working. When done, reply with a final text summary (no tool line); the run publishes the branch and opens a PR automatically.\n";
+pub const TOOL_HINT: &str = "You are working alone in a sandboxed work tree of the project's git repo (a task branch is checked out). Edit real files, one tool call per reply. Every tool line MUST start with exactly 'TOOL: ' — a line that only says 'SHELL ...' is NOT a tool call and ends the run:\n- TOOL: SHELL <cmd> - run a shell command in the work tree\n- TOOL: AGENT_RUN <cmd> - run a shell command in the work tree (alias)\n- TOOL: GIT STATUS | DIFF | BRANCH <name> | COMMIT <message> | PUSH <branch> | PR <title>\n- coding block: <invoke name=\"coding\"><parameter name=\"path\">rel/path</parameter><parameter name=\"code\">file content</parameter></invoke>\nBUDGET: at most 2 exploration rounds (ls/cat/grep). After that you MUST write code — use the coding block to create or edit at least one file EVERY round until the feature is complete. Reading is NOT progress. The run is graded on files changed. When done, reply with a final text summary (no tool line); the run publishes the branch and opens a PR automatically.\n";
 pub const PUBLISH_BRANCH: &str = "\n\nbranch: ";
 pub const PUBLISH_PUSH: &str = "\npush: ";
 pub const PUBLISH_PR: &str = "\npr: ";
 pub const PUBLISH_PR_FAILED: &str = "\npr: failed: ";
-pub const PUBLISH_NOTHING: &str = "\n\nnothing to publish: the run made no commits";
+pub const NOTE_NOTHING_PUBLISHED: &str = "run produced no commits — nothing to publish; the agent made no file changes, refine the task description or re-run";
+pub const NOTE_EVIDENCE: &str = "\n\nlast reply:\n";
+pub const NOTE_TRANSCRIPT: &str = "\n\nlast steps:\n";
+pub const TRANSCRIPT_TAIL_MAX: usize = 2000;
+pub const NOTE_ROUNDS_OUT: &str = "\n\nrun ended: out of tool rounds before the agent finished";
+/// Bare verb lines accepted as tool calls when the model skipped the exact
+/// `TOOL: ` prefix (work runs only; chat keeps strict parsing).
+pub const LENIENT_TOOLS: [&str; 4] = ["SHELL", "AGENT_RUN", "GIT", "LSP"];
+pub const LENIENT_PREFIX: &str = "TOOL: ";
+pub const REMINDER_LABEL: &str = "assistant";
+/// No-tool replies tolerated before the run ends: one strict reminder per
+/// reply. Small models often need a second nudge before they emit a tool
+/// line, and each extra nudge is cheaper than a wasted failed run.
+pub const REMINDERS_MAX: usize = 2;
+pub const WORK_REMINDER: &str = "Your reply contained no tool call and no code, so nothing was done. You MUST reply with a line starting exactly `TOOL: ` (e.g. `TOOL: SHELL <cmd>`), or a coding block, to act on the work tree. Plain explanations are NOT accepted before the work is done.";
 pub const PR_BASE: &str = "main";
 pub const TASK_BRANCH_PREFIX: &str = "task/";
 pub const BRANCH_SEP: char = '-';
@@ -238,7 +258,7 @@ async fn execute(
                     .and_then(|e| e.engine_for(model))
                     .filter(|_| !model.is_empty());
                 let target = routed.as_ref().unwrap_or(engine);
-                infer(target, &cfg, card, &agent).await
+                infer(app, target, &cfg, card, &agent).await
             }
         },
     }
@@ -254,12 +274,23 @@ fn fail(agent: &str, note: &str) -> RunRecord {
 }
 
 async fn infer(
+    app: &TaskApp,
     engine: &Arc<dyn Inference>,
     cfg: &AgentConfigRow,
     card: &CardRow,
     agent: &str,
 ) -> RunRecord {
-    match submit(engine, None, cfg, task_prompt(cfg, card), INFER_MAX_TOKENS).await {
+    match submit_retry(
+        app,
+        card.id,
+        engine,
+        None,
+        cfg,
+        task_prompt(cfg, card),
+        INFER_MAX_TOKENS,
+    )
+    .await
+    {
         Ok(text) => RunRecord {
             agent: agent.to_owned(),
             status: RunStatus::Ok,
@@ -335,6 +366,55 @@ async fn submit(
 
 pub const NOTE_INFER_ERR: &str = "inference failed: ";
 pub const NOTE_INFER_DROP: &str = "inference: engine dropped or rejected the job";
+pub const INFER_RETRY_MAX: usize = 5;
+pub const INFER_RETRY_DELAY_MS: u64 = 2000;
+pub const MS_PER_S: u64 = 1000;
+pub const PROGRESS_TOOL_INFER: &str = "inference";
+pub const RETRY_LABEL: &str = "retry";
+pub const RETRY_NEXT_IN: &str = "next in";
+pub const RETRY_ATTEMPTS_NOTE: &str = "attempts";
+
+/// One inference turn with bounded retries. Every failed attempt is written
+/// to the card progress so the UI can show the retry count and next retry.
+async fn submit_retry(
+    app: &TaskApp,
+    card_id: i64,
+    engine: &Arc<dyn Inference>,
+    engines: Option<&dyn ModelEngines>,
+    cfg: &AgentConfigRow,
+    prompt: String,
+    max_tokens: usize,
+) -> Result<String, String> {
+    for attempt in 1..=INFER_RETRY_MAX {
+        match submit(engine, engines, cfg, prompt.clone(), max_tokens).await {
+            Ok(text) => return Ok(text),
+            Err(e) if attempt < INFER_RETRY_MAX => {
+                tracing::warn!(attempt, error = %e, "inference retry scheduled");
+                report_retry(app, card_id, attempt).await;
+                tokio::time::sleep(std::time::Duration::from_millis(INFER_RETRY_DELAY_MS)).await;
+            }
+            Err(e) => return Err(format!("{e} after {INFER_RETRY_MAX} {RETRY_ATTEMPTS_NOTE}")),
+        }
+    }
+    unreachable!("retry loop always returns")
+}
+
+async fn report_retry(app: &TaskApp, card_id: i64, failed_attempt: usize) {
+    let delay_s = INFER_RETRY_DELAY_MS / MS_PER_S;
+    let progress = serde_json::json!({
+        "round": failed_attempt + 1,
+        "rounds": INFER_RETRY_MAX,
+        "last_tool": PROGRESS_TOOL_INFER,
+        "last_output": format!(
+            "{RETRY_LABEL} {}/{} — {RETRY_NEXT_IN} {delay_s}s",
+            failed_attempt + 1,
+            INFER_RETRY_MAX
+        ),
+        "retry": true,
+        "updated_at": now_iso(),
+    });
+    write_progress(app, card_id, progress).await;
+}
 
 /// Move a task unless it already sits in the target column.
 async fn move_to_column(
@@ -370,6 +450,8 @@ async fn persist(
         .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
         .and_then(|v| v.as_object().cloned())
         .unwrap_or_default();
+    // The live-progress snapshot is superseded by the finished run record.
+    state.remove(RUN_PROGRESS_KEY);
     state.insert(
         RUN_KEY.to_owned(),
         serde_json::to_value(&record).map_err(|e| StoreError::BadSpec(e.to_string()))?,
@@ -431,42 +513,76 @@ async fn execute_work(
     };
     let mut transcript = String::new();
     let mut final_text = String::new();
-    for _ in 0..CARD_TOOL_ROUNDS {
+    let mut no_tool_replies = 0usize;
+    let mut ran_out = true;
+    for round in 0..CARD_TOOL_ROUNDS {
         let prompt = work_prompt(&cfg, card, &transcript);
-        let reply = match submit(engine, engines, &cfg, prompt, WORK_MAX_TOKENS).await {
+        let reply = match submit_retry(app, card.id, engine, engines, &cfg, prompt, WORK_MAX_TOKENS)
+            .await
+        {
             Ok(text) => text,
             Err(e) => return fail(&agent, &format!("{NOTE_INFER_ERR}{e}")),
         };
-        match ToolCall::parse(&reply) {
+        let call = match ToolCall::parse(&reply).or_else(|| lenient_tool(&reply)) {
+            Some(call) => Some(call),
+            // A no-tool reply is almost always the model talking instead
+            // of coding: one strict reminder, then the loop continues. A
+            // second no-tool reply ends the run. The reminder is not limited
+            // to the pre-first-tool state — an agent that explored first and
+            // then drifted into prose gets nudged back instead of killed.
+            None if no_tool_replies < REMINDERS_MAX => {
+                no_tool_replies += 1;
+                append_tool(&mut transcript, REMINDER_LABEL, &reply);
+                append_tool(&mut transcript, REMINDER_LABEL, WORK_REMINDER);
+                None
+            }
             None => {
                 final_text = reply;
+                ran_out = false;
                 break;
             }
+        };
+        match call {
+            None => continue,
             Some(call) => {
                 let label = call_label(&call);
                 let out = exec_tool(wt, &bound, &work_tree, call).await;
                 append_tool(&mut transcript, &label, &out);
+                report_progress(app, card.id, round, &label, &out).await;
             }
         }
     }
+    let rounds_note = if ran_out {
+        NOTE_ROUNDS_OUT.to_owned()
+    } else {
+        String::new()
+    };
     let publish = publish_work(wt, &bound, &card.title).await;
-    let mut output = final_text;
+    teardown(app, card.id, wt, &bound.slot, &agent).await;
     match publish {
-        Publish::Nothing => output.push_str(PUBLISH_NOTHING),
-        Publish::Done(branch, push, pr) => {
-            output.push_str(&publish_note(&branch, &push, &pr));
-        }
-        Publish::Failed(e) => {
-            teardown(app, wt, &bound.slot, &agent).await;
-            return fail(&agent, &format!("{NOTE_PUBLISH_ERR}{e}"));
-        }
-    }
-    teardown(app, wt, &bound.slot, &agent).await;
-    RunRecord {
-        agent,
-        status: RunStatus::Ok,
-        output: Some(output),
-        finished_at: now_iso(),
+        // No commits is a failed run, not a passed one: the card moves to the
+        // failed column so the board never shows a done card without a PR.
+        // The evidence (last reply + tool trace tail) rides along in the
+        // output so the run log shows WHY nothing changed.
+        Publish::Nothing => fail(
+            &agent,
+            &format!(
+                "{NOTE_NOTHING_PUBLISHED}{rounds_note}{}{}{NOTE_TRANSCRIPT}{}",
+                NOTE_EVIDENCE,
+                truncate(&final_text, TRANSCRIPT_TAIL_MAX),
+                tail(&transcript, TRANSCRIPT_TAIL_MAX)
+            ),
+        ),
+        Publish::Failed(e) => fail(&agent, &format!("{NOTE_PUBLISH_ERR}{e}")),
+        Publish::Done(branch, push, pr) => RunRecord {
+            agent,
+            status: RunStatus::Ok,
+            output: Some(format!(
+                "{final_text}{}{rounds_note}",
+                publish_note(&branch, &push, &pr)
+            )),
+            finished_at: now_iso(),
+        },
     }
 }
 
@@ -481,36 +597,41 @@ enum Publish {
 }
 
 /// Commit the pending work, push the task branch, open the PR against
-/// [`PR_BASE`]. A PR failure does not fail the run: the branch is already
+/// [`PR_BASE`]. Ships both committed AND uncommitted work: dirty edits are
+/// committed here so an agent that edited but never ran GIT COMMIT still
+/// lands a PR. A PR failure does not fail the run: the branch is already
 /// on the remote and review can happen there.
 async fn publish_work(wt: &WorkTree, bound: &BoundRepo, title: &str) -> Publish {
-    // Gate on commits, not on a dirty diff: a work-dir diff can be non-empty
-    // from runtime artifacts alone, and pushing with no new commits makes
-    // the remote branch point at main — every PR then dies with
-    // "No commits between main and <branch>".
-    match wt.task_has_commits(&bound.slot).await {
-        Ok(true) => {}
-        Ok(false) => return Publish::Nothing,
+    let has = match wt.task_has_commits(&bound.slot).await {
+        Ok(v) => v,
         Err(e) => return Publish::Failed(e),
-    }
+    };
     let diff = match ManagerGit::to_proto(&GitOp::Diff) {
         Ok(tool) => wt.git(&bound.slot, tool).await,
         Err(e) => return Publish::Failed(e),
     };
-    match diff {
-        Ok(d) if d.trim().is_empty() => return Publish::Nothing,
-        Ok(_) => {}
+    let dirty = match diff {
+        Ok(d) => diff_is_dirty(&d),
         Err(e) => return Publish::Failed(e),
+    };
+    // Nothing only when the tree is clean AND there are no task commits:
+    // anything else is shippable work.
+    if !has && !dirty {
+        return Publish::Nothing;
     }
     let branch = task_branch(&bound.agent, &bound.task);
-    let commit = ManagerGit::to_proto(&GitOp::Commit {
-        message: format!("{COMMIT_PREFIX}{title}"),
-    });
-    if let Err(e) = match commit {
-        Ok(tool) => wt.git(&bound.slot, tool).await,
-        Err(e) => return Publish::Failed(e),
-    } {
-        return Publish::Failed(format!("commit: {e}"));
+    if dirty {
+        // The commit script is a no-op when nothing is staged, so this is
+        // safe even on a racy tree.
+        let commit = ManagerGit::to_proto(&GitOp::Commit {
+            message: format!("{COMMIT_PREFIX}{title}"),
+        });
+        if let Err(e) = match commit {
+            Ok(tool) => wt.git(&bound.slot, tool).await,
+            Err(e) => return Publish::Failed(e),
+        } {
+            return Publish::Failed(format!("commit: {e}"));
+        }
     }
     let push = ManagerGit::to_proto(&GitOp::Push {
         branch: branch.clone(),
@@ -568,28 +689,78 @@ fn publish_note(branch: &str, push: &str, pr: &str) -> String {
     )
 }
 
-/// Captures the patch/transcript as a durable agent output, then tears the
-/// slot down. Runs on every work-tree exit path, publish success or not.
-async fn teardown(app: &TaskApp, wt: &WorkTree, slot: &str, agent: &str) {
+/// Snapshot run progress into the card state so the UI can show what the
+/// agent is doing mid-run (the board refreshes via the published event).
+async fn report_progress(
+    app: &TaskApp,
+    card_id: i64,
+    round: usize,
+    last_tool: &str,
+    last_output: &str,
+) {
+    let progress = serde_json::json!({
+        "round": round + 1,
+        "rounds": CARD_TOOL_ROUNDS,
+        "last_tool": last_tool,
+        "last_output": truncate(last_output, OUTPUT_PREVIEW_MAX),
+        "updated_at": now_iso(),
+    });
+    write_progress(app, card_id, progress).await;
+}
+
+/// Persist a progress snapshot into the card state and publish the event.
+async fn write_progress(app: &TaskApp, card_id: i64, progress: serde_json::Value) {
+    let Ok(Some(card)) = app.cards.get(card_id).await else {
+        return;
+    };
+    let mut state = card
+        .agent_state
+        .as_deref()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+        .and_then(|v| v.as_object().cloned())
+        .unwrap_or_default();
+    state.insert(RUN_PROGRESS_KEY.to_owned(), progress);
+    let Ok(state) = serde_json::to_string(&state) else {
+        return;
+    };
+    if app.cards.set_agent_state(card_id, &state).await.is_ok() {
+        crate::app::events::publish(crate::app::events::EventKind::Card);
+    }
+}
+
+/// Posts the run's terminal output (result + transcript tail) to the card as
+/// a comment, then tears the slot down. Runs on every work-tree exit path,
+/// publish success or not.
+async fn teardown(app: &TaskApp, card_id: i64, wt: &WorkTree, slot: &str, agent: &str) {
     match wt.finish(slot).await {
         Ok(out) => {
             let transcript = transcript_of(&out);
             if let Err(e) = app
                 .store
-                .insert_agent_output(
+                .add_comment(
+                    card_id,
                     agent,
-                    out.result.as_deref(),
-                    &out.patch,
-                    out.commit.as_deref(),
-                    &transcript,
+                    &output_comment(out.result.as_deref(), &transcript),
                 )
                 .await
             {
-                tracing::warn!(error = %e, "agent output store failed");
+                tracing::warn!(error = %e, "agent output comment failed");
             }
         }
         Err(e) => tracing::warn!(error = %e, "work tree teardown failed"),
     }
+}
+
+fn output_comment(result: Option<&str>, transcript: &str) -> String {
+    let mut body = result.unwrap_or_default().to_owned();
+    if !transcript.is_empty() {
+        if !body.is_empty() {
+            body.push_str("\n\n");
+        }
+        body.push_str("terminal:\n");
+        body.push_str(&tail(transcript, OUTPUT_COMMENT_MAX));
+    }
+    body
 }
 
 fn transcript_of(outcome: &TaskOutcome) -> String {
@@ -627,6 +798,88 @@ fn truncate(s: &str, max: usize) -> String {
     s.chars().take(max).collect()
 }
 
+/// Last `max` chars — evidence keeps the END of a log, where the reason
+/// lives, not the start.
+pub fn tail(s: &str, max: usize) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    if chars.len() <= max {
+        return s.to_owned();
+    }
+    chars[chars.len() - max..].iter().collect()
+}
+
+/// Whether a GIT DIFF output carries real work: the tool renders an empty
+/// patch as the [`NO_CHANGES`] placeholder, which is clean, not content.
+pub fn diff_is_dirty(diff_out: &str) -> bool {
+    let t = diff_out.trim();
+    !t.is_empty() && t != NO_CHANGES
+}
+
+/// Recovery for models that drop the `TOOL: ` prefix: the first line that
+/// starts with a bare work verb is rewritten as a tool call and handed to
+/// the strict parser. AGENT_RUN becomes SHELL — in a card work run it is
+/// documented as an alias of the in-tree shell, not a remote agent run.
+/// Returns None when the strict parser would find the call itself or
+/// nothing looks like a tool line.
+pub fn lenient_tool(reply: &str) -> Option<ToolCall> {
+    if ToolCall::offers(reply) {
+        return None;
+    }
+    bare_verb_line(reply)
+        .or_else(|| prompt_dollar_line(reply))
+        .or_else(|| fenced_shell_line(reply))
+        .map(|line| ToolCall::parse(&format!("{LENIENT_PREFIX}{line}")))?
+}
+
+fn bare_verb_line(reply: &str) -> Option<String> {
+    let line = reply.lines().find_map(|l| {
+        let t = l.trim_start();
+        let (verb, _) = t.split_once(' ')?;
+        LENIENT_TOOLS
+            .iter()
+            .any(|k| verb.eq_ignore_ascii_case(k))
+            .then_some(t)
+    })?;
+    let (verb, rest) = line.split_once(' ')?;
+    if verb.eq_ignore_ascii_case("AGENT_RUN") {
+        Some(format!("SHELL {rest}"))
+    } else {
+        Some(line.to_owned())
+    }
+}
+
+fn prompt_dollar_line(reply: &str) -> Option<String> {
+    let line = reply.lines().map(str::trim_start).find_map(|l| {
+        l.strip_prefix("$ ")
+            .filter(|cmd| !cmd.trim().is_empty())
+            .map(str::to_owned)
+    })?;
+    Some(format!("SHELL {line}"))
+}
+
+const SHELL_FENCE_TAGS: [&str; 3] = ["sh", "bash", "shell"];
+const FENCE: char = '`';
+
+fn fenced_shell_line(reply: &str) -> Option<String> {
+    let mut in_block = false;
+    for line in reply.lines() {
+        let t = line.trim();
+        if in_block {
+            if t.starts_with(FENCE) {
+                in_block = false;
+                continue;
+            }
+            let cmd = t.trim_start_matches("$ ").trim();
+            if !cmd.is_empty() {
+                return Some(format!("SHELL {cmd}"));
+            }
+        } else if let Some(t) = t.strip_prefix(FENCE) {
+            in_block = SHELL_FENCE_TAGS.contains(&t.trim());
+        }
+    }
+    None
+}
+
 async fn exec_tool(wt: &WorkTree, bound: &BoundRepo, work_tree: &Path, call: ToolCall) -> String {
     match call {
         ToolCall::Shell(cmd) => tool_out(wt.run(&bound.slot, &cmd).await),
@@ -636,7 +889,7 @@ async fn exec_tool(wt: &WorkTree, bound: &BoundRepo, work_tree: &Path, call: Too
             Err(e) => e,
         },
         ToolCall::Coding { path, code } => match resolve_in_tree(work_tree, &path) {
-            Ok(target) => match tokio::fs::write(target, code).await {
+            Ok(target) => match write_new_file(&target, &code).await {
                 Ok(()) => "file written".to_owned(),
                 Err(e) => format!("{NOTE_WRITE_ERR}{e}"),
             },
@@ -648,6 +901,15 @@ async fn exec_tool(wt: &WorkTree, bound: &BoundRepo, work_tree: &Path, call: Too
 
 fn tool_out(result: Result<String, String>) -> String {
     result.unwrap_or_else(|e| e)
+}
+
+/// Writes a file into the work tree, creating missing parent directories —
+/// models routinely target new package paths that do not exist yet.
+async fn write_new_file(target: &Path, code: &str) -> std::io::Result<()> {
+    if let Some(parent) = target.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+    tokio::fs::write(target, code).await
 }
 
 /// Resolves a model-supplied path inside the slot work tree; only normal

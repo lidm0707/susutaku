@@ -28,6 +28,9 @@ claude-cli = { path = "../crates/agent_3th_cli/claude_cli" }
 zai-api = { path = "../crates/cloud_model_api/zai_api" }
 ai-interface-layer = { path = "../crates/cloud_model_api/ai_interface_layer" }
 task-rs = { workspace = true }
+sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls", "postgres", "chrono"] }
+argon2 = "0.5"
+sha2 = "0.10"
 math = { workspace = true }
 codex-usage-rs = { workspace = true }
 manager-rs = { workspace = true }
@@ -39,3 +42,5 @@ mockall = "0.13"
 
 [dev-dependencies]
 chrono = "0.4"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres"] }

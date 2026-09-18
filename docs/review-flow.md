@@ -8,10 +8,10 @@ and the failure modes that were hit and fixed (Sep 2026).
 ```
 card/chat run                review page (/review)                artifact
 ┌──────────────┐   spawn    ┌────────────────────────┐  finish   ┌──────────────────┐
-│ agent works  │──────────▶│ status · diff (DiffView)│─────────▶│ agent_outputs     │
-│ in its work  │           │ commit · push · open pr │           │ patch + commit +  │
-│ tree         │           └────────────────────────┘           │ transcript        │
-└──────────────┘                                                └──────────────────┘
+│ agent works  │──────────▶│ status · diff (DiffView)│─────────▶│ card comment:    │
+│ in its work  │           │ commit · push · open pr │           │ result + transcript│
+│ tree         │           └────────────────────────┘           └──────────────────┘
+└──────────────┘
 ```
 
 1. **Spawn** — the first git op or manager call auto-spawns the agent's slot:
@@ -29,26 +29,27 @@ card/chat run                review page (/review)                artifact
    `{ push, project_id, branch }`) captures everything into `TaskOutcome`,
    optionally pushing the task branch (repo + token from the project's bound
    git repo) before the work tree is torn down — push failure never fails the
-   finish. It then stores an agent output (`agent_outputs` table): patch
-   text, commit oid, transcript. This is the durable artifact — reviewable
-   in the outputs modal even after the work tree is gone.
-4. **Decide** — each stored output carries a review **status**
-   (`pending` → `approved` / `rejected`, consts in `task-rs/src/store.rs`).
-   `POST /api/agent-outputs/{id}/status` sets it; the outputs modal filters
-   by status and offers approve/reject buttons while an output is pending.
-   Outputs can be deleted: `DELETE /api/agent-outputs/{id}` (editor+); the
-   outputs modal has a per-row × and a delete button in the detail view.
+   finish. The terminal output (result + transcript) is then posted to the
+   run's card as a **comment** (`card_attachments`-style durability via
+   `task_comments`; the slot key `agent#<card_id>` resolves the card) and
+   echoed back as `StoredOutcome`. This is the durable artifact — readable
+   on the card even after the work tree is gone.
+4. **Decide** — the card's comment stream IS the record: review the output
+   on the card, move the card through its `TaskStatus` transitions
+   (todo → in_progress → review → done/failed, validated server-side), and
+   comment as a human with `POST /api/task/cards/{id}/comments`.
 
 ## Work tree lifecycle: PR is the end state
 
 The Review page auto-finishes an agent right after a successful **open pr**
-action (`web_ui/src/pages/Review.tsx`): `finish_manager_agent` captures the
-patch/transcript as an agent output, purges the sandbox and deletes
+action (`web_ui/src/pages/Review.tsx`): `finish_manager_agent` posts the
+patch/transcript to the linked card as a comment, purges the sandbox and
+deletes
 `work/agents/<agent>` — the tree is disposable once the PR exists and the
 agent drops off the list. Git status is deliberately **not** re-fetched
 afterwards (a git op auto-spawns a fresh slot and would recreate the tree).
 If teardown fails (e.g. the agent is homed on another client machine) the
-tree stays alive and the PR output remains visible.
+tree stays alive and the PR output remains visible on the card.
 
 ## What runs where (git split)
 

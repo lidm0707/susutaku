@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "UPDATE agent_outputs SET status = $2 WHERE id = $1",
+  "query": "DELETE FROM card_attachments WHERE card_id = $1 AND path = $2",
   "describe": {
     "columns": [],
     "parameters": {
@@ -11,5 +11,5 @@
     },
     "nullable": []
   },
-  "hash": "7b98a95f62313b10c72f585af4241f2695cd2d0ed789d94b920d0ec886b89052"
+  "hash": "0641a40dcdc5cf07efd0ddb379e1da87ea8ac6af8782b4b53ab61765fb193de0"
 }

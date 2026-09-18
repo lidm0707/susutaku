@@ -7,6 +7,7 @@ pub mod commit;
 pub mod diff;
 pub mod error;
 pub mod repo;
+pub mod worktree;
 
 pub use diff::TaskPatch;
 pub use error::GitError;

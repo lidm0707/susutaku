@@ -1,6 +1,7 @@
 //! Integration test: card labels/checklist/estimate round-trip and validation.
 
-use task_rs::{AddCard, Store, StoreError, UpdateCard};
+use backend::infra::postgres::Store;
+use task_rs::{AddCard, StoreError, UpdateCard};
 
 const TEST_COLUMN: &str = "todo";
 const TEST_TITLE: &str = "labels card";

@@ -13,9 +13,9 @@ use backend::port::outbound::MockCardRepo;
 
 const CARD_ID: i64 = 7;
 
-async fn store_for_tests() -> Arc<task_rs::Store> {
+async fn store_for_tests() -> Arc<backend::infra::postgres::Store> {
     Arc::new(
-        task_rs::Store::connect(&task_rs::Store::default_url())
+        backend::infra::postgres::Store::connect(&backend::infra::postgres::Store::default_url())
             .await
             .expect("test store"),
     )

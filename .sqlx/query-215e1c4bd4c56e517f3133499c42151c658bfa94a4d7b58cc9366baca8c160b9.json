@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM card_attachments WHERE path = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "215e1c4bd4c56e517f3133499c42151c658bfa94a4d7b58cc9366baca8c160b9"
+}

@@ -11,7 +11,7 @@ use crate::domain::{BoardOp, BoardRequest, BoardResult};
 use crate::port::outbound::{BoardOps, Inference, ModelEngines};
 
 pub struct BoardService {
-    store: Arc<task_rs::Store>,
+    store: Arc<crate::infra::postgres::Store>,
     app: super::task::TaskApp,
     engine: Option<Arc<dyn Inference>>,
     engines: Option<Arc<dyn ModelEngines>>,
@@ -20,7 +20,7 @@ pub struct BoardService {
 
 impl BoardService {
     pub fn new(
-        store: Arc<task_rs::Store>,
+        store: Arc<crate::infra::postgres::Store>,
         engine: Option<Arc<dyn Inference>>,
         engines: Option<Arc<dyn ModelEngines>>,
         wt: Option<Arc<super::card_run::WorkTree>>,

@@ -1,6 +1,8 @@
 //! Integration test: skill CRUD + agent attachment.
 
-use task_rs::{NewSkill, Store};
+
+use task_rs::NewSkill;
+use backend::infra::postgres::Store;
 
 const SKILL_PREFIX: &str = "test_skill_";
 

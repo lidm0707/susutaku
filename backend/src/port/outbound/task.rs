@@ -31,6 +31,8 @@ pub trait ProjectRepo: Send + Sync {
 #[async_trait]
 pub trait CardRepo: Send + Sync {
     async fn list(&self, project_id: Option<i64>) -> Result<Vec<CardRow>, StoreError>;
+    /// Cards whose run is queued or running, across all projects.
+    async fn running_cards(&self) -> Result<Vec<CardRow>, StoreError>;
     async fn get(&self, id: i64) -> Result<Option<CardRow>, StoreError>;
     async fn move_card(&self, mv: CardMove) -> Result<(), StoreError>;
     async fn remove(&self, id: i64) -> Result<(), StoreError>;

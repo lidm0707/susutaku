@@ -1,6 +1,7 @@
 use std::fs;
 
 use manager_rs::manager::{AGENTS_ROOT, Manager, RemoteRepo};
+use proto_rs::GitTool;
 
 #[test]
 fn stale_work_tree_is_reclaimed_on_spawn() {
@@ -177,20 +178,24 @@ fn publish_flow_reaches_pr_step() {
         )
         .expect("spawn task with repo");
 
-    // the clone has commits, so spawn checked out the task branch
-    let head = std::fs::read_to_string(
-        std::path::Path::new(AGENTS_ROOT)
+    // the seed has commits, so spawn created + checked out the task branch
+    // (a linked git worktree: .git is a gitlink file, not a directory)
+    let wt_gitlink = std::path::Path::new(AGENTS_ROOT)
+        .join("pub_9")
+        .join("sandbox")
+        .join("workspace")
+        .join(".git");
+    assert!(wt_gitlink.is_file(), "worktree .git gitlink file");
+    let head_branch = git_rs::GitRepo::open(
+        &std::path::Path::new(AGENTS_ROOT)
             .join("pub_9")
             .join("sandbox")
-            .join("workspace")
-            .join(".git")
-            .join("HEAD"),
+            .join("workspace"),
     )
-    .expect("read HEAD");
-    assert!(
-        head.contains("task/9-pub"),
-        "expected task branch checked out, HEAD: {head}"
-    );
+    .unwrap()
+    .current_branch()
+    .unwrap();
+    assert_eq!(head_branch, "task/9-pub");
 
     // bare remote inside the workspace, so the in-container push can reach
     // it at /workspace/remote.git
@@ -204,8 +209,36 @@ fn publish_flow_reaches_pr_step() {
     // succeeds without auth, then the PR step fails: the url is not a
     // github.com repo, so the PR toolcall refuses before any API call
     let container_remote = "/workspace/remote.git";
+    let host_remote = ws.join("remote.git").display().to_string();
+    manager
+        .git_tool(
+            "pub#9",
+            &GitTool::Commit {
+                message: "task work".into(),
+            },
+        )
+        .expect("commit");
+    manager
+        .git_tool(
+            "pub#9",
+            &GitTool::Push {
+                branch: "task/9-pub".into(),
+                url: Some(host_remote.to_owned()),
+                token: Some("irrelevant".into()),
+            },
+        )
+        .expect("push");
     let err = manager
-        .publish("pub#9", Some(container_remote), "irrelevant", None, None)
+        .git_tool(
+            "pub#9",
+            &GitTool::PullRequest {
+                title: "task/9-pub".into(),
+                head: "task/9-pub".into(),
+                base: String::new(),
+                url: Some(container_remote.to_owned()),
+                token: Some("irrelevant".into()),
+            },
+        )
         .expect_err("pr against a non-github url");
     assert!(
         err.contains("github.com"),
@@ -282,7 +315,7 @@ fn publish_e2e_push_and_pr_succeed() {
     unsafe {
         std::env::set_var(
             "SUSUTAKU_GH_API_BASE",
-            format!("http://host.containers.internal:{api_port}"),
+            format!("http://127.0.0.1:{api_port}"),
         );
     }
 
@@ -309,18 +342,38 @@ fn publish_e2e_push_and_pr_succeed() {
         .join("workspace");
     git_rs::GitRepo::init_bare(&ws.join("remote.git")).expect("init bare remote");
 
-    let info = manager
-        .publish(
+    manager
+        .git_tool(
             "e2e#7",
-            Some("/workspace/remote.git"),
-            "e2e-token",
-            Some("main"),
-            Some("https://github.com/acme/widget"),
+            &GitTool::Commit {
+                message: "task work".into(),
+            },
         )
-        .expect("publish must succeed end to end");
-    assert_eq!(info.branch, "task/7-e2e");
-    assert!(info.pr.contains("201"), "PR answered 201: {}", info.pr);
-    assert!(info.pr.contains("pull/1"), "PR url returned: {}", info.pr);
+        .expect("commit");
+    manager
+        .git_tool(
+            "e2e#7",
+            &GitTool::Push {
+                branch: "task/7-e2e".into(),
+                url: Some(ws.join("remote.git").display().to_string()),
+                token: Some("e2e-token".into()),
+            },
+        )
+        .expect("push");
+    let pr = manager
+        .git_tool(
+            "e2e#7",
+            &GitTool::PullRequest {
+                title: "task/7-e2e".into(),
+                head: "task/7-e2e".into(),
+                base: "main".into(),
+                url: Some("https://github.com/acme/widget".to_owned()),
+                token: Some("e2e-token".into()),
+            },
+        )
+        .expect("pr must succeed end to end");
+    assert!(pr.contains("201"), "PR answered 201: {pr}");
+    assert!(pr.contains("pull/1"), "PR url returned: {pr}");
 
     // the fake API received the right PR request
     let payload = captured.lock().unwrap().clone();

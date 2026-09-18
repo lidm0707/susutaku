@@ -19,6 +19,9 @@ use crate::git_state;
 
 /// Root directory holding every agent work tree.
 pub const AGENTS_ROOT: &str = "work/agents";
+/// Root directory holding per-project bare repo caches that agent work
+/// trees are spawned from as linked git worktrees (O(1) spawn, no clone).
+pub const REPOS_ROOT: &str = "work/repos";
 pub const EMPTY_PATCH: &str = "";
 /// Separator between agent name and task id in a composite slot key.
 pub const TASK_KEY_SEP: char = '#';
@@ -57,14 +60,6 @@ pub struct AgentLogs {
     pub last_result: Option<String>,
 }
 
-/// Result of publishing one task branch: push + PR.
-#[derive(Debug, Serialize)]
-pub struct PublishInfo {
-    pub branch: String,
-    pub push: String,
-    pub pr: String,
-}
-
 #[derive(Serialize)]
 pub struct TaskOutcome {
     pub agent: String,
@@ -100,6 +95,9 @@ struct AgentSlot {
     base_commit: Option<String>,
     /// Task branch created at spawn, when the slot is task-scoped.
     branch: Option<String>,
+    /// Bare cache repo this slot's worktree belongs to, when the slot was
+    /// seeded from the cache (None = plain tree or legacy clone).
+    repo_cache: Option<PathBuf>,
 }
 
 pub struct Manager {
@@ -181,12 +179,16 @@ impl Manager {
         let sandbox = Sandbox::new_in_with_image(&work_tree, &resolve_image(agent), Some(cache))
             .map_err(|e| e.to_string())?;
         // The container mounts sandbox.root() at /workspace — the repo must
-        // live there, or in-sandbox branch/commit/push never see it.
+        // live there, or host-side git ops never see it.
         let workspace = sandbox.root();
-        seed_work_tree(&workspace, repo)?;
-        let branch = task.map(|t| task_branch_name(agent, t)).and_then(|name| {
-            create_task_branch(&workspace, &name)?;
-            Some(name)
+        let branch_name = task.map(|t| task_branch_name(agent, t));
+        let (branch, repo_cache) = seed_work_tree(&workspace, repo, branch_name.as_deref())?;
+        let branch = branch.or_else(|| {
+            task.and_then(|_| {
+                branch_name
+                    .as_deref()
+                    .and_then(|name| create_task_branch(&workspace, name))
+            })
         });
         let base_commit = GitRepo::open(&workspace)
             .ok()
@@ -208,6 +210,7 @@ impl Manager {
                 last_result: RwLock::new(None),
                 base_commit,
                 branch,
+                repo_cache,
             }),
         );
         Ok(work_tree)
@@ -234,9 +237,8 @@ impl Manager {
     }
 
     /// Runs a git toolcall for `agent` (spawning the agent on demand).
-    /// Clone/status/diff run host-side in the work tree; branch/commit/push/
-    /// pr run inside the agent's own container with network + run-scoped
-    /// token env.
+    /// Every op runs host-side in the work tree — the repo token is used on
+    /// the host only and never enters the agent's container.
     pub fn git_tool(&self, agent: &str, tool: &GitTool) -> Result<String, String> {
         // The first read guard must drop before spawning: re-entering the
         // lock while a queued writer waits deadlocks on itself.
@@ -258,17 +260,7 @@ impl Manager {
                     .ok_or_else(|| format!("agent {agent} failed to spawn"))?
             }
         };
-        match tool {
-            GitTool::Branch { .. }
-            | GitTool::Commit { .. }
-            | GitTool::Push { .. }
-            | GitTool::PullRequest { .. } => {
-                core_agent::toolcall::git_in_sandbox::apply(&slot.sandbox, tool)
-            }
-            GitTool::Clone { .. } | GitTool::Status | GitTool::Diff => {
-                git_state::apply(&slot.sandbox.root(), tool)
-            }
-        }
+        git_state::apply(&slot.sandbox.root(), tool)
     }
 
     /// Whether the slot's HEAD advanced past the base commit recorded at
@@ -285,55 +277,6 @@ impl Manager {
         let repo = GitRepo::open(&slot.sandbox.root()).map_err(|e| e.to_string())?;
         let head = repo.head_oid().map_err(|e| e.to_string())?;
         Ok(head.to_string() != base)
-    }
-
-    /// Publishes a task slot's work: commits pending changes, pushes the
-    /// task branch to `repo_url` (default `origin`) and opens a PR against
-    /// `base` (default [`PR_BASE_DEFAULT`]) via the GitHub API. Needs a
-    /// task-scoped slot — the branch to publish is the one created at spawn.
-    /// `pr_repo` overrides the repo url used for the PR (slug source) when
-    /// the push remote is not the github repo itself.
-    pub fn publish(
-        &self,
-        agent: &str,
-        repo_url: Option<&str>,
-        token: &str,
-        base: Option<&str>,
-        pr_repo: Option<&str>,
-    ) -> Result<PublishInfo, String> {
-        let slot = self.slot(agent)?;
-        let branch = slot
-            .branch
-            .clone()
-            .ok_or_else(|| format!("agent {agent} has no task branch to publish"))?;
-        // Commit pending work so the push carries everything the task did.
-        if let Ok(repo) = GitRepo::open(&slot.sandbox.root()) {
-            repo.task_patch(slot.base_commit.as_deref(), agent)
-                .map_err(|e| format!("commit before push: {e}"))?;
-        }
-        let url = repo_url.map(str::to_owned);
-        let token = Some(token.to_owned());
-        let push = core_agent::toolcall::git_in_sandbox::apply(
-            &slot.sandbox,
-            &GitTool::Push {
-                branch: branch.clone(),
-                url: url.clone(),
-                token: token.clone(),
-            },
-        )?;
-        let pr = core_agent::toolcall::git_in_sandbox::apply(
-            &slot.sandbox,
-            &GitTool::PullRequest {
-                title: branch.clone(),
-                head: branch.clone(),
-                base: base
-                    .unwrap_or(core_agent::toolcall::git_in_sandbox::PR_BASE_DEFAULT)
-                    .to_owned(),
-                url: pr_repo.map(str::to_owned).or_else(|| url.clone()),
-                token,
-            },
-        )?;
-        Ok(PublishInfo { branch, push, pr })
     }
 
     /// Finishes the agent's task: captures the task patch (committing pending
@@ -376,7 +319,7 @@ impl Manager {
             push: push_result,
         };
         slot.sandbox.purge();
-        let _ = fs::remove_dir_all(&slot.work_tree);
+        teardown_work_tree(&slot);
         if let Ok(mut agents) = self.agents.write() {
             agents.remove(agent);
         }
@@ -398,14 +341,12 @@ impl Manager {
                 .clone()
                 .unwrap_or_else(|| repo.current_branch().unwrap_or_else(|_| "main".to_owned())),
         };
-        core_agent::toolcall::git_in_sandbox::apply(
-            &slot.sandbox,
-            &GitTool::Push {
-                branch,
-                url: push.repo_url.clone(),
-                token: Some(push.token.clone()),
-            },
-        )
+        let url = push
+            .repo_url
+            .clone()
+            .ok_or("finish push needs the project's bound repo url")?;
+        let token = (!push.token.is_empty()).then(|| push.token.clone());
+        git_state::push(&slot.sandbox.root(), &branch, Some(&url), token.as_deref())
     }
 
     pub fn logs(&self, agent: &str) -> Result<AgentLogs, String> {
@@ -462,24 +403,99 @@ impl Manager {
     }
 }
 
-/// Clones `repo` into the fresh work tree; falls back to an empty init repo
-/// so a broken remote never blocks the agent from starting.
-fn seed_work_tree(work_tree: &Path, repo: Option<&RemoteRepo>) -> Result<(), String> {
+/// Seeds the fresh work tree. With a bound repo, the slot becomes a linked
+/// git worktree of a per-project bare cache (`work/repos/`) — instant spawn,
+/// no clone — and the task branch is created in the cache at the fresh HEAD.
+/// Falls back to a plain clone, then to an empty init repo, so a broken
+/// remote never blocks the agent from starting. Returns the task branch
+/// (when created during seeding) and the cache path (when cache-backed).
+fn seed_work_tree(
+    work_tree: &Path,
+    repo: Option<&RemoteRepo>,
+    task_branch: Option<&str>,
+) -> Result<(Option<String>, Option<PathBuf>), String> {
     let Some(repo) = repo else {
-        return GitRepo::open_or_init(work_tree)
+        GitRepo::open_or_init(work_tree)
             .map(|_| ())
-            .map_err(|e| e.to_string());
+            .map_err(|e| e.to_string())?;
+        return Ok((None, None));
     };
+    match seed_from_cache(work_tree, repo, task_branch) {
+        Ok(branch) => return Ok((branch, Some(repo_cache_path(&repo.url)))),
+        Err(e) => {
+            eprintln!(
+                "[manager] worktree seed from {} failed ({e}); falling back to clone",
+                repo.url
+            );
+        }
+    }
     match GitRepo::clone_into(&repo.url, work_tree, repo.token.as_deref()) {
-        Ok(_) => Ok(()),
+        Ok(_) => Ok((None, None)),
         Err(e) => {
             eprintln!("[manager] clone {} failed ({e}); starting empty", repo.url);
             let _ = fs::remove_dir_all(work_tree);
             GitRepo::open_or_init(work_tree)
                 .map(|_| ())
-                .map_err(|e| e.to_string())
+                .map_err(|e| e.to_string())?;
+            Ok((None, None))
         }
     }
+}
+
+/// Bare cache mirror path for one repo url.
+fn repo_cache_path(url: &str) -> PathBuf {
+    PathBuf::from(REPOS_ROOT).join(format!("{}.git", sanitize(url)))
+}
+
+/// Ensures the bare cache for `repo.url` is fresh (clone once, force-fetch
+/// after), then adds the slot's worktree from its HEAD. HEAD must resolve:
+/// an empty or unusable cache is an error → the caller falls back to clone.
+fn seed_from_cache(
+    work_tree: &Path,
+    repo: &RemoteRepo,
+    task_branch: Option<&str>,
+) -> Result<Option<String>, String> {
+    let cache_path = repo_cache_path(&repo.url);
+    if let Some(parent) = cache_path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let cache = match GitRepo::open(&cache_path) {
+        Ok(existing) => {
+            existing
+                .fetch(&repo.url, repo.token.as_deref())
+                .map_err(|e| e.to_string())?;
+            existing
+        }
+        Err(_) => {
+            let _ = fs::remove_dir_all(&cache_path);
+            GitRepo::init_bare(&cache_path).map_err(|e| e.to_string())?;
+            let fresh = GitRepo::open(&cache_path).map_err(|e| e.to_string())?;
+            fresh
+                .fetch(&repo.url, repo.token.as_deref())
+                .map_err(|e| e.to_string())?;
+            fresh
+        }
+    };
+    if !cache.has_commits() {
+        return Err("cache has no commits after fetch".to_string());
+    }
+    // A remote whose default branch is not `main` leaves the bare HEAD
+    // dangling; point it at a branch that exists so worktree_add resolves.
+    if !cache.head_resolves()
+        && let Some(name) = cache.first_local_branch()
+    {
+        cache.set_head_to_branch(&name).map_err(|e| e.to_string())?;
+    }
+    // Stale metadata from reclaimed slots would block branch recreation.
+    cache.worktree_prune().map_err(|e| e.to_string())?;
+    // libgit2's worktree add refuses an existing target dir (MKDIR_EXCL);
+    // the sandbox layout leaves it empty, so drop it and let git create it.
+    // The podman bind only needs the dir at run time.
+    fs::remove_dir(work_tree).map_err(|e| e.to_string())?;
+    cache
+        .worktree_add(work_tree, task_branch)
+        .map_err(|e| e.to_string())?;
+    Ok(task_branch.map(str::to_owned))
 }
 
 fn sanitize(agent: &str) -> String {
@@ -511,13 +527,13 @@ fn task_branch_name(agent: &str, task: &str) -> String {
 
 /// Creates + checks out `branch` in the freshly seeded work tree. Best
 /// effort: a branch failure must not block the agent from starting.
-fn create_task_branch(work_tree: &Path, branch: &str) -> Option<()> {
+fn create_task_branch(work_tree: &Path, branch: &str) -> Option<String> {
     let repo = GitRepo::open(work_tree).ok()?;
     if !repo.has_commits() {
         return None;
     }
     repo.create_checkout_branch(branch)
-        .map(|_| ())
+        .map(|_| branch.to_owned())
         .map_err(|e| eprintln!("[manager] task branch {branch}: {e}"))
         .ok()
 }
@@ -543,7 +559,48 @@ fn is_empty_dir(path: &Path) -> bool {
 }
 
 fn reclaim_stale(work_tree: &Path) {
-    if !is_empty_dir(work_tree) {
-        let _ = fs::remove_dir_all(work_tree);
+    if is_empty_dir(work_tree) {
+        return;
     }
+    // Crashed-run guard: don't silently discard uncommitted work — save the
+    // pending diff next to the slot before reclaiming.
+    if let Ok(repo) = GitRepo::open(work_tree)
+        && let Ok(patch) = repo.patch_workdir()
+        && !patch.is_empty()
+        && let Some(parent) = work_tree.parent()
+    {
+        let save = parent.join(format!(
+            "{}.reclaimed.patch",
+            work_tree
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        ));
+        let _ = fs::write(&save, &patch);
+        eprintln!(
+            "[manager] reclaimed dirty slot {}; uncommitted work saved to {}",
+            work_tree.display(),
+            save.display()
+        );
+    }
+    let _ = fs::remove_dir_all(work_tree);
+}
+
+/// Tears the slot's work tree down. Cache-backed slots are removed as linked
+/// worktrees so the cache's admin metadata stays clean; the dir delete is
+/// best-effort either way (the patch artifact is already captured).
+fn teardown_work_tree(slot: &AgentSlot) {
+    if let Some(cache) = &slot.repo_cache
+        && let Ok(cache_repo) = GitRepo::open(cache)
+    {
+        match cache_repo.worktree_remove(&slot.sandbox.root(), true) {
+            Ok(()) => return,
+            Err(e) => eprintln!(
+                "[manager] worktree remove for {}: {e}; pruning instead",
+                slot.work_tree.display()
+            ),
+        }
+        let _ = cache_repo.worktree_prune();
+    }
+    let _ = fs::remove_dir_all(&slot.work_tree);
 }

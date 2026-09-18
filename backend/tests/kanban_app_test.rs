@@ -154,16 +154,16 @@ async fn runner_app(cards: MockCardRepo) -> TaskApp {
     runner_app_with(test_store().await, cards, agents).await
 }
 
-async fn test_store() -> Arc<task_rs::Store> {
+async fn test_store() -> Arc<backend::infra::postgres::Store> {
     Arc::new(
-        task_rs::Store::connect(&task_rs::Store::default_url())
+        backend::infra::postgres::Store::connect(&backend::infra::postgres::Store::default_url())
             .await
             .expect("test store"),
     )
 }
 
 async fn runner_app_with(
-    store: Arc<task_rs::Store>,
+    store: Arc<backend::infra::postgres::Store>,
     cards: MockCardRepo,
     agents: MockAgentConfigRepo,
 ) -> TaskApp {

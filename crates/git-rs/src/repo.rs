@@ -114,4 +114,22 @@ impl GitRepo {
         }
         Ok(false)
     }
+
+    /// `true` when HEAD is a resolvable symbolic/direct ref (a bare cache
+    /// freshly fetched from a remote whose default branch is not `main`
+    /// leaves HEAD dangling until it is pointed at a real branch).
+    pub fn head_resolves(&self) -> bool {
+        self.inner.head().and_then(|h| h.resolve()).is_ok()
+    }
+
+    /// First local branch by name, for the bare-cache HEAD fallback.
+    pub fn first_local_branch(&self) -> Option<String> {
+        self.inner
+            .branches(Some(git2::BranchType::Local))
+            .ok()?
+            .find_map(|b| {
+                let (branch, _) = b.ok()?;
+                branch.name().ok().flatten().map(str::to_owned)
+            })
+    }
 }

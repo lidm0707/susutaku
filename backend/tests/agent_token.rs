@@ -1,6 +1,7 @@
 //! Run-ticket lifecycle: issue -> resolve -> consume -> gone.
 
-use task_rs::{NewAgentRunToken, Store, TOKEN_PREFIX};
+use backend::infra::postgres::Store;
+use task_rs::{NewAgentRunToken, TOKEN_PREFIX};
 
 #[tokio::test]
 async fn agent_token_roundtrip() {

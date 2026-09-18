@@ -1,6 +1,7 @@
 //! Integration test: agent config store against a live Postgres.
 
-use task_rs::{AgentConfigRow, AgentConfigUpdate, Store, StoreError};
+use backend::infra::postgres::Store;
+use task_rs::{AgentConfigRow, AgentConfigUpdate, StoreError};
 
 const TEST_AGENT: &str = "test-agent";
 

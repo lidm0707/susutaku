@@ -1,6 +1,7 @@
 //! Integration test: user auth (argon2) + roles against a live Postgres.
 
-use task_rs::{NewUser, Role, Store};
+use backend::infra::postgres::Store;
+use task_rs::{NewUser, Role};
 
 const PASSWORD_MIN_LEN: usize = 8;
 
@@ -41,21 +42,25 @@ async fn user_auth_roundtrip() {
     assert_eq!(user.role, Role::Editor.as_str());
 
     // Duplicate username is rejected.
-    assert!(store
-        .create_user(&NewUser {
-            username: &username,
-            password,
-            role: Role::Viewer,
-        })
-        .await
-        .is_err());
+    assert!(
+        store
+            .create_user(&NewUser {
+                username: &username,
+                password,
+                role: Role::Viewer,
+            })
+            .await
+            .is_err()
+    );
 
     // Wrong password does not open a session.
-    assert!(store
-        .login(&username, "wrong-password")
-        .await
-        .expect("login")
-        .is_none());
+    assert!(
+        store
+            .login(&username, "wrong-password")
+            .await
+            .expect("login")
+            .is_none()
+    );
 
     // Correct password opens a session that resolves to the user.
     let token = store

@@ -1,6 +1,7 @@
 //! Integration test: card update (title/description/assignee) + comments.
 
-use task_rs::{AddCard, Store, UpdateCard};
+use backend::infra::postgres::Store;
+use task_rs::{AddCard, UpdateCard};
 
 const TEST_COLUMN: &str = "todo";
 const TEST_TITLE: &str = "detail card";

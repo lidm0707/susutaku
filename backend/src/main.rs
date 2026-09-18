@@ -5,13 +5,13 @@ use std::time::Duration;
 use backend::api;
 use backend::app::ChatUseCase;
 use backend::app::board::BoardService;
-use backend::infra::chat_memory;
 use backend::infra::client::node::ClientNode;
 use backend::infra::codex::auth::codex_home;
 use backend::infra::manager_git::ManagerGit;
 use backend::infra::model_client::RemoteModel;
 use backend::infra::podman::AgentSandbox;
-use backend::infra::postgres::{codex_usage, task};
+use backend::infra::postgres::{codex_usage, connect};
+use backend::infra::qdant::chat_memory;
 use backend::infra::search::{DuckDuckGo, PageFetcher};
 use backend::infra::settings::local;
 use backend::port::outbound::ChatMemory;
@@ -83,7 +83,7 @@ fn spawn_health_log(manager: Arc<Manager>) {
 #[tokio::main]
 async fn main() {
     init_tracing();
-    let task_store = Arc::new(task::connect().await);
+    let task_store = Arc::new(connect().await);
     let model = Arc::new(RemoteModel::new(&local_model_url()));
     let sandbox = Arc::new(AgentSandbox::restore().expect("agent sandbox init"));
     spawn_client_node(sandbox.clone()).await;
@@ -101,13 +101,12 @@ async fn main() {
     ));
     api::seed_project_skill(&task_store).await;
     let skills = Arc::new(backend::domain::SkillService::new(Arc::new(
-        backend::infra::postgres::task::PgTask::new(task_store.clone()),
+        backend::infra::postgres::PgTask::new(task_store.clone()),
     )));
-    let agents: Arc<dyn backend::port::outbound::AgentConfigRepo> = Arc::new(
-        backend::infra::postgres::task::PgTask::new(task_store.clone()),
-    );
+    let agents: Arc<dyn backend::port::outbound::AgentConfigRepo> =
+        Arc::new(backend::infra::postgres::PgTask::new(task_store.clone()));
     let resources = std::sync::Arc::new(backend::domain::ResourceService::new(Arc::new(
-        backend::infra::postgres::task::PgTask::new(task_store.clone()),
+        backend::infra::postgres::PgTask::new(task_store.clone()),
     )));
     let use_case = Arc::new(
         ChatUseCase::new(

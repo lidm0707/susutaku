@@ -9,7 +9,6 @@ import Login from "./pages/Login.jsx";
 import Settings from "./pages/Settings.jsx";
 import Sandbox from "./pages/Sandbox.jsx";
 import Attachments from "./pages/Attachments.jsx";
-import Review from "./pages/Review.tsx";
 import Routines from "./pages/Routines.tsx";
 import { get_token } from "./lib.js";
 import { Toaster } from "./ui/Toast.jsx";
@@ -51,13 +50,13 @@ function App() {
         <Route path="/routines" element={<RequireAuth><Routines /></RequireAuth>} />
         <Route path="/attachments" element={<RequireAuth><Attachments /></RequireAuth>} />
         <Route path="/agents" element={<RequireAuth><AgentSettings /></RequireAuth>} />
-        <Route path="/review" element={<RequireAuth><Review /></RequireAuth>} />
+
         <Route path="/settings" element={<RequireAuth><Settings /></RequireAuth>} />
         <Route path="/sandbox" element={<RequireAuth><Sandbox /></RequireAuth>} />
         <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
         </div>
-        <SideNav on_chat={() => set_chat_open(true)} shifted={chat_open && docked} />
+        <SideNav on_chat={() => set_chat_open((o) => !o)} chat_open={chat_open} shifted={chat_open && docked} />
         <ChatModal open={chat_open} on_close={() => set_chat_open(false)} />
         </ProjectProvider>
       <Toaster />

@@ -9,3 +9,5 @@ core-agent = { workspace = true }
 git-rs = { workspace = true }
 proto-rs = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
+ureq = { workspace = true }

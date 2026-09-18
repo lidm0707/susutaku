@@ -158,14 +158,13 @@ impl ToolCall {
         if Self::parse_xml(visible).is_some() {
             return true;
         }
-        visible
-            .lines()
-            .map(str::trim_start)
-            .any(|l| l.to_uppercase().starts_with(TOOL_PREFIX))
+        !tool_arg_candidates(visible).is_empty()
     }
 
     /// First TOOL: line after the </think> block, if any. The argument may be
-    /// empty (e.g. `TOOL: BOARD_LIST`).
+    /// empty (e.g. `TOOL: BOARD_LIST`). The marker may sit mid-line after
+    /// prose ("... sent. TOOL: SHELL ls") — every occurrence at a word
+    /// boundary is tried until one parses.
     pub fn parse(reply: &str) -> Option<Self> {
         let visible = reply
             .split_once("</think>")
@@ -174,14 +173,17 @@ impl ToolCall {
         if let Some(call) = Self::parse_xml(visible) {
             return Some(call);
         }
-        let line = visible
-            .lines()
-            .map(str::trim_start)
-            .find(|l| l.to_uppercase().starts_with(TOOL_PREFIX))?;
-        let rest = line[TOOL_PREFIX.len()..].trim();
-        let (kind, arg) = match rest.split_once(' ') {
+        tool_arg_candidates(visible)
+            .iter()
+            .find_map(|arg| Self::from_arg(arg))
+    }
+
+    /// Builds a call from the text after `TOOL:` (kind + argument).
+    fn from_arg(arg: &str) -> Option<Self> {
+        let arg = arg.trim();
+        let (kind, arg) = match arg.split_once(' ') {
             Some((kind, arg)) => (kind, arg.trim()),
-            None => (rest, ""),
+            None => (arg, ""),
         };
         match kind.to_uppercase().as_str() {
             TOOL_SEARCH => Some(Self::Search(arg.to_string())),
@@ -495,4 +497,30 @@ fn param_value<'a>(body: &'a str, key: &str) -> Option<&'a str> {
     let tag = format!("<parameter name=\"{key}\">");
     let rest = body.split_once(tag.as_str())?.1;
     Some(rest.split_once(PARAM_CLOSE)?.0.trim())
+}
+
+/// Rest-of-line text after every case-insensitive `TOOL:` occurrence that
+/// starts at a word boundary (line start or after non-word prose). Models
+/// often embed the marker mid-sentence — "... sent. TOOL: SHELL ls" — and
+/// each candidate is tried until one parses into a known tool.
+fn tool_arg_candidates(visible: &str) -> Vec<&str> {
+    let prefix = TOOL_PREFIX.as_bytes();
+    let bytes = visible.as_bytes();
+    let mut out = Vec::new();
+    for (i, _) in visible.char_indices() {
+        if i + prefix.len() > bytes.len() {
+            break;
+        }
+        if !bytes[i..i + prefix.len()].eq_ignore_ascii_case(prefix) {
+            continue;
+        }
+        let word_start = i == 0 || !(bytes[i - 1].is_ascii_alphanumeric() || bytes[i - 1] == b'_');
+        if !word_start {
+            continue;
+        }
+        let rest = &visible[i + prefix.len()..];
+        let end = rest.find('\n').unwrap_or(rest.len());
+        out.push(&rest[..end]);
+    }
+    out
 }

@@ -1,6 +1,8 @@
 //! Integration test: activity log record/list, limit, ordering, truncation.
 
-use task_rs::{ACTIVITY_LIST_MAX, ACTIVITY_MESSAGE_MAX_CHARS, Store};
+
+use task_rs::{ACTIVITY_LIST_MAX, ACTIVITY_MESSAGE_MAX_CHARS};
+use backend::infra::postgres::Store;
 
 const KIND_PREFIX: &str = "test_";
 const KIND_A: &str = "test_alpha";

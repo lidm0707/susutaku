@@ -1,6 +1,8 @@
 //! Integration test: Store against a live Postgres (DATABASE_URL or default).
 
-use task_rs::{AddCard, AgentState, MoveCard, Store};
+
+use task_rs::{AddCard, AgentState, MoveCard};
+use backend::infra::postgres::Store;
 
 const TEST_COLUMN_A: &str = "todo";
 const TEST_COLUMN_B: &str = "doing";

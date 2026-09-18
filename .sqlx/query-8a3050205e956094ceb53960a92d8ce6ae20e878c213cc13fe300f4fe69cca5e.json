@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO card_attachments (card_id, path, name) VALUES ($1, $2, $3)\n               ON CONFLICT (card_id, path) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "8a3050205e956094ceb53960a92d8ce6ae20e878c213cc13fe300f4fe69cca5e"
+}

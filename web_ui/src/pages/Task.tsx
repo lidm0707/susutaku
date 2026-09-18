@@ -23,6 +23,8 @@ import {
   set_card_schedule,
   run_card,
   run_of,
+  progress_of,
+  fetch_active_runs,
   finish_manager_agent,
   set_task_status,
   update_card,
@@ -33,6 +35,7 @@ import {
   type Comment,
   type UserInfo,
   type StoredOutcome,
+  type ActiveRun,
 } from "../lib.js";
 import { Modal, SlideOver } from "../ui/Overlay.js";
 import { toast } from "../ui/Toast.js";
@@ -154,6 +157,7 @@ export default function Task() {
   const [draggingId, setDraggingId] = useState<number | null>(null);
   const [runningId, setRunningId] = useState<number | null>(null);
   const [finishingId, setFinishingId] = useState<number | null>(null);
+  const [activeRuns, setActiveRuns] = useState<ActiveRun[]>([]);
   const [addOpen, setAddOpen] = useState(false);
 
   async function handle(err: unknown) {
@@ -171,6 +175,7 @@ export default function Task() {
       return;
     }
     refresh();
+    fetch_active_runs().then(setActiveRuns).catch(() => setActiveRuns([]));
   }, [project_id]);
 
   useEffect(() => {
@@ -179,6 +184,7 @@ export default function Task() {
       if (e.kind !== "card") return;
       if (document.visibilityState !== "visible") return;
       refresh();
+      fetch_active_runs().then(setActiveRuns).catch(() => {});
     });
   }, [project_id]);
 
@@ -649,7 +655,7 @@ export default function Task() {
       const pushed = outcome.push
         ? ` — ${outcome.push.startsWith(PUSH_FAILED_PREFIX) ? outcome.push : "pushed"}`
         : "";
-      toast(`card ${card.id} finished — output #${outcome.output_id} stored${pushed}`);
+      toast(`card ${card.id} finished — output on card${pushed}`);
       await refresh();
     } catch (err) {
       toast(err instanceof Error ? err.message : String(err));
@@ -721,6 +727,18 @@ export default function Task() {
           </button>
         </span>
       </header>
+      <ActiveStrip
+        runs={activeRuns}
+        on_open={(card) => {
+          if (card.project_id != null && card.project_id !== project_id) {
+            nav(`?project=${card.project_id}&card=${card.id}`);
+            return;
+          }
+          const found = cards.find((c) => c.id === card.id);
+          if (found) open_detail(found);
+          else nav(`?project=${card.project_id ?? ""}&card=${card.id}`);
+        }}
+      />
       <div className="task-add">
         <button
           onClick={() => setAddOpen(true)}
@@ -1374,6 +1392,7 @@ function RunLive({ card, run }: { card: Card | null; run: CardRun | null }) {
   const live = card?.run_status === "running";
   if (!run && !live) return null;
   if (live) {
+    const p = card ? progress_of(card) : null;
     return (
       <section className="run-timeline" aria-label="run log">
         <h3>
@@ -1387,8 +1406,13 @@ function RunLive({ card, run }: { card: Card | null; run: CardRun | null }) {
             </span>
             <span className="run-stage-body">
               <strong>agent</strong>
-              <span className="run-stage-stage">working…</span>
-              <span className="run-stage-note">this view updates when the run finishes</span>
+              <span className="run-stage-stage">
+                {p
+                  ? `${p.retry ? "retry" : "step"} ${p.round}/${p.rounds} · ${p.last_tool}`
+                  : "starting…"}
+              </span>
+              {p?.last_output && <pre className="run-output run-output-live">{p.last_output}</pre>}
+              <span className="run-stage-note">this view updates as the agent works</span>
             </span>
           </li>
         </ol>
@@ -1422,5 +1446,34 @@ function RunTimeline({ run }: { run: CardRun | null }) {
       </ol>
       {run.output && <pre className="run-output">{run.output}</pre>}
     </section>
+  );
+}
+
+/// Board-level strip of all in-flight runs across projects; empty → nothing.
+function ActiveStrip({ runs, on_open }: { runs: ActiveRun[]; on_open: (card: Card) => void }) {
+  if (runs.length === 0) return null;
+  return (
+    <nav className="active-strip" aria-label="runs in flight">
+      {runs.map((r) => {
+        const agent = r.card.last_agent ?? r.card.agent_name;
+        return (
+          <button
+            key={r.card.id}
+            className="active-chip"
+            onClick={() => on_open(r.card)}
+            title={`card #${r.card.id} — open`}
+          >
+            <Loader2 size={11} className="spin" />
+            <span className="active-chip-agent">{agent ?? "?"}</span>
+            <span className="active-chip-title">#{r.card.id} {r.card.title}</span>
+            {r.progress && (
+              <span className="active-chip-progress">
+                step {r.progress.round}/{r.progress.rounds}
+              </span>
+            )}
+          </button>
+        );
+      })}
+    </nav>
   );
 }

@@ -9,7 +9,11 @@ susutaku/
 ├── Makefile                   ← make run/up/deploy/e2e/cover … (compose + host targets)
 ├── backend/                   ← HTTP backend (axum): agent API, sandbox adapter,
 │    │                            auth, settings, quota board
-│    └── src/{api.rs, app/, domain/, infra/, port/}
+│    └── src/{api.rs, app/, domain/, port/, infra/}
+│        infra/postgres/       ← ALL task SQL (sqlx query_as!): one file per table
+│                                   (mod=Store+migrations, card, run, comment, activity,
+│                                    user, workspace, agent, skill, chat, agent_token,
+│                                    routine, attachment, codex_usage)
 ├── crates/
 │   ├── core-agent/            ← agent state, podman sandbox (podman/{sandbox,runner,image,git_in_sandbox}.rs),
 │   │                            sandbox contract (sandbox_abstract_layer.rs), toolcalls, web search
@@ -19,8 +23,9 @@ susutaku/
 │   ├── hf_loader/             ← model dir scanning + loadability filter (policy: local_model/AGENTS.md)
 │   ├── mlx-rs/                ← MLX inference backend
 │   ├── gguf-rs/               ← GGUF model file parsing
-│   ├── task-rs/             ← task board + Postgres store (query_as!)
-│   │                            workspace → project → card; card agent state, image, cron, run records
+│   ├── task-rs/             ← task board MODEL only (pure data, zero SQL)
+│   │                            workspace → project → card; rows, DTOs, StoreError,
+│   │                            TaskStatus transitions; SQL lives in backend/infra/postgres
 │   ├── piplines/              ← pipeline graph/stage engine (in workspace; no longer wired to the backend)
 │   ├── prompt-sys/            ← prompt builder + sections
 │   ├── proto-rs/              ← hub/client protocol (codec, client, server)
@@ -82,15 +87,16 @@ susutaku/
 - `crates/local_model` — standalone model server (MLX on Metal, hub, HTTP API).
   Owns the model size/quantization policy — see `crates/local_model/AGENTS.md`.
 - `crates/pdf-rs` — PDF parsing
-- `crates/task-rs` — task board model + Postgres store (`query_as!`); hierarchy
+- `crates/task-rs` — task board MODEL, pure data + ops, zero SQL; hierarchy
   workspace → project → task (card); one entity per piece of work — a Board
   Card IS a Task. Cards carry agent state (`agent_name`, `agent_state` JSON),
   an optional sandbox `image`, and a canonical `TaskStatus`
   (todo/in_progress/review/conflict/done/failed = board column, transitions
-  validated server-side); runs are recorded (`run_records`,
-  `GET /api/task/cards/{id}/runs`). Routines are a **separate** entity
-  (`routines` + `routine_runs` tables, same store) — recurring automation,
-  never a card.
+  validated server-side); runs are recorded (`run_records`). Routines are a
+  **separate** entity (`routines` + `routine_runs` tables) — recurring
+  automation, never a card. All SQL lives in
+  `backend/src/infra/postgres/` (one file per table, owns `MIGRATION_SQL`
+  + the `Store`); store integration tests live in `backend/tests/`.
 - `crates/gguf-rs` — GGUF model file parsing
 - `crates/agent_3th_cli/` — third-party CLI integrations (`claude_cli`, `codex_cli`)
 - `crates/cloud_model_api/` — cloud model HTTP APIs (`zai_api`, `ai_interface_layer`)
@@ -109,7 +115,8 @@ susutaku/
 - `crates/wgpu-rs` — wgpu GPU backend (cdylib + rlib)
 - `crates/solana_wallet` — browser wallet keypair (ed25519-dalek) + RPC helpers,
   wasm-ready via gloo; localStorage persistence
-- `attachments/` — file attachment storage (see `docs/attachments.md`)
+- `attachments/` — file attachment storage (see `docs/attachments.md`);
+  per-card attachment links live in the `card_attachments` table
 - `piplines/`, `input/`, `output/`, `web_ui/` — pipeline and UI assets (`web_ui` includes a Task board page backed by `crates/task-rs` + Postgres)
 
 ## Backend in Docker (standalone)
@@ -165,7 +172,13 @@ susutaku/
 
 - Postgres runs via `docker/compose/base.yml` (`postgres` service, host port **5434** — 5432/5433 are taken by other local containers).
 - Connection: `postgres://susutaku:susutaku@localhost:5434/susutaku` (override with `DATABASE_URL`).
-- sqlx macros compile against the live DB — keep the container up when running `cargo check` on `task-rs`/`backend`.
+- sqlx macros compile against the live DB — keep the container up when running
+  `cargo check` on `backend` (all task SQL lives in `backend/src/infra/postgres/`;
+  `crates/task-rs` is pure model and compiles without a DB).
+- Layering: `backend/infra/postgres` → `crates/task-rs` (rows/enums/errors)
+  → Postgres. New tables: add the table to `MIGRATION_SQL` in
+  `backend/src/infra/postgres/mod.rs` + a per-table file there; task-rs keeps
+  only the row/DTO types.
 - API: `/api/workspaces` (GET/POST), `/api/workspaces/{id}` (DELETE),
   `/api/workspaces/{id}/projects` (GET/POST), `/api/projects/{id}` (DELETE).
 - Tasks: `/api/tasks?project_id=` (GET) and `POST /api/tasks` (create; status
@@ -185,17 +198,18 @@ susutaku/
   enabled routines only; card cron is no longer scheduled.
   A task (card) belongs to exactly one project; deleting a workspace cascades
   to its projects and tasks.
-- Agent outputs (durable review artifacts): `/api/agent-outputs`,
-  `/api/agent-outputs/{id}` (GET, DELETE), `{id}/status` approve/reject —
-  see `docs/review-flow.md`. On the Review page, opening a PR auto-finishes
-  the agent: work tree torn down, output stored (PR is the end state).
+- Agent run terminal output: posted to the run's card as a comment (slot key
+  `agent#<card_id>` resolves the card) — see `docs/review-flow.md`. On the
+  Review page, opening a PR auto-finishes the agent: work tree torn down,
+  output stored as a card comment (PR is the end state).
 - Card runs: `backend/src/app/card_run.rs` — run the card's assigned agent
   (model inference + its tools); there is no pipeline stage engine in the
   backend anymore (`crates/piplines` remains but is unwired).
 
 ## User auth (argon2)
 
-- `task-rs/src/user.rs`: argon2 password hashing, ranked `Role` enum —
+- `backend/src/infra/postgres/user.rs` (SQL) + `task-rs/src/user.rs`
+  (pure): argon2 password hashing, ranked `Role` enum —
   `owner > super_admin > admin > editor > viewer`.
 - Tables: `users(username unique, password_hash, role)`, `auth_sessions(token, user_id)`.
 - Bearer-token auth: `POST /api/auth/login`, `POST /api/auth/logout`,

@@ -293,6 +293,7 @@ name = "backend"
 version = "0.1.0"
 dependencies = [
  "ai-interface-layer",
+ "argon2",
  "async-trait",
  "axum",
  "base64 0.22.1",
@@ -312,6 +313,8 @@ dependencies = [
  "proto-rs",
  "serde",
  "serde_json",
+ "sha2",
+ "sqlx",
  "susutaku-mlx",
  "task-rs",
  "tokio",
@@ -3029,6 +3032,8 @@ dependencies = [
  "git-rs",
  "proto-rs",
  "serde",
+ "serde_json",
+ "ureq 2.12.1",
 ]
 
 [[package]]

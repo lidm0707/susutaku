@@ -142,6 +142,22 @@ export function run_of(card: Card): CardRun | null {
   return run && typeof run === "object" ? (run as CardRun) : null;
 }
 
+export interface RunProgress {
+  round: number;
+  rounds: number;
+  last_tool: string;
+  last_output?: string;
+  /** true while the run is waiting to retry inference */
+  retry?: boolean;
+  updated_at: string;
+}
+
+export function progress_of(card: Card): RunProgress | null {
+  if (!card.agent_state || typeof card.agent_state !== "object") return null;
+  const p = (card.agent_state as Record<string, unknown>).progress;
+  return p && typeof p === "object" ? (p as RunProgress) : null;
+}
+
 export interface CronJob {
   card_id: number;
   title: string;
@@ -977,6 +993,15 @@ export async function fetch_card_runs(card_id: number): Promise<CardRunRecord[]>
   return (await api(`/api/task/cards/${card_id}/runs`)).json();
 }
 
+export interface ActiveRun {
+  card: Card;
+  progress: { round: number; rounds: number; last_tool: string } | null;
+}
+
+export async function fetch_active_runs(): Promise<ActiveRun[]> {
+  return (await api(`/api/runs/active`)).json();
+}
+
 export async function create_card(
   project_id: number,
   column_id: string,
@@ -1225,22 +1250,6 @@ export async function run_machine_git(
   return res.output;
 }
 
-export interface AgentOutput {
-  id: number;
-  agent: string;
-  result: string | null;
-  patch: string;
-  commit_oid: string | null;
-  transcript: string;
-  status: "pending" | "approved" | "rejected";
-  created_at: string;
-}
-
-export async function fetch_agent_outputs(status?: string): Promise<AgentOutput[]> {
-  const query = status ? `?status=${encodeURIComponent(status)}` : "";
-  return (await api(`/api/agent-outputs${query}`)).json();
-}
-
 export interface ManagerAgent {
   agent: string;
   work_tree: string;
@@ -1258,7 +1267,6 @@ export interface StoredOutcome {
   result: string | null;
   patch: string;
   commit: string | null;
-  output_id: number;
   /** Set when the finish asked for a push: remote output or failure. */
   push?: string;
 }
@@ -1281,18 +1289,6 @@ export async function finish_manager_agent(
       body: push ? JSON.stringify(push) : undefined,
     })
   ).json();
-}
-
-export async function set_agent_output_status(id: number, status: AgentOutput["status"]): Promise<void> {
-  await api(`/api/agent-outputs/${id}/status`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ status }),
-  });
-}
-
-export async function delete_agent_output(id: number): Promise<void> {
-  await api(`/api/agent-outputs/${id}`, { method: "DELETE" });
 }
 
 // ---- Routines: recurring automation, separate entity from tasks ----

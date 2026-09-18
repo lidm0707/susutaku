@@ -21,6 +21,9 @@ const GH_API_HEADER: &str = "Accept: application/vnd.github+json";
 const GH_API_UA: &str = "susutaku-agent";
 /// PR base used when the caller does not name one.
 pub const PR_BASE_DEFAULT: &str = "main";
+/// head branch is resolved at runtime in the sandbox — the payload is
+/// single-quoted, so an embedded `$(...)` would never execute.
+const HEAD_PLACEHOLDER: &str = "__SUSUTAKU_HEAD__";
 
 /// Executes `tool` inside `sandbox` (the agent's own container) with
 /// outbound network enabled, returning the command output.
@@ -95,7 +98,10 @@ pub fn script_for(tool: &GitTool) -> Result<(String, Option<String>), String> {
                 json_str(base),
             );
             let script = format!(
-                "{} && printf '%s' {} > {PR_PAYLOAD_PATH} && \
+                "{} && payload=$(printf '%s' {}) && \
+                 head=$(git branch --show-current) && \
+                 payload=${{payload//{HEAD_PLACEHOLDER}/${{head//\\\"/}}}} && \
+                 printf '%s' \"$payload\" > {PR_PAYLOAD_PATH} && \
                  curl -s -w '\\nHTTP %{{http_code}}' -X POST \
                  -H \"Authorization: Bearer ${GIT_TOKEN_ENV}\" -H {accept} -H {ua} -H 'Content-Type: application/json' \
                  -d @{PR_PAYLOAD_PATH} {api_base}/repos/{slug}/pulls",
@@ -127,7 +133,7 @@ fn require_token(token: &Option<String>) -> Result<String, String> {
 
 fn head_current(head: &str) -> String {
     if head.is_empty() {
-        "$(git branch --show-current)".to_string()
+        HEAD_PLACEHOLDER.to_string()
     } else {
         head.to_string()
     }

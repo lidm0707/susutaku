@@ -1,6 +1,8 @@
 //! Integration test: default workspace + project seeding against a live Postgres.
 
-use task_rs::{DEFAULT_PROJECT_NAME, DEFAULT_WORKSPACE_NAME, Store};
+
+use task_rs::{DEFAULT_PROJECT_NAME, DEFAULT_WORKSPACE_NAME};
+use backend::infra::postgres::Store;
 
 #[tokio::test]
 async fn default_board_seeded_once_and_idempotent() {
