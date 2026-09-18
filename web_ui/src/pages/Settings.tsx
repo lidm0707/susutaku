@@ -21,6 +21,7 @@ import {
   Bell,
   HelpCircle,
   GitBranch,
+  Variable,
 } from "lucide-react";
 import { Modal } from "../ui/Overlay.jsx";
 import { toast } from "../ui/Toast.jsx";
@@ -60,11 +61,22 @@ import {
   fetch_git_repos,
   set_git_repo,
   remove_git_repo,
+  fetch_env_vars,
+  set_env_var,
+  remove_env_var,
+  type EnvVar,
   type GitRepo,
   type Project,
 } from "../lib.js";
 
-type Tab = "client" | "providers" | "alerts" | "timezone" | "users" | "git";
+type Tab =
+  | "client"
+  | "providers"
+  | "alerts"
+  | "timezone"
+  | "users"
+  | "git"
+  | "envvars";
 
 const ZAI_MODELS = ["glm-4.6", "glm-4.6v", "glm-4.5", "glm-4.5-air", "glm-4.5-flash", "glm-4.5v"] as const;
 
@@ -75,6 +87,7 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "timezone", label: "timezone" },
   { id: "users", label: "users" },
   { id: "git", label: "git repos" },
+  { id: "envvars", label: "env vars" },
 ];
 
 export default function Settings() {
@@ -104,6 +117,7 @@ export default function Settings() {
         {tab === "timezone" && <TimezoneTab />}
         {tab === "users" && <UsersTab />}
         {tab === "git" && <GitReposTab />}
+        {tab === "envvars" && <EnvVarsTab />}
       </section>
     </main>
   );
@@ -1455,6 +1469,186 @@ function GitRepoForm({
           {error && <span className="error">{error}</span>}
         </div>
       </form>
+    </section>
+  );
+}
+
+/* --- env vars --- */
+
+type EnvVarDraft = { name: string; value: string; secret: boolean };
+
+const EMPTY_DRAFT: EnvVarDraft = { name: "", value: "", secret: false };
+
+function EnvVarsTab() {
+  const [vars, setVars] = useState<EnvVar[]>([]);
+  const [draft, setDraft] = useState<EnvVarDraft>(EMPTY_DRAFT);
+  const [editing, setEditing] = useState<string | null>(null);
+  const [editValue, setEditValue] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [status, setStatus] = useState("");
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    fetch_env_vars()
+      .then(setVars)
+      .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)))
+      .finally(() => setLoading(false));
+  }, []);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setStatus("");
+    setError("");
+    try {
+      const next = await set_env_var(draft.name.trim(), draft.value, draft.secret);
+      setVars(next);
+      setDraft(EMPTY_DRAFT);
+      setStatus(`saved ${draft.name.trim()}`);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function saveEdit(v: EnvVar) {
+    setStatus("");
+    setError("");
+    try {
+      // empty field keeps the stored secret; empty non-secret clears it
+      const next = await set_env_var(
+        v.name,
+        editValue || (v.secret_set ? undefined : ""),
+        v.secret_set
+      );
+      setVars(next);
+      setEditing(null);
+      setEditValue("");
+      setStatus(`saved ${v.name}`);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function remove(v: EnvVar) {
+    setStatus("");
+    setError("");
+    try {
+      const next = await remove_env_var(v.name);
+      setVars(next);
+      setStatus(`removed ${v.name}`);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  return (
+    <section className="provider-section" aria-label="environment variables">
+      <h3>
+        <Variable size={14} /> environment variables
+      </h3>
+      <p className="sub">
+        handed to agent sandbox runs — secret values are write-only, the API
+        returns a mask
+      </p>
+      <form className="envvar-form" onSubmit={submit}>
+        <div className="form-row">
+          <input
+            aria-label="variable name"
+            value={draft.name}
+            onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+              setDraft({ ...draft, name: e.target.value })
+            }
+            placeholder="NAME"
+            autoComplete="off"
+            spellCheck={false}
+          />
+          <input
+            aria-label="variable value"
+            value={draft.value}
+            onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+              setDraft({ ...draft, value: e.target.value })
+            }
+            placeholder={draft.secret ? "secret value…" : "value…"}
+            type={draft.secret ? "password" : "text"}
+            autoComplete="off"
+            spellCheck={false}
+          />
+          <label className="envvar-secret">
+            <input
+              type="checkbox"
+              checked={draft.secret}
+              onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                setDraft({ ...draft, secret: e.target.checked })
+              }
+            />
+            secret
+          </label>
+          <button type="submit" disabled={!draft.name.trim()}>
+            <Plus size={14} /> add
+          </button>
+        </div>
+      </form>
+      {loading && <p className="sub">loading…</p>}
+      {status && <span className="saved-mark">{status}</span>}
+      {error && <span className="error">{error}</span>}
+      <ul className="envvar-list">
+        {vars.map((v) => (
+          <li key={v.name} className="envvar-row">
+            {editing === v.name ? (
+              <form
+                className="form-row"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void saveEdit(v);
+                }}
+              >
+                <code className="envvar-name">{v.name}</code>
+                <input
+                  aria-label={`new value for ${v.name}`}
+                  value={editValue}
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => setEditValue(e.target.value)}
+                  placeholder={v.secret_set ? "leave empty to keep secret…" : "value…"}
+                  type={v.secret_set ? "password" : "text"}
+                  autoComplete="off"
+                  autoFocus
+                />
+                <button type="submit">save</button>
+                <button type="button" onClick={() => setEditing(null)}>
+                  cancel
+                </button>
+              </form>
+            ) : (
+              <div className="form-row">
+                <code className="envvar-name">{v.name}</code>
+                <span className="envvar-value">
+                  {v.secret_set && (
+                    <span className="token-set-mark">
+                      <KeyRound size={12} /> secret
+                    </span>
+                  )}
+                  {v.value || <em className="sub">(empty)</em>}
+                </span>
+                <button
+                  type="button"
+                  aria-label={`edit ${v.name}`}
+                  onClick={() => {
+                    setEditing(v.name);
+                    setEditValue(v.secret_set ? "" : v.value);
+                  }}
+                >
+                  <Pencil size={14} />
+                </button>
+                <button
+                  type="button"
+                  aria-label={`remove ${v.name}`}
+                  onClick={() => void remove(v)}
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            )}
+          </li>
+        ))}
+      </ul>
     </section>
   );
 }

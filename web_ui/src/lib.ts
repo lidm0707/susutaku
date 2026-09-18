@@ -250,6 +250,44 @@ export async function remove_git_repo(project_id: number): Promise<void> {
   if (!res.ok) throw new ApiError(res.status, await res.text());
 }
 
+export interface EnvVar {
+  name: string;
+  value: string;
+  secret_set: boolean;
+}
+
+export async function fetch_env_vars(): Promise<EnvVar[]> {
+  const res = await fetch(`${API_BASE}/api/settings/env-vars`);
+  if (!res.ok) throw new ApiError(res.status, await res.text());
+  const body = await res.json();
+  return body.vars as EnvVar[];
+}
+
+export async function set_env_var(
+  name: string,
+  value?: string,
+  secret = false
+): Promise<EnvVar[]> {
+  const res = await fetch(`${API_BASE}/api/settings/env-vars`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, value, secret }),
+  });
+  if (!res.ok) throw new ApiError(res.status, await res.text());
+  const body = await res.json();
+  return body.vars as EnvVar[];
+}
+
+export async function remove_env_var(name: string): Promise<EnvVar[]> {
+  const res = await fetch(
+    `${API_BASE}/api/settings/env-vars/${encodeURIComponent(name)}`,
+    { method: "DELETE" }
+  );
+  if (!res.ok) throw new ApiError(res.status, await res.text());
+  const body = await res.json();
+  return body.vars as EnvVar[];
+}
+
 export type AgentGitOp = "status" | "diff" | "branch" | "commit" | "push" | "pr";
 
 export interface AgentGitBody {

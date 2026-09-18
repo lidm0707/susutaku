@@ -102,6 +102,7 @@ pub struct SettingsState {
     local_endpoint: RwLock<String>,
     alert_webhook: RwLock<Option<String>>,
     git_repos: RwLock<Vec<GitRepo>>,
+    env_vars: RwLock<Vec<crate::infra::settings::env_vars::EnvVar>>,
 }
 
 impl SettingsState {
@@ -118,6 +119,7 @@ impl SettingsState {
             ),
             alert_webhook: RwLock::new(crate::infra::alerts::read_webhook()),
             git_repos: RwLock::new(crate::infra::settings::git::read(&doc)),
+            env_vars: RwLock::new(crate::infra::settings::env_vars::read(&doc)),
         }
     }
 
@@ -236,6 +238,80 @@ impl SettingsState {
         crate::infra::settings::git::write(&mut doc, repos);
         write_doc(&doc)?;
         *self.git_repos.write().unwrap_or_else(|e| e.into_inner()) = repos.to_owned();
+        Ok(())
+    }
+
+    /// Env vars with secrets collapsed to the mask; raw secrets never leave
+    /// the backend.
+    pub fn env_vars(&self) -> Vec<crate::infra::settings::env_vars::EnvVar> {
+        self.env_vars
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// Upsert by name; `value: None` keeps the stored value (secret
+    /// values can be edited without retyping them).
+    pub fn set_env_var(
+        &self,
+        name: &str,
+        value: Option<&str>,
+        secret: bool,
+    ) -> Result<(), String> {
+        let name = name.trim();
+        crate::infra::settings::env_vars::validate_name(name)?;
+        if let Some(v) = value {
+            crate::infra::settings::env_vars::validate_value(v)?;
+        }
+        const MAX_VARS: usize = 64;
+        let mut vars = self.env_vars.write().unwrap_or_else(|e| e.into_inner());
+        let entry = match vars.iter_mut().find(|v| v.name == name) {
+            Some(entry) => {
+                // `None` keeps the stored value (secret edit without
+                // retyping); a masked echo must never overwrite it either.
+                if let Some(v) = value.filter(|v| *v != crate::infra::settings::env_vars::SECRET_MASK) {
+                    entry.value = v.to_owned();
+                }
+                entry
+            }
+            None => {
+                if vars.len() >= MAX_VARS {
+                    return Err(format!("more than {MAX_VARS} env vars"));
+                }
+                vars.push(crate::infra::settings::env_vars::EnvVar {
+                    name: name.to_owned(),
+                    value: value.unwrap_or_default().to_owned(),
+                    secret,
+                });
+                vars.last_mut().ok_or("vars is empty")?
+            }
+        };
+        entry.secret = secret;
+        let snap = vars.clone();
+        drop(vars);
+        self.write_env_vars(&snap)
+    }
+
+    pub fn remove_env_var(&self, name: &str) -> Result<(), String> {
+        let mut vars = self.env_vars.write().unwrap_or_else(|e| e.into_inner());
+        let before = vars.len();
+        vars.retain(|v| v.name != name);
+        if vars.len() == before {
+            return Err(format!("env var {name:?} not found"));
+        }
+        let snap = vars.clone();
+        drop(vars);
+        self.write_env_vars(&snap)
+    }
+
+    fn write_env_vars(
+        &self,
+        vars: &[crate::infra::settings::env_vars::EnvVar],
+    ) -> Result<(), String> {
+        let mut doc = read_doc();
+        crate::infra::settings::env_vars::write(&mut doc, vars);
+        write_doc(&doc)?;
+        *self.env_vars.write().unwrap_or_else(|e| e.into_inner()) = vars.to_owned();
         Ok(())
     }
 

@@ -278,6 +278,14 @@ pub fn router<T: ChatHandling + ModelSwitch + 'static>(
             put(set_git_repo).delete(remove_git_repo),
         )
         .route(
+            "/api/settings/env-vars",
+            get(list_env_vars).put(set_env_var),
+        )
+        .route(
+            "/api/settings/env-vars/{name}",
+            delete(remove_env_var),
+        )
+        .route(
             "/api/settings/system-prompt",
             get(get_system_prompt).post(set_system_prompt),
         )
@@ -1639,6 +1647,82 @@ async fn remove_git_repo(
         .map_err(ApiError::internal)?;
     Ok(Json(GitReposReply {
         repos: state.git_repos().iter().map(git_repo_reply).collect(),
+    }))
+}
+
+#[derive(serde::Serialize, utoipa::ToSchema)]
+struct EnvVarReply {
+    name: String,
+    /// Secret values come back masked — the raw value never leaves the
+    /// backend once stored.
+    value: String,
+    secret_set: bool,
+}
+
+fn env_var_reply(v: &crate::infra::settings::env_vars::EnvVar) -> EnvVarReply {
+    EnvVarReply {
+        name: v.name.clone(),
+        value: v.display_value().to_owned(),
+        secret_set: v.secret,
+    }
+}
+
+#[derive(serde::Serialize, utoipa::ToSchema)]
+struct EnvVarsReply {
+    vars: Vec<EnvVarReply>,
+}
+
+#[derive(serde::Deserialize, utoipa::ToSchema)]
+struct EnvVarRequest {
+    name: String,
+    /// Omit to keep the stored value (lets a secret be toggled without
+    /// retyping it); empty string clears it.
+    value: Option<String>,
+    #[serde(default)]
+    secret: bool,
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/settings/env-vars",
+    responses((status = 200, body = EnvVarsReply))
+)]
+async fn list_env_vars(State(state): State<Arc<SettingsState>>) -> Json<EnvVarsReply> {
+    Json(EnvVarsReply {
+        vars: state.env_vars().iter().map(env_var_reply).collect(),
+    })
+}
+
+#[utoipa::path(
+    put,
+    path = "/api/settings/env-vars",
+    request_body = EnvVarRequest,
+    responses((status = 200, body = EnvVarsReply), (status = 400, body = str), (status = 500, body = str))
+)]
+async fn set_env_var(
+    State(state): State<Arc<SettingsState>>,
+    Json(req): Json<EnvVarRequest>,
+) -> Result<Json<EnvVarsReply>, ApiError> {
+    state
+        .set_env_var(&req.name, req.value.as_deref(), req.secret)
+        .map_err(ApiError::bad_request)?;
+    Ok(Json(EnvVarsReply {
+        vars: state.env_vars().iter().map(env_var_reply).collect(),
+    }))
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/settings/env-vars/{name}",
+    responses((status = 200, body = EnvVarsReply), (status = 404, body = str), (status = 500, body = str))
+)]
+async fn remove_env_var(
+    State(state): State<Arc<SettingsState>>,
+    Path(name): Path<String>,
+) -> Result<Json<EnvVarsReply>, ApiError> {
+    state.remove_env_var(&name).map_err(ApiError::not_found)?;
+    Ok(Json(EnvVarsReply {
+        vars: state.env_vars().iter().map(env_var_reply).collect(),
     }))
 }
 
