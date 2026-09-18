@@ -50,7 +50,10 @@ fn pr_script_targets_repo_api_with_current_branch_head() {
     .unwrap();
     assert_eq!(token.as_deref(), Some("t"));
     assert!(script.contains("repos/owner/repo/pulls"));
-    assert!(script.contains("$(git branch --show-current)"));
+    // head branch is resolved at runtime inside the sandbox, not embedded
+    // as a literal `$(...)` in the single-quoted payload
+    assert!(script.contains("head=$(git branch --show-current)"));
+    assert!(script.contains("__SUSUTAKU_HEAD__"));
     assert!(script.contains(PR_BASE_DEFAULT));
     // auth header must expand the env var at runtime — never a literal
     assert!(script.contains("Bearer $GIT_TOKEN"));

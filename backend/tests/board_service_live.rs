@@ -7,7 +7,8 @@ use std::sync::Arc;
 use backend::app::board::BoardService;
 use backend::domain::{BoardOp, BoardRequest};
 use backend::port::outbound::BoardOps;
-use task_rs::{NewUser, Role, Store};
+use backend::infra::postgres::Store;
+use task_rs::{NewUser, Role};
 
 const AGENT_NAME: &str = "agent-live-test";
 const IMAGE: &str = "debian:stable-slim";

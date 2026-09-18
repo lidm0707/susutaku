@@ -61,7 +61,7 @@ struct ZaiChatDeps {
     board: Arc<dyn BoardOps>,
     agents: Arc<dyn AgentConfigRepo>,
     settings: Arc<SettingsState>,
-    store: std::sync::Arc<task_rs::Store>,
+    store: std::sync::Arc<crate::infra::postgres::Store>,
     agent_git: Arc<dyn AgentGit>,
     agent_run: Arc<dyn AgentRun>,
     thread_envs: Arc<dyn ThreadEnvs>,
@@ -81,7 +81,7 @@ const PROJECT_SKILL_MD: &str = include_str!("../../.agents/skills/susutaku-proje
 
 /// Seeds (and refreshes) the project skill, then attaches it to every agent
 /// that does not have it yet, so every chat embeds the project skill sheet.
-pub async fn seed_project_skill(store: &task_rs::Store) {
+pub async fn seed_project_skill(store: &crate::infra::postgres::Store) {
     let body = strip_frontmatter(PROJECT_SKILL_MD);
     let skill_id = match store.list_skills().await {
         Ok(rows) => match rows.iter().find(|s| s.name == PROJECT_SKILL_NAME) {
@@ -136,7 +136,7 @@ fn strip_frontmatter(md: &str) -> String {
 fn zai_chat_deps<T: ChatHandling + ModelSwitch + 'static>(
     models: Arc<T>,
     runner: Arc<dyn Runner>,
-    task_store: std::sync::Arc<task_rs::Store>,
+    task_store: std::sync::Arc<crate::infra::postgres::Store>,
     settings: Arc<SettingsState>,
     manager: Arc<manager_rs::manager::Manager>,
 ) -> Arc<ZaiChatDeps> {
@@ -147,7 +147,8 @@ fn zai_chat_deps<T: ChatHandling + ModelSwitch + 'static>(
         fetcher: Arc::new(PageFetcher),
         runner,
         models: models as Arc<dyn ModelSwitch>,
-        memory: crate::infra::chat_memory::from_env().map(|m| Arc::new(m) as Arc<dyn ChatMemory>),
+        memory: crate::infra::qdant::chat_memory::from_env()
+            .map(|m| Arc::new(m) as Arc<dyn ChatMemory>),
         board: Arc::new(BoardService::new(
             task_store.clone(),
             engine,
@@ -158,9 +159,7 @@ fn zai_chat_deps<T: ChatHandling + ModelSwitch + 'static>(
                 manager.clone(),
             ))),
         )),
-        agents: Arc::new(crate::infra::postgres::task::PgTask::new(
-            task_store.clone(),
-        )),
+        agents: Arc::new(crate::infra::postgres::PgTask::new(task_store.clone())),
         settings,
         project_git: Arc::new(crate::infra::project_git::SettingsProjectGit::new(
             task_store.clone(),
@@ -170,7 +169,7 @@ fn zai_chat_deps<T: ChatHandling + ModelSwitch + 'static>(
         agent_run: Arc::new(crate::infra::manager_run::ManagerRun::new(manager)),
         thread_envs: Arc::new(crate::infra::thread_env::ThreadEnvManager::new()),
         resources: Arc::new(ResourceService::new(Arc::new(
-            crate::infra::postgres::task::PgTask::new(task_store_for_resources),
+            crate::infra::postgres::PgTask::new(task_store_for_resources),
         ))),
         cancels: Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),
     })
@@ -182,7 +181,7 @@ pub fn router<T: ChatHandling + ModelSwitch + 'static>(
     catalog: Arc<dyn crate::infra::model_client::ModelCatalog>,
     codex_workspace: PathBuf,
     runner: Arc<dyn Runner>,
-    task_store: std::sync::Arc<task_rs::Store>,
+    task_store: std::sync::Arc<crate::infra::postgres::Store>,
     usage_store: std::sync::Arc<codex_usage_rs::Store>,
     manager: Arc<manager_rs::manager::Manager>,
     model_cfg: Arc<dyn ModelEndpoint>,
@@ -392,6 +391,7 @@ fn task_router(state: TaskStore) -> Router {
         .route("/api/task/cards/{id}/image", put(set_card_image))
         .route("/api/task/cards/{id}/run", post(run_card))
         .route("/api/task/cards/{id}/schedule", put(set_card_schedule))
+        .route("/api/runs/active", get(list_active_runs))
         .route("/api/cronjobs", get(list_cronjobs))
         .route("/api/routines", get(list_routines).post(create_routine))
         .route(
@@ -425,15 +425,6 @@ fn task_router(state: TaskStore) -> Router {
             "/api/agents/{id}/skills/{skill_id}",
             delete(detach_agent_skill),
         )
-        .route("/api/agent-outputs", get(list_agent_outputs_handler))
-        .route(
-            "/api/agent-outputs/{id}",
-            get(get_agent_output_handler).delete(remove_agent_output_handler),
-        )
-        .route(
-            "/api/agent-outputs/{id}/status",
-            post(set_agent_output_status_handler),
-        )
         .with_state(state)
 }
 
@@ -452,8 +443,9 @@ const ATTACHMENT_FIELD: &str = "file";
 const ATTACHMENT_DEFAULT_NAME: &str = "image";
 const ATTACHMENT_MAX_BYTES: usize = 32 * 1024 * 1024;
 const ATTACHMENT_PATH_QUERY: &str = "path";
+const ATTACHMENT_CARD_QUERY: &str = "card_id";
 
-#[derive(serde::Serialize, utoipa::ToSchema)]
+#[derive(serde::Serialize, utoipa::ToSchema, Clone)]
 struct AttachmentCardRef {
     id: i64,
     title: String,
@@ -555,6 +547,31 @@ fn attachment_mime(name: &str) -> &'static str {
     }
 }
 
+/// Cards linked to an attachment via `card_attachments`, keyed by path.
+async fn attachment_link_cards(
+    state: &TaskStore,
+    cards: &[task_rs::CardRow],
+) -> Result<std::collections::HashMap<String, Vec<AttachmentCardRef>>, ApiError> {
+    let linked = crate::infra::postgres::attachment::linked_cards(&state.store, cards)
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    Ok(linked
+        .into_iter()
+        .map(|(path, rows)| {
+            (
+                path,
+                rows.into_iter()
+                    .map(|c| AttachmentCardRef {
+                        id: c.id,
+                        title: c.title,
+                        project_id: c.project_id,
+                    })
+                    .collect(),
+            )
+        })
+        .collect())
+}
+
 #[utoipa::path(
     get,
     path = "/api/attachments",
@@ -570,6 +587,7 @@ async fn list_attachments(
         .list(None)
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
+    let linked = attachment_link_cards(&state, &cards).await?;
     let mut out = Vec::new();
     let root = std::path::Path::new(ATTACHMENTS_DIR);
     if !root.exists() {
@@ -613,8 +631,16 @@ async fn list_attachments(
                     .unwrap_or_default();
                 chrono::DateTime::from_timestamp_secs(secs as i64).map(|dt| dt.to_rfc3339())
             });
+            let mut held = cards_holding(&path, &cards);
+            if let Some(refs) = linked.get(&path) {
+                for r in refs {
+                    if !held.iter().any(|h| h.id == r.id) {
+                        held.push(r.clone());
+                    }
+                }
+            }
             out.push(AttachmentInfo {
-                cards: cards_holding(&path, &cards),
+                cards: held,
                 name: file.file_name().to_string_lossy().to_string(),
                 path,
                 size: meta.len() as i64,
@@ -632,7 +658,7 @@ async fn list_attachments(
     responses((status = 200), (status = 400, body = str), (status = 403, body = str), (status = 404, body = str))
 )]
 async fn delete_attachment(
-    State(_state): State<TaskStore>,
+    State(state): State<TaskStore>,
     user: AuthUser,
     Query(params): Query<std::collections::HashMap<String, String>>,
 ) -> Result<StatusCode, ApiError> {
@@ -649,6 +675,7 @@ async fn delete_attachment(
     if let Some(parent) = std::path::Path::new(&path).parent() {
         let _ = tokio::fs::remove_dir(parent).await;
     }
+    let _ = crate::infra::postgres::attachment::delete_links(&state.store, &path).await;
     crate::app::events::publish(crate::app::events::EventKind::Attachment);
     Ok(StatusCode::OK)
 }
@@ -715,11 +742,19 @@ fn sanitize_name(raw: &str) -> String {
     responses((status = 200, body = UploadReply), (status = 400, body = str), (status = 403, body = str))
 )]
 async fn upload_attachment(
-    State(_state): State<TaskStore>,
+    State(state): State<TaskStore>,
     user: AuthUser,
+    Query(params): Query<std::collections::HashMap<String, String>>,
     mut form: Multipart,
 ) -> Result<Json<UploadReply>, ApiError> {
     require_edit(&user)?;
+    let link_card = match params.get(ATTACHMENT_CARD_QUERY) {
+        Some(raw) => Some(
+            raw.parse::<i64>()
+                .map_err(|_| ApiError::bad_request("invalid card_id"))?,
+        ),
+        None => None,
+    };
     while let Some(field) = form
         .next_field()
         .await
@@ -745,6 +780,11 @@ async fn upload_attachment(
         tokio::fs::write(&path, &data)
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?;
+        if let Some(card_id) = link_card {
+            crate::infra::postgres::attachment::link(&state.store, card_id, &path, &name)
+                .await
+                .map_err(|e| ApiError::internal(e.to_string()))?;
+        }
         crate::app::events::publish(crate::app::events::EventKind::Attachment);
         return Ok(Json(UploadReply { path }));
     }
@@ -1905,7 +1945,7 @@ fn stream_event(name: &str, data: &str) -> Result<Event, Infallible> {
 }
 
 async fn persist_transcript(
-    store: std::sync::Arc<task_rs::Store>,
+    store: std::sync::Arc<crate::infra::postgres::Store>,
     thread_id: i64,
     user_text: &str,
     reply_text: &str,
@@ -2290,7 +2330,7 @@ fn build_system_message(
 /// Shared handler state: the composed task app plus the raw store for auth.
 struct TaskState {
     app: TaskApp,
-    store: std::sync::Arc<task_rs::Store>,
+    store: std::sync::Arc<crate::infra::postgres::Store>,
     sched: std::sync::Arc<crate::app::schedule_work::ScheduleHandle>,
     engine: Option<std::sync::Arc<dyn Inference>>,
     engines: Option<std::sync::Arc<dyn ModelEngines>>,
@@ -2304,12 +2344,12 @@ type TaskStore = std::sync::Arc<TaskState>;
 #[derive(Clone)]
 struct ManagerState {
     manager: Arc<manager_rs::manager::Manager>,
-    store: std::sync::Arc<task_rs::Store>,
+    store: std::sync::Arc<crate::infra::postgres::Store>,
     settings: Arc<SettingsState>,
 }
 
 fn task_state(
-    store: std::sync::Arc<task_rs::Store>,
+    store: std::sync::Arc<crate::infra::postgres::Store>,
     sched: std::sync::Arc<crate::app::schedule_work::ScheduleHandle>,
     engine: Option<std::sync::Arc<dyn Inference>>,
     engines: Option<std::sync::Arc<dyn ModelEngines>>,
@@ -2709,6 +2749,13 @@ async fn list_card_runs(
     Ok(Json(
         runs.iter().map(|r| CardRunDto::from(r.clone())).collect(),
     ))
+}
+
+async fn list_active_runs(State(state): State<TaskStore>, _user: AuthUser) -> impl IntoResponse {
+    match state.app.cards.active_runs().await {
+        Ok(runs) => Json(runs).into_response(),
+        Err(e) => ApiError::internal(e.to_string()).into_response(),
+    }
 }
 
 #[utoipa::path(
@@ -3127,145 +3174,6 @@ async fn list_activity(
     Ok(Json(rows.into_iter().map(ActivityDto::from).collect()))
 }
 
-const OUTPUT_LIST_DEFAULT: i64 = 50;
-
-#[derive(Serialize, utoipa::ToSchema)]
-struct AgentOutputDto {
-    id: i64,
-    agent: String,
-    result: Option<String>,
-    patch: String,
-    commit_oid: Option<String>,
-    transcript: String,
-    status: String,
-    created_at: String,
-}
-
-impl From<task_rs::AgentOutputRow> for AgentOutputDto {
-    fn from(r: task_rs::AgentOutputRow) -> Self {
-        Self {
-            id: r.id,
-            agent: r.agent,
-            result: r.result,
-            patch: r.patch,
-            commit_oid: r.commit_oid,
-            transcript: r.transcript,
-            status: r.status,
-            created_at: r.created_at.to_rfc3339(),
-        }
-    }
-}
-
-#[derive(Deserialize, utoipa::ToSchema)]
-struct AgentOutputStatusRequest {
-    status: String,
-}
-
-#[utoipa::path(
-    get,
-    path = "/api/agent-outputs",
-    responses((status = 200, body = [AgentOutputDto]), (status = 401, body = str))
-)]
-async fn list_agent_outputs_handler(
-    State(state): State<TaskStore>,
-    axum::extract::Query(q): axum::extract::Query<AgentOutputStatusQuery>,
-    _user: AuthUser,
-) -> Result<Json<Vec<AgentOutputDto>>, ApiError> {
-    let status = q.status.as_deref().filter(|s| !s.is_empty());
-    let rows = state
-        .store
-        .list_agent_outputs(status, OUTPUT_LIST_DEFAULT)
-        .await
-        .map_err(store_err)?;
-    Ok(Json(rows.into_iter().map(AgentOutputDto::from).collect()))
-}
-
-#[derive(Deserialize, utoipa::ToSchema)]
-struct AgentOutputStatusQuery {
-    status: Option<String>,
-}
-
-#[utoipa::path(
-    get,
-    path = "/api/agent-outputs/{id}",
-    responses((status = 200, body = AgentOutputDto), (status = 404, body = str))
-)]
-async fn get_agent_output_handler(
-    State(state): State<TaskStore>,
-    axum::extract::Path(id): axum::extract::Path<i64>,
-    _user: AuthUser,
-) -> Result<Json<AgentOutputDto>, ApiError> {
-    let row = state
-        .store
-        .get_agent_output(id)
-        .await
-        .map_err(store_err)?
-        .ok_or_else(|| ApiError(ApiError::NOT_FOUND_MSG.to_string(), StatusCode::NOT_FOUND))?;
-    Ok(Json(AgentOutputDto::from(row)))
-}
-
-#[utoipa::path(
-    post,
-    path = "/api/agent-outputs/{id}/status",
-    request_body = AgentOutputStatusRequest,
-    responses((status = 200, body = str), (status = 400, body = str), (status = 404, body = str))
-)]
-async fn set_agent_output_status_handler(
-    State(state): State<TaskStore>,
-    axum::extract::Path(id): axum::extract::Path<i64>,
-    user: AuthUser,
-    Json(req): Json<AgentOutputStatusRequest>,
-) -> Result<&'static str, ApiError> {
-    require_edit(&user)?;
-    let status = match req.status.as_str() {
-        task_rs::OUTPUT_STATUS_APPROVED => task_rs::OUTPUT_STATUS_APPROVED,
-        task_rs::OUTPUT_STATUS_REJECTED => task_rs::OUTPUT_STATUS_REJECTED,
-        task_rs::OUTPUT_STATUS_PENDING => task_rs::OUTPUT_STATUS_PENDING,
-        _ => {
-            return Err(ApiError::bad_request(
-                "status must be approved | rejected | pending",
-            ));
-        }
-    };
-    state
-        .store
-        .set_agent_output_status(id, status)
-        .await
-        .map_err(task_err)?;
-    record_activity(
-        &state.store,
-        "agent-output",
-        format!("output #{id} marked {status} by {}", user.0.username),
-    )
-    .await;
-    Ok("ok")
-}
-
-#[utoipa::path(
-    delete,
-    path = "/api/agent-outputs/{id}",
-    responses((status = 200, body = str), (status = 404, body = str))
-)]
-async fn remove_agent_output_handler(
-    State(state): State<TaskStore>,
-    axum::extract::Path(id): axum::extract::Path<i64>,
-    user: AuthUser,
-) -> Result<&'static str, ApiError> {
-    require_edit(&user)?;
-    state
-        .store
-        .remove_agent_output(id)
-        .await
-        .map_err(task_err)?;
-    record_activity(
-        &state.store,
-        "agent-output",
-        format!("output #{id} deleted by {}", user.0.username),
-    )
-    .await;
-    Ok("ok")
-}
-
 // ---- Routines: recurring automation, separate from tasks (owner-handled) ----
 
 #[derive(Serialize, utoipa::ToSchema)]
@@ -3501,7 +3409,7 @@ async fn events_ws(
     })
 }
 
-async fn record_activity(store: &task_rs::Store, kind: &str, message: impl std::fmt::Display) {
+async fn record_activity(store: &crate::infra::postgres::Store, kind: &str, message: impl std::fmt::Display) {
     if let Err(e) = store.record_activity(kind, &message.to_string()).await {
         tracing::warn!(kind, error = %e, "activity log write failed");
     }
@@ -4157,7 +4065,7 @@ async fn issue_agent_run_token(
 }
 
 async fn auth_user_from_store(
-    store: &std::sync::Arc<task_rs::Store>,
+    store: &std::sync::Arc<crate::infra::postgres::Store>,
     headers: &http::HeaderMap,
 ) -> Result<task_rs::UserRow, ApiError> {
     let token = headers
@@ -4553,32 +4461,31 @@ async fn finish_agent(
         }
     }
     let outcome = outcome.map_err(ApiError::bad_request)?;
-    // Persist the task output (patch + transcript) before the work tree is
-    // gone; review happens against the stored copy.
-    let transcript = outcome
-        .state
-        .history
-        .iter()
-        .map(|e| format!("{:?}: {}", e.role, e.content))
-        .collect::<Vec<_>>()
-        .join("\n");
-    let output_id = state
-        .store
-        .insert_agent_output(
-            &outcome.agent,
-            outcome.result.as_deref(),
-            &outcome.patch,
-            outcome.commit.as_deref(),
-            &transcript,
-        )
-        .await
-        .map_err(store_err)?;
+    // Terminal output lands on the linked card as a comment; the manager slot
+    // key is `agent#<card_id>`, so the card is recoverable from the slot name.
+    if let Some(card_id) = slot_card_id(&agent) {
+        let transcript = outcome
+            .state
+            .history
+            .iter()
+            .map(|e| format!("{:?}: {}", e.role, e.content))
+            .collect::<Vec<_>>()
+            .join("\n");
+        state
+            .store
+            .add_comment(
+                card_id,
+                &outcome.agent,
+                &output_comment(outcome.result.as_deref(), &transcript),
+            )
+            .await
+            .map_err(store_err)?;
+    }
     Ok(Json(StoredOutcome {
         agent: outcome.agent,
         result: outcome.result,
         patch: outcome.patch,
         commit: outcome.commit,
-        output_id,
         push: outcome.push.map(|r| match r {
             Ok(out) => {
                 let out = out.trim();
@@ -4593,13 +4500,40 @@ async fn finish_agent(
     }))
 }
 
+/// Card id from a manager slot key `agent#<card_id>`, if the slot is a card
+/// run. Chat-only slots have no card and their output is not stored.
+fn slot_card_id(slot: &str) -> Option<i64> {
+    slot.rsplit_once(manager_rs::manager::TASK_KEY_SEP)?
+        .1
+        .parse()
+        .ok()
+}
+
+const OUTPUT_COMMENT_MAX: usize = 8000;
+
+fn output_comment(result: Option<&str>, transcript: &str) -> String {
+    let mut body = result.unwrap_or_default().to_owned();
+    if !transcript.is_empty() {
+        if !body.is_empty() {
+            body.push_str("\n\n");
+        }
+        body.push_str("terminal:\n");
+        body.push_str(&tail_chars(transcript, OUTPUT_COMMENT_MAX));
+    }
+    body
+}
+
+fn tail_chars(s: &str, max: usize) -> String {
+    let n = s.chars().count();
+    s.chars().skip(n.saturating_sub(max)).collect()
+}
+
 #[derive(Serialize, utoipa::ToSchema)]
 struct StoredOutcome {
     agent: String,
     result: Option<String>,
     patch: String,
     commit: Option<String>,
-    output_id: i64,
     /// Present when the finish asked for a push: remote output, or the
     /// failure reason prefixed with "push failed:".
     #[serde(skip_serializing_if = "Option::is_none")]

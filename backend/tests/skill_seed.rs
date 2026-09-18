@@ -4,7 +4,8 @@
 use std::sync::Arc;
 
 use backend::api::{PROJECT_SKILL_NAME, seed_project_skill};
-use task_rs::{AgentConfigRow, Store};
+use backend::infra::postgres::Store;
+use task_rs::AgentConfigRow;
 
 fn unique_name(tag: &str) -> String {
     use std::time::{SystemTime, UNIX_EPOCH};

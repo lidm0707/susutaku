@@ -40,7 +40,7 @@ plan → pipeline of stages → manager process spawns sandboxed agents → resu
 | `crates/local_model` | **Local model server**: HTTP API + TCP hub, engine pool (MLX/GGUF) |
 | `crates/mlx-rs` | MLX inference backend |
 | `crates/hf_loader` | Model dir scanning + loadability filter (size/quant policy: see `local_model` AGENTS.md) |
-| `crates/task-rs` | Task board model + Postgres store (plan/task tracking) |
+| `crates/task-rs` | Task board model (pure data — SQL lives in `backend/src/infra/postgres/`) |
 | `crates/pdf-rs` | PDF parsing |
 | `crates/gguf-rs` | GGUF model file parsing |
 | `crates/agent_3th_cli/` | `claude_cli`, `codex_cli` |
@@ -111,14 +111,16 @@ postgres://susutaku:susutaku@localhost:5434/susutaku
 ```
 
 > `sqlx` macros compile against the live DB — keep the container up when
-> running `cargo check` on `task-rs` / `backend`.
+> running `cargo check` on `backend` (all task SQL lives in
+> `backend/src/infra/postgres/`, one file per table; `crates/task-rs` is
+> pure model and compiles without a DB).
 
 API: `/api/workspaces`, `/api/workspaces/{id}/projects`,
 `/api/task/cards?project_id=`, `/api/task/cards/{id}/move`,
 `/api/task/cards/{id}/agent` (per-card agent name/state JSON),
 `/api/task/cards/{id}/schedule` (cron), `/api/task/cards/{id}/image`,
 `/api/task/cards/{id}/run` + `/runs` (run the assigned agent, view history).
-Durable review artifacts: `/api/agent-outputs` (+ `/{id}/status` approve/reject).
+Durable run output: posted to the card as a comment on finish.
 
 Auth: argon2 password hashing, ranked roles
 (`owner > super_admin > admin > editor > viewer`), bearer tokens

@@ -46,7 +46,6 @@ host: cargo run -p backend        # MLX needs macOS Metal, stays on host :8991
 | `playwright/tests/claude.spec.ts` | Claude provider: status endpoint, callback validation |
 | `playwright/tests/settings.spec.ts` | Settings page client-env tab (server-detected host, workspace path) |
 | `playwright/tests/dock.spec.ts` | Dock modals: runtime (MachinesModal component, renamed), workspace creation (ProfileModal → PromptModal) |
-| `playwright/tests/review.spec.ts` | Review page: agent pick → status → diff → commit; fresh work tree renders empty state, not 400 |
 | `playwright/tests/worker.spec.ts` | Auth guards for cronjobs; card cron scheduling is gone — the scheduler now picks up **routines** (`/api/routines`, owner-handled) |
 | `playwright/tests/ux-snapshots.spec.ts` | Full-page screenshots of every route (`/`, `/task`, `/prompts`, `/settings`) |
 | `playwright/tests/walkthrough.spec.ts` | Step-by-step walkthrough capture into `screenshots/walkthrough/` |
@@ -81,7 +80,7 @@ suite's own API bootstrap.
 
 The backend auto-seeds a default `owner` / `owner` account (role `owner`,
 `must_change_password = TRUE`) on every DB connect
-(`Store::ensure_default_admin` in `crates/task-rs/src/user.rs`). There is no
+(`Store::ensure_default_admin` in `backend/src/infra/postgres/user.rs`). There is no
 manual psql/hash step anymore.
 
 `tests/helpers.ts` seeds the `e2e-tester` user through the real API, in order:

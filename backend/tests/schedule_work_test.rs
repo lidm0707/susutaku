@@ -14,7 +14,7 @@ use backend::port::outbound::{
 
 const EVERY_MINUTE: &str = "* * * * *";
 
-fn app(store: Arc<task_rs::Store>) -> Arc<TaskApp> {
+fn app(store: Arc<backend::infra::postgres::Store>) -> Arc<TaskApp> {
     TaskApp::new(
         store,
         Arc::new(MockCardRepo::new()),
@@ -30,8 +30,8 @@ fn app(store: Arc<task_rs::Store>) -> Arc<TaskApp> {
 
 #[tokio::test]
 async fn routine_scheduling_scenarios() {
-    let url = task_rs::Store::default_url();
-    let store = Arc::new(task_rs::Store::connect(&url).await.expect("connect"));
+    let url = backend::infra::postgres::Store::default_url();
+    let store = Arc::new(backend::infra::postgres::Store::connect(&url).await.expect("connect"));
     // the test owns the table: drop leftovers from earlier runs first
     for stale in store.list_routines().await.expect("list") {
         store.remove_routine(stale.id).await.expect("cleanup");

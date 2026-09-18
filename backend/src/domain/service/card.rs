@@ -15,6 +15,24 @@ pub struct CardService {
 
 pub const MOVE_STATUS_TOP: i32 = 0;
 
+/// State key holding the live per-round progress snapshot (written by
+/// `card_run::report_progress`, removed when the run record lands).
+pub const RUN_PROGRESS_KEY: &str = "progress";
+
+/// An in-flight card run with its live progress snapshot, if any.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ActiveRun {
+    pub card: CardRow,
+    pub progress: Option<RunProgress>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RunProgress {
+    pub round: usize,
+    pub rounds: usize,
+    pub last_tool: String,
+}
+
 impl CardService {
     pub fn new(repo: Arc<dyn CardRepo>) -> Self {
         Self { repo }
@@ -22,6 +40,26 @@ impl CardService {
 
     pub async fn list(&self, project_id: Option<i64>) -> Result<Vec<CardRow>, StoreError> {
         self.repo.list(project_id).await
+    }
+
+    /// In-flight runs across all projects, for the board-level strip.
+    pub async fn active_runs(&self) -> Result<Vec<ActiveRun>, StoreError> {
+        Ok(self
+            .repo
+            .running_cards()
+            .await?
+            .into_iter()
+            .map(|card| {
+                let progress = card
+                    .agent_state
+                    .as_deref()
+                    .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+                    .and_then(|v| {
+                        serde_json::from_value::<RunProgress>(v.get(RUN_PROGRESS_KEY)?.clone()).ok()
+                    });
+                ActiveRun { card, progress }
+            })
+            .collect())
     }
 
     pub async fn get(&self, id: i64) -> Result<Option<CardRow>, StoreError> {

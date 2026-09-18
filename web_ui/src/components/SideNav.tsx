@@ -5,8 +5,6 @@ import {
   Bot,
   CircleUserRound,
   Layers,
-  FileDiff,
-  Inbox,
   KanbanSquare,
   CalendarClock,
   KeyRound,
@@ -34,7 +32,7 @@ import { ActivityModal } from "./ActivityModal.tsx";
 import { Modal, PromptModal } from "../ui/Overlay.js";
 import { AgentInspect, MachinesModal } from "./MachinesModal.tsx";
 import { SandboxMonitorOverlay, type SandboxMonitorTarget } from "./SandboxMonitor.tsx";
-import { AgentOutputsModal } from "./AgentOutputsModal.tsx";
+import { AgentRunsModal } from "./AgentRunsModal.tsx";
 import { toast } from "../ui/Toast.js";
 import { use_projects } from "./ProjectContext.tsx";
 import QuotaBoard from "./QuotaBoard.tsx";
@@ -43,7 +41,6 @@ const ITEMS = [
   { to: "/task", title: "task", Icon: KanbanSquare },
   { to: "/routines", title: "routines", Icon: CalendarClock },
   { to: "/agents", title: "agents", Icon: Bot },
-  { to: "/review", title: "review", Icon: FileDiff },
   { to: "/settings", title: "settings", Icon: Settings },
 ];
 
@@ -97,7 +94,7 @@ function AgentLogsModal({ agent, on_close }: { agent: string | null; on_close: (
 }
 
 
-export default function SideNav({ on_chat, shifted }: { on_chat: () => void; shifted: boolean }) {
+export default function SideNav({ on_chat, chat_open, shifted }: { on_chat: () => void; chat_open: boolean; shifted: boolean }) {
   const nav = useNavigate();
   const [scope_open, set_scope_open] = useState(false);
   const [profile_open, set_profile_open] = useState(false);
@@ -193,10 +190,11 @@ export default function SideNav({ on_chat, shifted }: { on_chat: () => void; shi
         </button>
         <button
           type="button"
-          className="chat-dock-btn"
+          className={`chat-dock-btn ${chat_open ? "active" : ""}`}
           onClick={on_chat}
           title="chat"
-          aria-label="open chat"
+          aria-label="toggle chat"
+          aria-expanded={chat_open}
         >
           <MessageSquareText size={16} />
         </button>
@@ -218,12 +216,12 @@ export default function SideNav({ on_chat, shifted }: { on_chat: () => void; shi
           <button
             className={`dock-profile-btn ${outputs_open ? "open" : ""}`}
             onClick={() => set_outputs_open((v) => !v)}
-            title="agent outputs"
+            title="agents"
             aria-haspopup="dialog"
             aria-expanded={outputs_open}
           >
-            <Inbox size={16} />
-            <span className="dock-label">outputs</span>
+            <Bot size={16} />
+            <span className="dock-label">agents</span>
           </button>
         </div>
         <div className="dock-profile">
@@ -258,7 +256,7 @@ export default function SideNav({ on_chat, shifted }: { on_chat: () => void; shi
       <AgentLogsModal agent={logs_agent} on_close={() => set_logs_agent(null)} />
       <MachinesModal open={machines_open} on_close={() => set_machines_open(false)} on_monitor={set_monitor} />
       <SandboxMonitorOverlay target={monitor} on_close={() => set_monitor(null)} />
-      <AgentOutputsModal open={outputs_open} on_close={() => set_outputs_open(false)} />
+      <AgentRunsModal open={outputs_open} on_close={() => set_outputs_open(false)} />
       <ActivityModal open={activity_open} on_close={() => set_activity_open(false)} />
     </nav>
   );

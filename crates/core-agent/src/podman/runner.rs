@@ -1,8 +1,9 @@
 //! Container execution: builds the `podman run` invocation, streams output
 //! with a host-side deadline, and force-removes the container on overrun.
 
+use std::fs;
 use std::io::Error;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -72,6 +73,14 @@ pub(crate) fn run_container(
     command
         .arg("-v")
         .arg(format!("{}:{CONTAINER_WORKSPACE}", workspace.display()));
+    // A linked worktree's `.git` file points at the shared cache repo
+    // (outside the workspace mount). Bind-mount that repo at the identical
+    // path so in-sandbox git resolves — and commits flow back to the
+    // shared object store.
+    if let Some(repo) = linked_repo_dir(&workspace) {
+        let repo = repo.display();
+        command.arg("-v").arg(format!("{repo}:{repo}"));
+    }
     command.arg("-w").arg(cwd_mount_path(cwd_rel));
     for (k, v) in SANDBOX_ENV {
         command.arg("-e").arg(format!("{k}={v}"));
@@ -125,14 +134,28 @@ pub(crate) fn run_container(
 
     if !status.success() {
         force_remove(&name);
+        // `podman run` passes the container's exit code through: a non-zero
+        // status is usually the command itself failing (a probe, `grep` with
+        // no match, …), not a podman/image problem. Report stdout too —
+        // probes often print to stdout and exit non-zero with empty stderr.
         let mut msg = String::from_utf8_lossy(&err_buf).into_owned();
+        let out_text = String::from_utf8_lossy(&out_buf).into_owned();
+        if !out_text.trim().is_empty() {
+            msg.push_str(&out_text);
+        }
         truncate_bytes(&mut msg, ERR_REPORT_CAP);
-        if msg.is_empty() {
+        if msg.trim().is_empty() {
+            // No output at all — only then is a missing podman/image likely.
             msg = format!(
                 "podman exited with {status} (missing `{PODMAN_BIN}` or image `{}`?)",
                 spec.image
             );
         }
+        msg = format!(
+            "<error> {}\ncommand exited with {}",
+            msg.trim_end(),
+            status.code().unwrap_or(-1)
+        );
         return Err(Error::other(msg));
     }
     if let Some(tag) = spec.cache_tag
@@ -161,6 +184,16 @@ fn ulimit_prelude(limits: &SandboxLimits) -> String {
         pre.push_str(&format!("ulimit -f {}; ", fsz / 1024));
     }
     pre
+}
+
+/// For a linked worktree workspace: the shared repo dir its `.git` file
+/// points into (`<repo>/worktrees/<name>` → `<repo>`). None when the
+/// workspace is not a linked worktree (`.git` is a real dir or missing).
+fn linked_repo_dir(workspace: &Path) -> Option<PathBuf> {
+    let link = fs::read_to_string(workspace.join(".git")).ok()?;
+    let gitdir = link.trim().strip_prefix("gitdir:")?.trim();
+    // <repo>/worktrees/<admin-name> → <repo>
+    Path::new(gitdir).ancestors().nth(2).map(Path::to_path_buf)
 }
 
 fn force_remove(name: &str) {

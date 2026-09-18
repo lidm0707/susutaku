@@ -31,7 +31,7 @@ pub struct RoutineRun {
 /// keeps this behind the owner role; the scheduler passes the same path.
 pub async fn run_routine(
     app: &TaskApp,
-    store: &task_rs::Store,
+    store: &crate::infra::postgres::Store,
     engine: Option<&Arc<dyn Inference>>,
     engines: Option<&dyn ModelEngines>,
     routine: &RoutineRow,
@@ -48,7 +48,7 @@ pub async fn run_routine(
 /// Manual run from the API; returns the run plus the freshly stored row.
 pub async fn run_routine_manual(
     app: &TaskApp,
-    store: &task_rs::Store,
+    store: &crate::infra::postgres::Store,
     engine: Option<&Arc<dyn Inference>>,
     engines: Option<&dyn ModelEngines>,
     routine: &RoutineRow,

@@ -1,7 +1,9 @@
 //! Task board: columns, cards, id-based moves. Pure data + ops, no I/O.
+//! Persistence (SQL) lives in the backend's postgres adapter.
 
 pub mod agent_cfg;
 pub mod agent_token;
+pub mod attachment;
 pub mod board;
 pub mod card;
 pub mod chat;
@@ -14,9 +16,10 @@ pub mod workspace;
 
 pub use agent_cfg::{AgentConfigRow, AgentConfigUpdate, ThinkLevel};
 pub use agent_token::{
-    ActiveAgentRun, AgentRunTokenRow, IssuedAgentToken, NewAgentRunToken, TOKEN_PREFIX,
-    TOKEN_TTL_SECS,
+    ActiveAgentRun, AgentRunTokenRow, IssuedAgentToken, NewAgentRunToken, TOKEN_BYTES,
+    TOKEN_PREFIX, TOKEN_TTL_SECS,
 };
+pub use attachment::AttachmentLinkRow;
 pub use board::{Board, BoardError, Column};
 pub use card::{
     Card, CardId, PRIORITY_CRITICAL, PRIORITY_HIGH, PRIORITY_LOW, PRIORITY_NORMAL, Priority,
@@ -34,12 +37,12 @@ pub use routine::{
 pub use skill::{NewSkill, SkillRow};
 pub use store::{
     ACTIVITY_LIST_DEFAULT, ACTIVITY_LIST_MAX, ACTIVITY_MESSAGE_MAX_CHARS, ActivityRow, AddCard,
-    AgentOutputRow, AgentState, CardRow, CommentRow, DbTx, MoveCard, OUTPUT_STATUS_APPROVED,
-    OUTPUT_STATUS_PENDING, OUTPUT_STATUS_REJECTED, RunRecordNew, RunRecordRow, Store, StoreError,
-    UpdateCard,
+    AgentState, CardRow, CommentRow, MoveCard, RunRecordNew, RunRecordRow, StoreError, UpdateCard,
+    validate_card_json,
 };
 pub use user::{
     DEFAULT_ADMIN_PASSWORD, DEFAULT_ADMIN_USER, MIN_PASSWORD_LEN, NewUser, Role, UserRow,
+    hash_password, verify_password,
 };
 pub use workspace::{DEFAULT_PROJECT_NAME, DEFAULT_WORKSPACE_NAME, ProjectRow, WorkspaceRow};
 

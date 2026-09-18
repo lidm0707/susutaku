@@ -503,7 +503,8 @@ button:disabled {
   transform: translateY(-1px);
 }
 
-.dock-out a.chat-dock-btn.active {
+.dock-out a.chat-dock-btn.active,
+.dock-out button.chat-dock-btn.active {
   color: #e6e6ea;
   background: #26262f;
 }
@@ -2975,6 +2976,7 @@ button {
 
 .overlay-box.slideover.closing,
 .overlay-box.modal.docked-right.closing,
+.overlay.docked .overlay-box.modal.docked-right.closing,
 .overlay-box.modal.docked-left.closing {
   animation: slideover-out 0.22s cubic-bezier(0.22, 1, 0.36, 1) forwards;
 }
@@ -4709,50 +4711,6 @@ select.agent-multi {
   cursor: default;
 }
 
-.agent-stream {
-  display: flex;
-  flex-direction: column;
-  gap: 0.4rem;
-  margin-bottom: 1rem;
-}
-
-.agent-stream-head {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-}
-
-.agent-stream-dot {
-  width: 0.5rem;
-  height: 0.5rem;
-  border-radius: 999px;
-  background: #8fd4a0;
-  animation: agent-stream-pulse 1.5s ease-in-out infinite;
-}
-
-@keyframes agent-stream-pulse {
-  50% {
-    opacity: 0.3;
-  }
-}
-
-.agent-stream-stop {
-  margin-left: auto;
-  background: transparent;
-  border: 1px solid #2a2a33;
-  border-radius: 6px;
-  color: #a8a8b3;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  padding: 0.2rem 0.4rem;
-}
-
-.agent-stream-stop:hover {
-  border-color: #3d3d4a;
-  color: #e6e6ea;
-}
-
 /* agent outputs review */
 .output-filters {
   display: flex;
@@ -5778,4 +5736,45 @@ select.agent-multi {
   display: inline-flex;
   align-items: center;
   gap: 0.5rem;
+}
+
+/* runs-in-flight strip: one chip per live agent run, across projects */
+.active-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin: 0 0 0.4rem;
+}
+
+.active-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  background: transparent;
+  border: 1px solid #333;
+  border-radius: 6px;
+  padding: 0.15rem 0.5rem;
+  font-size: 0.7rem;
+  color: #888;
+  cursor: pointer;
+}
+
+.active-chip:hover {
+  border-color: #555;
+  color: #bbb;
+}
+
+.active-chip-agent {
+  color: #9ecb94;
+}
+
+.active-chip-title {
+  max-width: 22rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.active-chip-progress {
+  color: #666;
 }

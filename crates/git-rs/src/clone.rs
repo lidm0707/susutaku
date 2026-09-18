@@ -28,4 +28,29 @@ impl GitRepo {
         let root = raw.workdir().unwrap_or_else(|| raw.path()).to_path_buf();
         Ok(Self::from_parts(root, raw))
     }
+
+    /// Force-fetches all remote branches into this repo (`+refs/heads/*`).
+    /// Used to refresh a bare cache mirror before spawning worktrees from
+    /// it; the cache itself is never committed to, so force-updating local
+    /// heads is safe. The token never lands in the stored config.
+    pub fn fetch(&self, url: &str, token: Option<&str>) -> Result<(), GitError> {
+        const REFSPEC: &str = "+refs/heads/*:refs/heads/*";
+        let mut callbacks = RemoteCallbacks::new();
+        if let Some(token) = token {
+            let token = token.to_owned();
+            callbacks.credentials(move |_, _, _| Cred::userpass_plaintext(TOKEN_USER, &token));
+        }
+        let mut fetch = FetchOptions::new();
+        fetch.remote_callbacks(callbacks);
+        let mut remote = self.raw().remote_anonymous(url)?;
+        remote.fetch(&[REFSPEC], Some(&mut fetch), None)?;
+        Ok(())
+    }
+
+    /// Points the bare cache's HEAD at `branch` so new worktrees resolve a
+    /// base commit even when the remote's default branch is not `main`.
+    pub fn set_head_to_branch(&self, branch: &str) -> Result<(), GitError> {
+        self.raw().set_head(&format!("refs/heads/{branch}"))?;
+        Ok(())
+    }
 }

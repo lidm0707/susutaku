@@ -17,7 +17,7 @@ const FASTEMBED_CACHE_DEFAULT: &str = "/data/fastembed-cache";
 pub const QDRANT_URL_ENV: &str = "QDRANT_URL";
 const QDRANT_URL_DEFAULT: &str = "http://127.0.0.1:6333";
 pub const QDRANT_COLLECTION_ENV: &str = "QDRANT_COLLECTION";
-const QDRANT_COLLECTION_DEFAULT: &str = "chat_memory";
+const QDRANT_COLLECTION_DEFAULT: &str = super::COLLECTION_CHAT_MEMORY;
 const QDRANT_API_KEY_ENV: &str = "QDRANT_API_KEY";
 
 fn env_or(key: &str, default: &str) -> String {

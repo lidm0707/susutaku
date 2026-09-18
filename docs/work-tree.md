@@ -98,10 +98,11 @@ and — when the finish request asked for a push — the push result. The push
 (`FinishPush`, repo + token from the project's bound repo, branch = override
 else task branch else current) runs **before** teardown so a commit can never
 be stranded on a deleted tree; a push failure does not fail the finish, the
-patch artifact is already captured. Everything is stored in the
-`agent_outputs` table (the durable artifact), then the sandbox is purged, the
+patch artifact is already captured. The terminal output (result +
+transcript) is posted to the linked card as a comment (the durable
+artifact), then the sandbox is purged, the
 whole `work/agents/<slot>` folder deleted and the slot dropped. After finish,
-the only memory of the work tree is that artifact.
+the only memory of the work tree is that card comment.
 
 Publishing for review is the same shape one step earlier:
 `Manager::publish` commits pending work, pushes the task branch and opens a

@@ -189,7 +189,11 @@ impl ToolCall {
                 i.checked_sub(1)
                     .is_none_or(|p| !bytes[p].is_ascii_alphanumeric())
             })
-            .map(|(i, _)| visible[i + TOOL_PREFIX.len()..].trim())
+            .map(|(i, _)| {
+                let rest = &visible[i + TOOL_PREFIX.len()..];
+                let end = rest.find('\n').unwrap_or(rest.len());
+                rest[..end].trim()
+            })
             .collect()
     }
 
@@ -513,9 +517,5 @@ fn param_value<'a>(body: &'a str, key: &str) -> Option<&'a str> {
     let rest = body.split_once(tag.as_str())?.1;
     // Lenient close: a truncated reply may omit `</parameter>` — take the
     // rest rather than dropping the whole call.
-    Some(
-        rest.split_once(PARAM_CLOSE)
-            .map_or(rest, |(v, _)| v)
-            .trim(),
-    )
+    Some(rest.split_once(PARAM_CLOSE).map_or(rest, |(v, _)| v).trim())
 }

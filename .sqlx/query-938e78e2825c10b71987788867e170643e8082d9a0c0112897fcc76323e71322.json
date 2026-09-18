@@ -1,0 +1,44 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id AS \"id: i64\", card_id AS \"card_id: i64\", path, name, created_at\n               FROM card_attachments ORDER BY id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id: i64",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "card_id: i64",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "path",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "938e78e2825c10b71987788867e170643e8082d9a0c0112897fcc76323e71322"
+}

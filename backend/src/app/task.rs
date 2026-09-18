@@ -20,13 +20,13 @@ pub struct TaskApp {
     pub workspaces: WorkspaceService,
     pub projects: ProjectService,
     /// Shared Postgres store: routine CRUD/runs live outside the 1:1 ports.
-    pub store: Arc<task_rs::Store>,
+    pub store: Arc<crate::infra::postgres::Store>,
 }
 
 impl TaskApp {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        store: Arc<task_rs::Store>,
+        store: Arc<crate::infra::postgres::Store>,
         cards: Arc<dyn CardRepo>,
         comments: Arc<dyn CommentRepo>,
         resources: Arc<dyn ResourceRepo>,
@@ -49,8 +49,8 @@ impl TaskApp {
 }
 
 /// Composition root: wires the Postgres adapters into the app services.
-pub fn build(store: Arc<task_rs::Store>) -> TaskApp {
-    use crate::infra::postgres::task::PgTask;
+pub fn build(store: Arc<crate::infra::postgres::Store>) -> TaskApp {
+    use crate::infra::postgres::PgTask;
     let pg = Arc::new(PgTask::new(Arc::clone(&store)));
     TaskApp::new(
         Arc::clone(&store),

@@ -12,11 +12,11 @@ use crate::infra::zai::settings::SettingsState;
 use crate::port::outbound::ProjectGit;
 
 pub struct SettingsProjectGit {
-    store: Arc<task_rs::Store>,
+    store: Arc<crate::infra::postgres::Store>,
 }
 
 impl SettingsProjectGit {
-    pub fn new(store: Arc<task_rs::Store>) -> Self {
+    pub fn new(store: Arc<crate::infra::postgres::Store>) -> Self {
         Self { store }
     }
 
