@@ -158,14 +158,12 @@ impl ToolCall {
         if Self::parse_xml(visible).is_some() {
             return true;
         }
-        visible
-            .lines()
-            .map(str::trim_start)
-            .any(|l| l.to_uppercase().starts_with(TOOL_PREFIX))
+        !Self::tool_args(visible).is_empty()
     }
 
-    /// First TOOL: line after the </think> block, if any. The argument may be
-    /// empty (e.g. `TOOL: BOARD_LIST`).
+    /// First tool call in the reply after the `</think>` block, if any. The
+    /// marker may sit mid-line after prose ("... sent. TOOL: SHELL ls") —
+    /// every word-boundary occurrence is tried until one parses.
     pub fn parse(reply: &str) -> Option<Self> {
         let visible = reply
             .split_once("</think>")
@@ -174,14 +172,33 @@ impl ToolCall {
         if let Some(call) = Self::parse_xml(visible) {
             return Some(call);
         }
-        let line = visible
-            .lines()
-            .map(str::trim_start)
-            .find(|l| l.to_uppercase().starts_with(TOOL_PREFIX))?;
-        let rest = line[TOOL_PREFIX.len()..].trim();
-        let (kind, arg) = match rest.split_once(' ') {
+        Self::tool_args(visible)
+            .into_iter()
+            .find_map(Self::from_arg)
+    }
+
+    /// Argument text after every word-boundary `TOOL:` occurrence, in order.
+    fn tool_args(visible: &str) -> Vec<&str> {
+        let lower = visible.to_lowercase();
+        let marker = TOOL_PREFIX.to_lowercase();
+        let bytes = visible.as_bytes();
+        lower
+            .match_indices(marker.as_str())
+            .filter(|(i, _)| {
+                // word boundary: not glued to a letter/digit before the marker
+                i.checked_sub(1)
+                    .is_none_or(|p| !bytes[p].is_ascii_alphanumeric())
+            })
+            .map(|(i, _)| visible[i + TOOL_PREFIX.len()..].trim())
+            .collect()
+    }
+
+    /// Builds a call from the text after `TOOL:` (kind + argument).
+    fn from_arg(arg: &str) -> Option<Self> {
+        let arg = arg.trim();
+        let (kind, arg) = match arg.split_once(' ') {
             Some((kind, arg)) => (kind, arg.trim()),
-            None => (rest, ""),
+            None => (arg, ""),
         };
         match kind.to_uppercase().as_str() {
             TOOL_SEARCH => Some(Self::Search(arg.to_string())),
@@ -494,5 +511,11 @@ fn attr_value<'a>(attrs: &'a str, key: &str) -> Option<&'a str> {
 fn param_value<'a>(body: &'a str, key: &str) -> Option<&'a str> {
     let tag = format!("<parameter name=\"{key}\">");
     let rest = body.split_once(tag.as_str())?.1;
-    Some(rest.split_once(PARAM_CLOSE)?.0.trim())
+    // Lenient close: a truncated reply may omit `</parameter>` — take the
+    // rest rather than dropping the whole call.
+    Some(
+        rest.split_once(PARAM_CLOSE)
+            .map_or(rest, |(v, _)| v)
+            .trim(),
+    )
 }

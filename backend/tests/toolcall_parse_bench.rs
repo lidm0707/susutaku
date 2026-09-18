@@ -85,6 +85,16 @@ fn stable_cases() -> Vec<(&'static str, String, Expect)> {
             Expect::Parse,
         ),
         (
+            "mid-prose marker",
+            "I'll run it now. TOOL: SHELL ls -la".to_string(),
+            Expect::Parse,
+        ),
+        (
+            "partial xml invoke (unclosed)",
+            "<invoke name=\"shell\"><parameter name=\"command\">ls</parameter>".to_string(),
+            Expect::Parse,
+        ),
+        (
             "plain answer no tool",
             "The task is done, all tests pass.".to_string(),
             Expect::Reject,
@@ -102,17 +112,10 @@ fn stable_cases() -> Vec<(&'static str, String, Expect)> {
     ]
 }
 
-/// Cases the strict line scanner provably misses today.
+/// Cases still unparseable by design of the data (nothing to parse into) —
+/// the fix is a format-repair hint in the chat loop, not the parser.
 fn known_gap_cases() -> Vec<(&'static str, String)> {
     vec![
-        (
-            "mid-prose marker",
-            "I'll run it now. TOOL: SHELL ls -la".to_string(),
-        ),
-        (
-            "partial xml invoke",
-            "<invoke name=\"shell\"><parameter name=\"command\">ls</parameter>".to_string(),
-        ),
         (
             "xml coding missing code param",
             "<invoke name=\"coding\"><parameter name=\"path\">src/a.rs</parameter></invoke>"

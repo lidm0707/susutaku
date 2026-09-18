@@ -3,55 +3,44 @@
 Branch: `feature/agent-coding-flow` · Test: `backend/tests/toolcall_parse_bench.rs`
 Run: `cargo test -p backend --test toolcall_parse_bench -- --nocapture`
 
-## Results (main, strict line scanner)
+## Results
 
-| group    | score            | speed            |
-|----------|------------------|------------------|
-| stable   | 15/15 correct    | ~1200 ns/parse   |
-| knowngap | 1/3 parsed       | ~900 ns/parse    |
+| group    | before fix       | after fix              | speed          |
+|----------|------------------|------------------------|----------------|
+| stable   | 15/15            | **17/17** (asserted)   | ~1.2 us/parse  |
+| knowngap | 1/3 parsed       | 0/1 (see below)        | ~1.4 us/parse  |
 
-Parsing is cheap (µs); **stability, not speed, is the problem.**
+Parsing is cheap (microseconds); **stability, not speed, was the problem.**
 
-## What works today
+## Fixes shipped (domain/service/tool_call.rs)
 
-- clean `TOOL: KIND args` lines (any case), also fenced in markdown,
-  after `</think>`, or after prose on an earlier line
-- `GIT`, `LSP`, `GEOMATH` aliases and argument forms
-- well-formed `<invoke name="...">` XML blocks (incl. `write_file` alias)
+1. **Mid-prose markers** — `parse` now scans every word-boundary
+   `TOOL:` occurrence (case-insensitive) instead of only line starts.
+   `"I'll run it now. TOOL: SHELL ls -la"` parses.
+2. **Truncated XML** — `param_value` is lenient about a missing closing
+   `</parameter>`/`</invoke>` (cut-off stream/reply no longer drops the
+   call). A partial `<invoke name="shell">…` now parses.
 
-## Measured gaps (real replies that lose the tool call)
+Both cases migrated from known-gap into the asserted stable group.
 
-1. **mid-prose marker** — `I'll run it now. TOOL: SHELL ls -la` →
-   the line scanner only accepts the marker at line start.
-2. **partial XML** — an unterminated `<invoke>` block → `parse_xml` None,
-   no `TOOL:` line to fall back on → dead end.
-3. **XML with a missing parameter** → whole call dropped instead of an
-   error fed back to the model.
+## Remaining known gap (parser cannot fix)
 
-`ToolCall::offers()` catches some of these to feed an error back, but the
-run still burns a round without executing anything.
+- **XML with a missing required parameter** (`coding` without `code`):
+  there is no value to parse into. The right fix is a format-repair hint
+  from the chat loop when `offers() == true` but `parse() == None`
+  ("parameter `code` is required for coding") so the model retries with
+  the missing part instead of a generic failure round.
 
 ## Verdict on the current approach
 
-The dual text protocol (`TOOL:` line + Anthropic-style XML fallback) is the
-right call for a local-model setup where native tool-call APIs are not
-guaranteed — it is model-agnostic, stream-safe, and cheap. But:
+The dual text protocol (`TOOL:` line + Anthropic-style XML fallback) is
+the right call for a local-model setup where native tool-call APIs are
+not guaranteed — model-agnostic, stream-safe, cheap. With the two
+parser fixes the failure surface shrinks to genuinely malformed calls;
+halving to one canonical syntax in prompts is still worth doing.
 
-- two syntaxes means two failure surfaces; aliases (`write_file`,
-  `find_card`, `geomath`) hint at models guessing the format. Every
-  mismatch costs a full inference round.
-- the strict line-start scan is the single biggest loss source (gap 1).
-- error-feedback is binary (parsed / not); malformed calls should return a
-  *repair hint* to the model ("marker must start the line") instead of a
-  generic retry.
+## Next steps
 
-## Recommended next steps (in order)
-
-1. scan for `TOOL:` mid-line at word boundaries (host working tree already
-   has a candidate-scan prototype — `tool_arg_candidates` — port it);
-2. on `offers() == true` but `parse() == None`, reply with a
-   format-repair hint naming the expected syntax;
-3. adopt one canonical syntax in the prompt and treat the other as
-   fallback only (halves the failure surface);
-4. keep this bench as the acceptance gate: stable 15/15 must hold, gap
-   cases migrate into `stable` as the parser improves (target 3/3).
+- [ ] format-repair hint on `offers() && !parse()` in the chat loop
+- [ ] one canonical tool syntax in prompts; the other stays fallback
+- [ ] keep this bench as the acceptance gate (stable must stay 17/17)
