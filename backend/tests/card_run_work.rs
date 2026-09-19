@@ -2,7 +2,7 @@
 //! the slot key, the prompt build and the bound-repo op resolution.
 
 use backend::app::card_run::{
-    work_step, BoundRepo, WorkStep, bind_op, resolve_in_tree, slot_key, work_prompt,
+    BoundRepo, WorkStep, bind_op, resolve_in_tree, slot_key, work_prompt, work_step,
 };
 use backend::domain::GitOp;
 use std::path::Path;
@@ -67,9 +67,8 @@ fn bind_op_fills_bound_repo() {
     }
 }
 
-#[test]
-fn work_prompt_carries_task_and_hint() {
-    let cfg = AgentConfigRow {
+fn work_cfg() -> AgentConfigRow {
+    AgentConfigRow {
         id: 1,
         name: "dev".into(),
         model: String::new(),
@@ -79,7 +78,14 @@ fn work_prompt_carries_task_and_hint() {
         allowed_tools: Vec::new(),
         receive_images: false,
         thinking: "off".into(),
-    };
+        ctx_limit: 128000,
+        ctx_policy: "compact".into(),
+    }
+}
+
+#[test]
+fn work_prompt_carries_task_and_hint() {
+    let cfg = work_cfg();
     let card = CardRow {
         id: 7,
         column_id: "todo".into(),
@@ -111,17 +117,7 @@ fn work_prompt_carries_task_and_hint() {
 
 #[test]
 fn work_prompt_embeds_attached_skills() {
-    let cfg = AgentConfigRow {
-        id: 1,
-        name: "dev".into(),
-        model: String::new(),
-        persona: String::new(),
-        prompt: String::new(),
-        output: String::new(),
-        allowed_tools: Vec::new(),
-        receive_images: false,
-        thinking: "off".into(),
-    };
+    let cfg = work_cfg();
     let card = CardRow {
         id: 7,
         column_id: "todo".into(),

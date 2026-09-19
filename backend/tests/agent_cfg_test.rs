@@ -24,6 +24,8 @@ async fn agent_crud() {
         allowed_tools: vec!["search".into(), "board".into()],
         receive_images: true,
         thinking: "off".into(),
+        ctx_limit: 32000,
+        ctx_policy: "compact".into(),
     };
     let id = store.create_agent(&cfg).await.expect("create agent");
     assert!(matches!(
@@ -44,6 +46,8 @@ async fn agent_crud() {
         .expect("agent_by_name")
         .expect("agent found");
     assert_eq!(by_name.id, id);
+    assert_eq!(by_name.ctx_limit, 32000);
+    assert_eq!(by_name.ctx_policy, "compact");
 
     store
         .update_agent(AgentConfigUpdate {
@@ -56,6 +60,8 @@ async fn agent_crud() {
             allowed_tools: &[],
             receive_images: false,
             thinking: "high",
+            ctx_limit: 64000,
+            ctx_policy: "new_thread",
         })
         .await
         .expect("update agent");
@@ -66,6 +72,8 @@ async fn agent_crud() {
         .expect("agent found");
     assert!(cleared.allowed_tools.is_empty());
     assert_eq!(cleared.think_level(), task_rs::ThinkLevel::High);
+    assert_eq!(cleared.ctx_limit, 64000);
+    assert_eq!(cleared.ctx_policy, "new_thread");
     assert!(matches!(
         store
             .update_agent(AgentConfigUpdate {
@@ -78,6 +86,8 @@ async fn agent_crud() {
                 allowed_tools: &[],
                 receive_images: true,
                 thinking: "off",
+                ctx_limit: 128000,
+                ctx_policy: "compact",
             })
             .await,
         Err(StoreError::NoSuchAgent)

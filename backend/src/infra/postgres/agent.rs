@@ -13,7 +13,7 @@ impl Store {
     pub async fn list_agents(&self) -> Result<Vec<AgentConfigRow>, StoreError> {
         let rows = sqlx::query_as!(
             AgentConfigRow,
-            r#"SELECT id, name, model, persona, prompt, output, allowed_tools, receive_images, thinking
+            r#"SELECT id, name, model, persona, prompt, output, allowed_tools, receive_images, thinking, ctx_limit, ctx_policy
                FROM agent_settings ORDER BY id"#
         )
         .fetch_all(&self.pool)
@@ -24,7 +24,7 @@ impl Store {
     pub async fn agent_by_name(&self, name: &str) -> Result<Option<AgentConfigRow>, StoreError> {
         let row = sqlx::query_as!(
             AgentConfigRow,
-            r#"SELECT id, name, model, persona, prompt, output, allowed_tools, receive_images, thinking
+            r#"SELECT id, name, model, persona, prompt, output, allowed_tools, receive_images, thinking, ctx_limit, ctx_policy
                FROM agent_settings WHERE name = $1"#,
             name
         )
@@ -35,8 +35,8 @@ impl Store {
 
     pub async fn create_agent(&self, cfg: &AgentConfigRow) -> Result<i64, StoreError> {
         let row = sqlx::query!(
-            r#"INSERT INTO agent_settings (name, model, persona, prompt, output, allowed_tools, receive_images, thinking)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            r#"INSERT INTO agent_settings (name, model, persona, prompt, output, allowed_tools, receive_images, thinking, ctx_limit, ctx_policy)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                RETURNING id AS "id: i64""#,
             cfg.name,
             cfg.model,
@@ -46,6 +46,8 @@ impl Store {
             &cfg.allowed_tools,
             cfg.receive_images,
             cfg.thinking,
+            cfg.ctx_limit,
+            cfg.ctx_policy,
         )
         .fetch_one(&self.pool)
         .await
@@ -60,7 +62,8 @@ impl Store {
         let res = sqlx::query!(
             r#"UPDATE agent_settings
                SET name = $2, model = $3, persona = $4, prompt = $5, output = $6,
-                   allowed_tools = $7, receive_images = $8, thinking = $9
+                   allowed_tools = $7, receive_images = $8, thinking = $9,
+                   ctx_limit = $10, ctx_policy = $11
                WHERE id = $1"#,
             upd.id,
             upd.name,
@@ -71,6 +74,8 @@ impl Store {
             upd.allowed_tools,
             upd.receive_images,
             upd.thinking,
+            upd.ctx_limit,
+            upd.ctx_policy,
         )
         .execute(&self.pool)
         .await
@@ -116,6 +121,8 @@ impl AgentConfigRepo for PgTask {
             allowed_tools: cfg.allowed_tools,
             receive_images: cfg.receive_images,
             thinking: cfg.thinking,
+            ctx_limit: cfg.ctx_limit,
+            ctx_policy: cfg.ctx_policy,
         };
         let id = self.store().create_agent(&row).await?;
         Ok(AgentConfigRow { id, ..row })
@@ -132,6 +139,8 @@ impl AgentConfigRepo for PgTask {
             allowed_tools: Box::leak(cfg.allowed_tools.into_boxed_slice()),
             receive_images: cfg.receive_images,
             thinking: Box::leak(cfg.thinking.into_boxed_str()),
+            ctx_limit: cfg.ctx_limit,
+            ctx_policy: Box::leak(cfg.ctx_policy.into_boxed_str()),
         };
         self.store().update_agent(upd).await
     }

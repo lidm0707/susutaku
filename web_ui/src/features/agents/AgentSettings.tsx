@@ -81,9 +81,19 @@ const EMPTY = {
   allowed_tools: [] as string[],
   receive_images: true,
   thinking: "off",
+  ctx_limit: 128000 as number,
+  ctx_policy: "compact",
 };
 
 const THINKING_LEVELS = ["off", "low", "medium", "high"] as const;
+
+const CTX_POLICIES = ["compact", "warn", "new_thread", "keep_going"] as const;
+const CTX_POLICY_LABELS: Record<(typeof CTX_POLICIES)[number], string> = {
+  compact: "full: compact",
+  warn: "full: block",
+  new_thread: "full: new thread",
+  keep_going: "full: keep going",
+};
 
 type Fields = typeof EMPTY;
 
@@ -157,7 +167,7 @@ export default function AgentSettings() {
     setError(err instanceof Error ? err.message : String(err));
   }
 
-  function set(k: keyof Fields, v: string | boolean | string[]) {
+  function set(k: keyof Fields, v: string | boolean | string[] | number) {
     setFields({ ...fields, [k]: v });
   }
 
@@ -262,6 +272,8 @@ export default function AgentSettings() {
       allowed_tools: a.allowed_tools ?? [],
       receive_images: a.receive_images !== false,
       thinking: a.thinking || "off",
+      ctx_limit: a.ctx_limit ?? 128000,
+      ctx_policy: a.ctx_policy || "compact",
     });
     if (typeof a.id === "number") load_agent_skills(a.id);
     else setAgentSkills([]);
@@ -341,6 +353,8 @@ export default function AgentSettings() {
       allowed_tools: fields.allowed_tools,
       receive_images: fields.receive_images,
       thinking: fields.thinking,
+      ctx_limit: fields.ctx_limit,
+      ctx_policy: fields.ctx_policy,
     };
     setError("");
     try {
@@ -593,6 +607,30 @@ export default function AgentSettings() {
                 <ChevronDown size={13} className="select-arrow" />
               </div>
               <p className="agent-tool-hint">reasoning depth for every reply by this agent</p>
+            </Field>
+            <Field label="context window" icon={<Sparkles size={12} />}>
+              <div className="ctx-fields">
+                <input
+                  type="number"
+                  min={1}
+                  value={fields.ctx_limit}
+                  onChange={(e) => {
+                    const v = Number(e.target.value);
+                    if (Number.isFinite(v) && v > 0) set("ctx_limit", v);
+                  }}
+                  aria-label="context window limit (tokens)"
+                />
+                <Select
+                  value={fields.ctx_policy}
+                  onChange={(e) => set("ctx_policy", e.target.value)}
+                  aria-label="context-full policy"
+                >
+                  {CTX_POLICIES.map((p) => (
+                    <option key={p} value={p}>{CTX_POLICY_LABELS[p]}</option>
+                  ))}
+                </Select>
+              </div>
+              <p className="agent-tool-hint">token budget for chat threads and what happens when it fills</p>
             </Field>
             <Field label="skills" icon={<Sparkles size={12} />}>
               {typeof selected === "number" && (

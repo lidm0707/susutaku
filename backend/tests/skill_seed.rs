@@ -27,6 +27,8 @@ fn agent_cfg(name: String) -> AgentConfigRow {
         allowed_tools: vec!["board".into()],
         receive_images: false,
         thinking: "off".into(),
+        ctx_limit: 128000,
+        ctx_policy: "compact".into(),
     }
 }
 

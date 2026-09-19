@@ -56,7 +56,14 @@ function App() {
         <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
         </div>
-        <SideNav on_chat={() => set_chat_open((o) => !o)} chat_open={chat_open} shifted={chat_open && docked} />
+        <SideNav
+          on_chat={() => {
+            if (chat_open) set_query_param(CHAT_PARAM, null);
+            set_chat_open(!chat_open);
+          }}
+          chat_open={chat_open}
+          shifted={chat_open && docked}
+        />
         <ChatModal open={chat_open} on_close={() => { set_chat_open(false); set_query_param(CHAT_PARAM, null); }} />
         </ProjectProvider>
       <Toaster />

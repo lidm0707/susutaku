@@ -14,7 +14,7 @@ pub mod store;
 pub mod user;
 pub mod workspace;
 
-pub use agent_cfg::{AgentConfigRow, AgentConfigUpdate, ThinkLevel};
+pub use agent_cfg::{AgentConfigRow, AgentConfigUpdate, CtxPolicy, ThinkLevel};
 pub use agent_token::{
     ActiveAgentRun, AgentRunTokenRow, IssuedAgentToken, NewAgentRunToken, TOKEN_BYTES,
     TOKEN_PREFIX, TOKEN_TTL_SECS,

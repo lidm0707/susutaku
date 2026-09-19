@@ -13,4 +13,9 @@ pub struct AgentConfigDraft {
     pub receive_images: bool,
     /// Reasoning depth, one of ThinkLevel::as_str ("off"|"low"|"medium"|"high").
     pub thinking: String,
+    /// Context-window budget in tokens.
+    pub ctx_limit: i64,
+    /// Full-context behaviour, one of CtxPolicy::as_str
+    /// ("warn"|"new_thread"|"keep_going").
+    pub ctx_policy: String,
 }

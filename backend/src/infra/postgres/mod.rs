@@ -130,6 +130,15 @@ ALTER TABLE agent_settings ADD COLUMN IF NOT EXISTS receive_images BOOLEAN NOT N
 ALTER TABLE agent_settings ADD COLUMN IF NOT EXISTS thinking TEXT NOT NULL DEFAULT 'off';
 "#,
     r#"
+ALTER TABLE agent_settings ADD COLUMN IF NOT EXISTS ctx_limit BIGINT NOT NULL DEFAULT 128000;
+"#,
+    r#"
+ALTER TABLE agent_settings ADD COLUMN IF NOT EXISTS ctx_policy TEXT NOT NULL DEFAULT 'compact';
+"#,
+    r#"
+ALTER TABLE agent_settings ALTER COLUMN ctx_policy SET DEFAULT 'compact';
+"#,
+    r#"
 CREATE TABLE IF NOT EXISTS skills (
     id   BIGSERIAL PRIMARY KEY,
     name TEXT NOT NULL UNIQUE,

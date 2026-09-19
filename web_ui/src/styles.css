@@ -5133,6 +5133,16 @@ select.agent-multi {
   color: #666;
   margin: 0.35rem 0 0;
 }
+
+.ctx-fields {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.ctx-fields input[type="number"] {
+  width: 8rem;
+}
 .agent-skill-list {
   display: flex;
   flex-wrap: wrap;

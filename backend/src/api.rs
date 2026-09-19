@@ -280,10 +280,7 @@ pub fn router<T: ChatHandling + ModelSwitch + 'static>(
             "/api/settings/env-vars",
             get(list_env_vars).put(set_env_var),
         )
-        .route(
-            "/api/settings/env-vars/{name}",
-            delete(remove_env_var),
-        )
+        .route("/api/settings/env-vars/{name}", delete(remove_env_var))
         .route(
             "/api/settings/system-prompt",
             get(get_system_prompt).post(set_system_prompt),
@@ -305,6 +302,7 @@ pub fn router<T: ChatHandling + ModelSwitch + 'static>(
             "/api/chat/threads/{id}",
             get(list_chat_messages).delete(delete_chat_thread),
         )
+        .route("/api/chat/threads/{id}/compact", post(compact_chat_thread))
         .route("/api/sandbox", get(list_sandboxes))
         .route("/api/sandbox/logs", get(sandbox_logs))
         .route("/api/host", get(host_spec_handler))
@@ -2192,6 +2190,87 @@ async fn create_chat_thread(
     Ok(Json(row))
 }
 
+const COMPACT_PROMPT: &str = "Summarize the following conversation compactly for an AI assistant continuing the work: keep the goal, key decisions, facts, file paths and open questions; drop pleasantries and repetition. Reply with the summary only.";
+
+const COMPACT_MAX_TOKENS: usize = 2048;
+const COMPACT_MSG_CHARS: usize = 2000;
+const COMPACT_MSGS_MAX: usize = 100;
+
+#[derive(Serialize, utoipa::ToSchema)]
+struct CompactReply {
+    summary: String,
+}
+
+/// Zed-style compaction: summarize the thread transcript, then collapse the
+/// stored history into that single summary so the thread continues fresh.
+#[utoipa::path(
+    post,
+    path = "/api/chat/threads/{id}/compact",
+    responses((status = 200, body = CompactReply), (status = 404, body = str))
+)]
+async fn compact_chat_thread(
+    Extension(deps): Extension<Arc<ZaiChatDeps>>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+) -> Result<Json<CompactReply>, ApiError> {
+    let msgs = deps.store.list_chat_messages(id).await.map_err(store_err)?;
+    if msgs.is_empty() {
+        return Ok(Json(CompactReply {
+            summary: String::new(),
+        }));
+    }
+    let transcript: String = msgs
+        .iter()
+        .rev()
+        .take(COMPACT_MSGS_MAX)
+        .rev()
+        .map(|m| {
+            let text: String = m.text.chars().take(COMPACT_MSG_CHARS).collect();
+            format!("{}: {text}\n", m.role)
+        })
+        .collect();
+    let engine = ZaiEngine::new(deps.settings.clone(), None);
+    let zai = ChatUseCase::new(
+        deps.searcher.clone(),
+        deps.fetcher.clone(),
+        deps.runner.clone(),
+        Arc::new(engine),
+        deps.models.clone(),
+        deps.memory.clone(),
+        deps.board.clone(),
+        deps.agents.clone(),
+    );
+    let outcome = zai
+        .execute(ChatCmd {
+            message: format!("{COMPACT_PROMPT}\n\n{transcript}"),
+            mode: SearchMode::Off,
+            max_tokens: COMPACT_MAX_TOKENS,
+            tokenizer: TokKind::Normal,
+            think: false,
+            board_token: None,
+            agent: None,
+            image: None,
+            thread_id: None,
+            card_id: None,
+            project_id: None,
+        })
+        .await
+        .map_err(ApiError::internal)?;
+    let summary = outcome.text.trim().to_string();
+    deps.store
+        .delete_chat_messages(id)
+        .await
+        .map_err(store_err)?;
+    deps.store
+        .add_chat_message(
+            id,
+            task_rs::ROLE_ASSISTANT,
+            &format!("[compacted] {summary}"),
+        )
+        .await
+        .map_err(store_err)?;
+    Ok(Json(CompactReply { summary }))
+}
+
 async fn list_chat_messages(
     Extension(deps): Extension<Arc<ZaiChatDeps>>,
     Path(id): Path<i64>,
@@ -2977,6 +3056,8 @@ async fn create_agent(
     require_edit(&user)?;
     let allowed_tools = valid_tools(&req.allowed_tools)?;
     let thinking = valid_thinking(req.thinking.as_deref())?;
+    let ctx_limit = valid_ctx_limit(req.ctx_limit)?;
+    let ctx_policy = valid_ctx_policy(req.ctx_policy.as_deref())?;
     let row = state
         .app
         .agents
@@ -2989,6 +3070,8 @@ async fn create_agent(
             allowed_tools,
             receive_images: req.receive_images,
             thinking,
+            ctx_limit,
+            ctx_policy,
         })
         .await
         .map_err(cfg_err)?;
@@ -3010,6 +3093,8 @@ async fn update_agent_cfg(
     require_edit(&user)?;
     let allowed_tools = valid_tools(&req.allowed_tools)?;
     let thinking = valid_thinking(req.thinking.as_deref())?;
+    let ctx_limit = valid_ctx_limit(req.ctx_limit)?;
+    let ctx_policy = valid_ctx_policy(req.ctx_policy.as_deref())?;
     state
         .app
         .agents
@@ -3024,6 +3109,8 @@ async fn update_agent_cfg(
                 allowed_tools,
                 receive_images: req.receive_images,
                 thinking,
+                ctx_limit,
+                ctx_policy,
             },
         )
         .await
@@ -3409,7 +3496,11 @@ async fn events_ws(
     })
 }
 
-async fn record_activity(store: &crate::infra::postgres::Store, kind: &str, message: impl std::fmt::Display) {
+async fn record_activity(
+    store: &crate::infra::postgres::Store,
+    kind: &str,
+    message: impl std::fmt::Display,
+) {
     if let Err(e) = store.record_activity(kind, &message.to_string()).await {
         tracing::warn!(kind, error = %e, "activity log write failed");
     }
@@ -5200,10 +5291,34 @@ struct AgentConfigRequest {
     /// Reasoning depth: "off" (default) | "low" | "medium" | "high".
     #[serde(default)]
     thinking: Option<String>,
+    /// Context-window budget in tokens (default 128000).
+    ctx_limit: Option<i64>,
+    /// Full-context behaviour: "warn" (default) | "new_thread" | "keep_going".
+    #[serde(default)]
+    ctx_policy: Option<String>,
 }
 
 fn default_true() -> bool {
     true
+}
+
+const DEFAULT_CTX_TOKENS: i64 = 128000;
+
+fn valid_ctx_policy(policy: Option<&str>) -> Result<String, ApiError> {
+    let Some(policy) = policy.map(str::trim).filter(|p| !p.is_empty()) else {
+        return Ok(task_rs::CtxPolicy::default().as_str().to_owned());
+    };
+    task_rs::CtxPolicy::parse(policy)
+        .map(|p| p.as_str().to_owned())
+        .ok_or_else(|| ApiError::bad_request(format!("unknown ctx policy: {policy}")))
+}
+
+fn valid_ctx_limit(limit: Option<i64>) -> Result<i64, ApiError> {
+    match limit {
+        None => Ok(DEFAULT_CTX_TOKENS),
+        Some(v) if v > 0 => Ok(v),
+        Some(v) => Err(ApiError::bad_request(format!("invalid ctx limit: {v}"))),
+    }
 }
 
 fn valid_thinking(level: Option<&str>) -> Result<String, ApiError> {
@@ -5226,6 +5341,8 @@ struct AgentConfigDto {
     allowed_tools: Vec<String>,
     receive_images: bool,
     thinking: String,
+    ctx_limit: i64,
+    ctx_policy: String,
 }
 
 impl From<task_rs::AgentConfigRow> for AgentConfigDto {
@@ -5240,6 +5357,8 @@ impl From<task_rs::AgentConfigRow> for AgentConfigDto {
             allowed_tools: r.allowed_tools,
             receive_images: r.receive_images,
             thinking: r.thinking,
+            ctx_limit: r.ctx_limit,
+            ctx_policy: r.ctx_policy,
         }
     }
 }

@@ -104,4 +104,13 @@ impl Store {
         .await?;
         Ok(rows)
     }
+
+    /// Compaction: drop a thread's transcript (a fresh summary row is
+    /// inserted by the caller afterwards).
+    pub async fn delete_chat_messages(&self, thread_id: i64) -> Result<u64, StoreError> {
+        let res = sqlx::query!("DELETE FROM chat_messages WHERE thread_id = $1", thread_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(res.rows_affected())
+    }
 }

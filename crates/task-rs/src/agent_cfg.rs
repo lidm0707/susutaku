@@ -45,6 +45,45 @@ impl ThinkLevel {
     }
 }
 
+/// What happens on the next chat send when the context budget is full.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CtxPolicy {
+    /// Zed-style: summarize the thread, then continue with fresh context.
+    #[default]
+    Compact,
+    Warn,
+    NewThread,
+    KeepGoing,
+}
+
+impl CtxPolicy {
+    pub const ALL: [CtxPolicy; 4] = [
+        CtxPolicy::Compact,
+        CtxPolicy::Warn,
+        CtxPolicy::NewThread,
+        CtxPolicy::KeepGoing,
+    ];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            CtxPolicy::Compact => "compact",
+            CtxPolicy::Warn => "warn",
+            CtxPolicy::NewThread => "new_thread",
+            CtxPolicy::KeepGoing => "keep_going",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "compact" => Some(CtxPolicy::Compact),
+            "warn" => Some(CtxPolicy::Warn),
+            "new_thread" => Some(CtxPolicy::NewThread),
+            "keep_going" => Some(CtxPolicy::KeepGoing),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct AgentConfigRow {
     pub id: i64,
@@ -58,6 +97,10 @@ pub struct AgentConfigRow {
     pub receive_images: bool,
     /// Reasoning depth (ThinkLevel::as_str); "off" = no thinking block.
     pub thinking: String,
+    /// Context-window budget in tokens (model APIs don't report it).
+    pub ctx_limit: i64,
+    /// Full-context behaviour (CtxPolicy::as_str).
+    pub ctx_policy: String,
 }
 
 impl AgentConfigRow {
@@ -76,4 +119,6 @@ pub struct AgentConfigUpdate<'a> {
     pub allowed_tools: &'a [String],
     pub receive_images: bool,
     pub thinking: &'a str,
+    pub ctx_limit: i64,
+    pub ctx_policy: &'a str,
 }

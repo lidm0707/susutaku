@@ -83,6 +83,10 @@ export interface Agent {
   receive_images?: boolean;
   /// Reasoning depth: "off" (default) | "low" | "medium" | "high".
   thinking?: string;
+  /// Context-window budget in tokens (default 128000).
+  ctx_limit?: number;
+  /// Full-context behaviour: "compact" (default, Zed-style) | "warn" | "new_thread" | "keep_going".
+  ctx_policy?: string;
 }
 
 export interface Workspace {
@@ -875,6 +879,17 @@ export async function fetch_chat_messages(thread_id: number): Promise<ChatMessag
   const res = await fetch(`${API_BASE}/api/chat/threads/${thread_id}`);
   if (!res.ok) throw new ApiError(res.status, await res.text());
   return res.json();
+}
+
+/// Zed-style compaction: the backend summarizes the transcript and collapses
+/// the stored history into that summary; returns the summary text.
+export async function compact_chat_thread(thread_id: number): Promise<string> {
+  const res = await fetch(`${API_BASE}/api/chat/threads/${thread_id}/compact`, {
+    method: "POST",
+  });
+  if (!res.ok) throw new ApiError(res.status, await res.text());
+  const data = await res.json();
+  return data.summary as string;
 }
 
 export async function delete_chat_thread(thread_id: number): Promise<void> {
