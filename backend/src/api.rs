@@ -388,6 +388,7 @@ fn task_router(state: TaskStore) -> Router {
         .route("/api/task/cards/{id}/resources", get(list_card_resources))
         .route("/api/task/cards/{id}/image", put(set_card_image))
         .route("/api/task/cards/{id}/run", post(run_card))
+        .route("/api/task/cards/{id}/cancel", post(cancel_card_run))
         .route("/api/task/cards/{id}/schedule", put(set_card_schedule))
         .route("/api/runs/active", get(list_active_runs))
         .route("/api/cronjobs", get(list_cronjobs))
@@ -2883,6 +2884,23 @@ async fn run_card(
 }
 
 #[utoipa::path(
+    post,
+    path = "/api/task/cards/{id}/cancel",
+    responses((status = 200, body = bool))
+)]
+/// Ask the card's in-flight run to stop: sets its cancel flag; the run
+/// notices at the next tool round, tears the slot down and posts its output
+/// comment. True when a run was live.
+async fn cancel_card_run(
+    State(_state): State<TaskStore>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+    user: AuthUser,
+) -> Result<Json<bool>, ApiError> {
+    require_edit(&user)?;
+    Ok(Json(crate::app::card_run::cancel_run(id)))
+}
+
+#[utoipa::path(
     put,
     path = "/api/task/cards/{id}/schedule",
     request_body = SetScheduleRequest,
@@ -4708,6 +4726,7 @@ async fn install_script(
         list_cronjobs,
         list_comments,
         add_comment,
+        cancel_card_run,
         list_activity,
         login,
         logout,

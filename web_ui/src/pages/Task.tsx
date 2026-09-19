@@ -5,7 +5,9 @@ import {
   clear_token,
   connect_events,
   add_comment,
-  chat,
+  cancel_card_run,
+  cancel_chat_run,
+  chat_zai_stream,
   create_task,
   fetch_agents,
   fetch_tasks,
@@ -36,6 +38,7 @@ import {
   type UserInfo,
   type StoredOutcome,
   type ActiveRun,
+  type ChatStreamEvent,
 } from "../lib.js";
 import { Modal, SlideOver } from "../ui/Overlay.js";
 import { toast } from "../ui/Toast.js";
@@ -65,6 +68,8 @@ type ViewMode = typeof VIEW_BOARD | typeof VIEW_LIST;
 const LABEL_PALETTE = ["#7bd88f", "#e3b341", "#ff7b7b", "#6fb3ff", "#c792ea", "#64d8cb"];
 const DUE_SOON_DAYS = 2;
 const ESTIMATE_MAX = 99;
+/// Trailing tool-trace lines kept when an agent comment is posted.
+const TOOL_TRACE_MAX = 10;
 /// Manager slot key separator: a card run's slot is `<agent>#<card id>`.
 const SLOT_SEP = "#";
 const PUSH_FAILED_PREFIX = "push failed";
@@ -149,6 +154,8 @@ export default function Task() {
   const [dEstimate, setDEstimate] = useState("");
   const [dImage, setDImage] = useState("");
   const [dThinking, setDThinking] = useState(false);
+  const [dAgentLive, setDAgentLive] = useState("");
+  const mentionRunId = useRef<string | null>(null);
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
   const commentsEnd = useRef<HTMLDivElement | null>(null);
   const [dragOver, setDragOver] = useState<ColumnId | null>(null);
@@ -370,10 +377,32 @@ export default function Task() {
   }
 
   function mentioned_agent(body: string): string | null {
-    const found = body.match(/@([\w.-]+)/g);
+    const found = body.match(/@[\w.-]+/g);
     if (!found) return null;
     const lower = found.map((m) => m.slice(1).toLowerCase());
     return mentionable_agents().find((n) => lower.includes(n.toLowerCase())) || null;
+  }
+
+  function make_run_id(): string {
+    return typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : `run-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  }
+
+  /// Stream error messages that mean "stopped on purpose" — the partial
+  /// output is kept and posted instead of a failed bubble.
+  const INTERRUPT_MSGS = ["interrupted", "stream ended without a done event"];
+
+  /// Trailing tool-trace lines appended to an agent comment so the full run
+  /// output (not just the prose reply) lands on the card.
+  function trace_note(tools: string[]): string {
+    if (!tools.length) return "";
+    const tail = tools.slice(-TOOL_TRACE_MAX).join("\n");
+    return `\n\ntool trace:\n${tail}`;
+  }
+
+  function stop_mention() {
+    if (mentionRunId.current) cancel_chat_run(mentionRunId.current);
   }
 
   async function comment(e: React.FormEvent) {
@@ -388,15 +417,53 @@ export default function Task() {
       setDComments(await fetch_comments(detail.id));
       if (agent) {
         setDThinking(true);
+        setDAgentLive("");
+        const run_id = make_run_id();
+        mentionRunId.current = run_id;
+        const tools: string[] = [];
+        let streamed = "";
         try {
           const text = body.replace(new RegExp(`@${agent}`, "gi"), "").trim();
-          const reply = await chat(text, detail.id, agent);
-          const out = String(reply.reply || "").trim();
-          if (out) {
-            await add_comment(detail.id, `${agent}: ${out}`);
+          const reply = await chat_zai_stream(
+            text,
+            "",
+            undefined,
+            agent,
+            undefined,
+            undefined,
+            (ev: ChatStreamEvent) => {
+              if (ev.type === "turn") {
+                streamed = "";
+                setDAgentLive("");
+              } else if (ev.type === "delta") {
+                streamed += ev.text;
+                setDAgentLive(streamed);
+              } else if (ev.type === "tool") {
+                tools.push(`${ev.tool}: ${ev.summary || ev.input}`);
+              }
+            },
+            run_id
+          );
+          const out = String(reply.reply || streamed).trim();
+          if (out || tools.length) {
+            await add_comment(detail.id, `${agent}: ${out}${trace_note(tools)}`);
+          }
+        } catch (err) {
+          // an interrupted or dropped stream keeps its partial output
+          const msg = String((err as Error)?.message ?? err);
+          const partial = streamed.trim();
+          if (INTERRUPT_MSGS.includes(msg) && (partial || tools.length)) {
+            await add_comment(
+              detail.id,
+              `${agent}: (interrupted)${partial ? `\n${partial}` : ""}${trace_note(tools)}`
+            );
+          } else {
+            throw err;
           }
         } finally {
+          mentionRunId.current = null;
           setDThinking(false);
+          setDAgentLive("");
         }
       }
       setDComments(await fetch_comments(detail.id));
@@ -1046,8 +1113,19 @@ export default function Task() {
                   </div>
                 ))}
                 {dThinking && (
-                  <div className="task-comment task-comment-agent task-thinking">
-                    <Loader2 size={13} className="spin" /> agent is thinking…
+                  <div className="task-comment task-comment-agent task-thinking" aria-live="polite">
+                    <div>
+                      <Loader2 size={13} className="spin" /> agent is thinking…
+                      <button
+                        type="button"
+                        className="task-mention-stop"
+                        onClick={stop_mention}
+                        title="interrupt this agent run"
+                      >
+                        <XCircle size={13} /> stop
+                      </button>
+                    </div>
+                    {dAgentLive && <pre className="task-agent-live">{dAgentLive}</pre>}
                   </div>
                 )}
                 <div ref={commentsEnd} />
@@ -1127,14 +1205,27 @@ export default function Task() {
                 placeholder="image name… (empty clears)"
               />
               {detail && (
-                <button
-                  type="button"
-                  className="task-run-inline"
-                  onClick={() => run(detail)}
-                  disabled={runningId != null}
-                >
-                  {runningId === detail.id ? <Loader2 size={13} className="spin" /> : <Play size={13} />} run now
-                </button>
+                <>
+                  <button
+                    type="button"
+                    className="task-run-inline"
+                    onClick={() => run(detail)}
+                    disabled={runningId != null}
+                  >
+                    {runningId === detail.id ? <Loader2 size={13} className="spin" /> : <Play size={13} />} run now
+                  </button>
+                  <button
+                    type="button"
+                    className="task-run-inline"
+                    onClick={async () => {
+                      await cancel_card_run(detail.id).catch(() => {});
+                      await refresh();
+                    }}
+                    title="interrupt the in-flight run at the next tool round"
+                  >
+                    <XCircle size={13} /> stop run
+                  </button>
+                </>
               )}
               {detail?.agent_name && (
                 <button

@@ -2578,6 +2578,27 @@ button {
   color: #8a8a94;
 }
 
+.task-mention-stop {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: #ff7b7b;
+  cursor: pointer;
+}
+
+.task-agent-live {
+  margin: 0.4rem 0 0;
+  max-height: 12rem;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.85em;
+  color: #b6b6c0;
+}
+
 .task-run-inline {
   display: inline-flex;
   align-items: center;

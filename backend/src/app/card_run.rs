@@ -8,8 +8,11 @@
 //! branch and opens a GitHub PR; the terminal output lands on the card as a
 //! comment.
 
+use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
+
+use crate::domain::CancelFlag;
 
 use manager_rs::manager::{Manager, RemoteRepo, TaskOutcome};
 use task_rs::store::{CardRow, RunRecordNew, StoreError};
@@ -27,6 +30,7 @@ pub const RUN_KEY: &str = "run";
 pub const RUN_PROGRESS_KEY: &str = "progress";
 pub const MOVE_POSITION_TOP: i32 = 0;
 pub const NOTE_NO_AGENT: &str = "no agent assigned to the card";
+pub const NOTE_RUN_CANCELLED: &str = "run cancelled by user";
 pub const NOTE_NO_ENGINE: &str = "no inference engine configured";
 pub const INFER_MAX_TOKENS: usize = 1024;
 pub const OUTPUT_PREVIEW_MAX: usize = 400;
@@ -238,6 +242,46 @@ pub fn now_iso() -> String {
     chrono::Utc::now().to_rfc3339()
 }
 
+/// Registry of in-flight card runs: card id → cancel flag.
+pub type CardCancels = Arc<RwLock<HashMap<i64, CancelFlag>>>;
+
+static CARD_CANCELS: std::sync::OnceLock<CardCancels> = std::sync::OnceLock::new();
+
+fn cancel_registry() -> CardCancels {
+    CARD_CANCELS
+        .get_or_init(|| Arc::new(RwLock::new(HashMap::new())))
+        .clone()
+}
+
+/// Flag the in-flight run for `card_id` (if any). Returns true when a run
+/// was live; the run notices at the next tool round and tears down.
+pub fn cancel_run(card_id: i64) -> bool {
+    let registry = cancel_registry();
+    let flag = registry.read().ok().and_then(|r| r.get(&card_id).cloned());
+    let ok = flag.is_some_and(|f| {
+        f.cancel();
+        true
+    });
+    if ok {
+        crate::app::events::publish(crate::app::events::EventKind::Card);
+    }
+    ok
+}
+
+fn register_cancel(card_id: i64) -> CancelFlag {
+    let cancel = CancelFlag::new();
+    if let Ok(mut r) = cancel_registry().write() {
+        r.insert(card_id, cancel.clone());
+    }
+    cancel
+}
+
+fn unregister_cancel(card_id: i64) {
+    if let Ok(mut r) = cancel_registry().write() {
+        r.remove(&card_id);
+    }
+}
+
 /// Run the card's assigned agent once. A card without an agent still records
 /// a failed run so the card moves on instead of silently staying put.
 /// The agent's configured model is routed through `engines` first (cloud
@@ -260,8 +304,9 @@ pub async fn run_card(
         crate::app::events::publish(crate::app::events::EventKind::Card);
     }
     move_to_column(app, card_id, &card.column_id, TaskStatus::InProgress).await?;
+    let cancel = register_cancel(card_id);
     let record = match select_mode(wt, &card) {
-        RunMode::Text => execute(app, engine.as_ref(), engines, &card).await,
+        RunMode::Text => execute(app, engine.as_ref(), engines, &card, &cancel).await,
         RunMode::Work(bound) => {
             execute_work(
                 app,
@@ -270,10 +315,12 @@ pub async fn run_card(
                 &card,
                 wt.expect("mode selected with work tree"),
                 bound,
+                &cancel,
             )
             .await
         }
     };
+    unregister_cancel(card_id);
     persist(app, card_id, &card, record, trigger).await
 }
 
@@ -282,6 +329,7 @@ async fn execute(
     engine: Option<&Arc<dyn Inference>>,
     engines: Option<&dyn ModelEngines>,
     card: &CardRow,
+    cancel: &CancelFlag,
 ) -> RunRecord {
     let agent = card.agent_name.clone().unwrap_or_default();
     match (engine, card.agent_name.as_deref()) {
@@ -290,6 +338,9 @@ async fn execute(
         (Some(engine), Some(name)) => match app.agents.by_name(name).await.ok().flatten() {
             None => fail(&agent, NOTE_NO_AGENT),
             Some(cfg) => {
+                if cancel.is_cancelled() {
+                    return fail(&agent, NOTE_RUN_CANCELLED);
+                }
                 let model = cfg.model.trim();
                 let routed = engines
                     .and_then(|e| e.engine_for(model))
@@ -572,6 +623,7 @@ async fn execute_work(
     card: &CardRow,
     wt: &WorkTree,
     bound: BoundRepo,
+    cancel: &CancelFlag,
 ) -> RunRecord {
     let agent = card.agent_name.clone().unwrap_or_default();
     let Some(engine) = engine else {
@@ -604,6 +656,10 @@ async fn execute_work(
     let mut no_tool_replies = 0usize;
     let mut ran_out = true;
     for round in 0..CARD_TOOL_ROUNDS {
+        if cancel.is_cancelled() {
+            ran_out = false;
+            break;
+        }
         let prompt = work_prompt(&cfg, card, &transcript, &skills, &branch);
         let reply = match submit_retry(app, card.id, engine, engines, &cfg, prompt, WORK_MAX_TOKENS)
             .await
@@ -642,12 +698,19 @@ async fn execute_work(
             WorkStep::Final(_) => unreachable!("final handled during parse"),
         }
     }
-    let rounds_note = if ran_out {
+    let cancelled = cancel.is_cancelled();
+    let rounds_note = if cancelled {
+        NOTE_RUN_CANCELLED.to_owned()
+    } else if ran_out {
         NOTE_ROUNDS_OUT.to_owned()
     } else {
         String::new()
     };
-    let publish = publish_work(wt, &bound, &branch, &card.title).await;
+    let publish = if cancelled {
+        Publish::Nothing
+    } else {
+        publish_work(wt, &bound, &branch, &card.title).await
+    };
     teardown(app, card.id, wt, &bound.slot, &agent).await;
     match publish {
         // No commits is a failed run, not a passed one: the card moves to the

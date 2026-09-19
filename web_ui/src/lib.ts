@@ -1159,6 +1159,20 @@ export async function chat(
   return res.json();
 }
 
+/// Ask the backend to interrupt the card's in-flight agent run (it stops at
+/// the next tool round, tears its slot down and posts the output comment).
+export async function cancel_card_run(id: number): Promise<boolean> {
+const headers: Record<string, string> = { "Content-Type": "application/json" };
+const token = get_token();
+if (token) headers.Authorization = `Bearer ${token}`;
+const res = await fetch(`${API_BASE}/api/task/cards/${id}/cancel`, {
+  method: "POST",
+  headers,
+});
+if (!res.ok) throw new ApiError(res.status, await res.text());
+return res.json();
+}
+
 export interface HostSpec {
   hostname: string;
   os: string;
