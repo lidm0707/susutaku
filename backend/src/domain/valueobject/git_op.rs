@@ -14,6 +14,11 @@ pub enum GitOp {
     Branch {
         name: String,
     },
+    /// Publish automation only: create-or-move `name` to HEAD and check it
+    /// out, so the task branch holds the task commits before push/PR.
+    TaskBranch {
+        name: String,
+    },
     Commit {
         message: String,
     },

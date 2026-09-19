@@ -18,6 +18,24 @@ impl GitRepo {
         self.checkout_branch(name)
     }
 
+    /// Creates `name` at HEAD when missing, otherwise MOVES it to HEAD, then
+    /// checks it out. Publish uses this so the task branch always contains
+    /// the run's commits, even when the agent switched branches mid-run.
+    pub fn move_branch_to_head(&self, name: &str) -> Result<(), GitError> {
+        let commit = self.raw().head()?.peel_to_commit()?;
+        match self.raw().find_branch(name, git2::BranchType::Local) {
+            Ok(mut branch) => {
+                branch
+                    .get_mut()
+                    .set_target(commit.id(), "reconcile task branch")?;
+            }
+            Err(_) => {
+                self.raw().branch(name, &commit, false)?;
+            }
+        }
+        self.checkout_branch(name)
+    }
+
     /// Checks out the local branch `name` (work tree + HEAD ref).
     pub fn checkout_branch(&self, name: &str) -> Result<(), GitError> {
         let commit = self

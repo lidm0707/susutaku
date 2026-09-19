@@ -114,8 +114,8 @@ pub fn script_for(tool: &GitTool) -> Result<(String, Option<String>), String> {
             );
             Ok((script, Some(token)))
         }
-        GitTool::Clone { .. } | GitTool::Status | GitTool::Diff => {
-            Err("clone/status/diff run host-side, not in the sandbox".to_string())
+        GitTool::Clone { .. } | GitTool::Status | GitTool::Diff | GitTool::TaskBranch { .. } => {
+            Err("clone/status/diff/task-branch run host-side, not in the sandbox".to_string())
         }
     }
 }

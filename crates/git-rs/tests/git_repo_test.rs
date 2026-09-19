@@ -96,3 +96,32 @@ fn task_branch_create_checkout_is_idempotent_and_isolates_work() {
 
     fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn move_branch_to_head_reconciles_a_stranded_branch() {
+    let dir = temp_tree("reconcile");
+    let repo = GitRepo::init(&dir).unwrap();
+    fs::write(dir.join("a.txt"), "one\n").unwrap();
+    let base = repo.commit_all("initial").unwrap();
+
+    // spawn checks out the deterministic task branch at base
+    repo.create_checkout_branch("task/35-zai").unwrap();
+
+    // the agent invents its own branch and commits there
+    repo.create_checkout_branch("test-push-branch").unwrap();
+    fs::write(dir.join("b.txt"), "work\n").unwrap();
+    let work = repo.commit_all("test: verify push").unwrap();
+
+    // publish reconcile: the task branch must end up carrying that commit
+    repo.move_branch_to_head("task/35-zai").unwrap();
+    assert_eq!(repo.head_oid().unwrap(), work);
+
+    // missing branch is created at HEAD; moving a branch to itself is a no-op
+    repo.move_branch_to_head("task/35-zai").unwrap();
+    assert_eq!(repo.head_oid().unwrap(), work);
+
+    // base commit's tree has no b.txt: the work is only on the task branch
+    assert_ne!(base, work);
+
+    fs::remove_dir_all(&dir).unwrap();
+}

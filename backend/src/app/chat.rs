@@ -601,6 +601,10 @@ impl ChatUseCase {
                 };
                 Ok((op, label))
             }
+            // Publish automation only — never produced by chat tool parsing.
+            GitOp::TaskBranch { .. } => {
+                Err("task branch reconcile is run automation only".to_string())
+            }
         }
     }
 

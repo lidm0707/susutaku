@@ -72,6 +72,10 @@ pub const NOTE_WRITE_ERR: &str = "file write failed: ";
 pub const NOTE_JOIN: &str = "manager task panicked";
 pub const DENIED_NOTE: &str =
     "tool denied in a card run: use SHELL, AGENT_RUN, GIT or the coding write_file block";
+pub const NOTE_BRANCH_DENIED: &str = "branch switch denied in a card run: all work stays on the checked-out task branch — the run pushes exactly that branch and opens the PR";
+/// `{branch}` placeholder: names the run's task branch so the model never
+/// invents its own (e.g. `test-push-branch`) and never commits to main.
+pub const BRANCH_RULE: &str = "BRANCH: the task branch `{branch}` is already checked out. Do ALL work on it: never create or switch branches (GIT BRANCH is denied), never commit to main. The run commits, pushes exactly `{branch}` and opens the PR `{pr_base}` <- `{branch}`.\n";
 pub const TOOL_HINT: &str = "You are working alone in a sandboxed work tree of the project's git repo (a task branch is checked out). Edit real files, one tool call per reply. Every tool line MUST start with exactly 'TOOL: ' — a line that only says 'SHELL ...' is NOT a tool call and ends the run:\n- TOOL: SHELL <cmd> - run a shell command in the work tree\n- TOOL: AGENT_RUN <cmd> - run a shell command in the work tree (alias)\n- TOOL: GIT STATUS | DIFF | BRANCH <name> | COMMIT <message> | PUSH <branch> | PR <title>\n- coding block: <invoke name=\"coding\"><parameter name=\"path\">rel/path</parameter><parameter name=\"code\">file content</parameter></invoke>\nBUDGET: at most 2 exploration rounds (ls/cat/grep). After that you MUST write code — use the coding block to create or edit at least one file EVERY round until the feature is complete. Reading is NOT progress. The run is graded on files changed. When done, reply with a final text summary (no tool line); the run publishes the branch and opens a PR automatically.\n";
 pub const PUBLISH_BRANCH: &str = "\n\nbranch: ";
 pub const PUBLISH_PUSH: &str = "\npush: ";
@@ -153,6 +157,15 @@ impl WorkTree {
     pub async fn task_has_commits(&self, slot: &str) -> Result<bool, String> {
         let (m, slot) = (self.manager.clone(), slot.to_owned());
         tokio::task::spawn_blocking(move || m.task_has_commits(&slot))
+            .await
+            .map_err(|_| NOTE_JOIN.to_owned())?
+    }
+
+    /// The slot's task branch as recorded at spawn — the single source of
+    /// truth for publish; falls back to the derived name for legacy slots.
+    pub async fn slot_branch(&self, slot: &str) -> Result<Option<String>, String> {
+        let (m, slot) = (self.manager.clone(), slot.to_owned());
+        tokio::task::spawn_blocking(move || m.slot_task_branch(&slot))
             .await
             .map_err(|_| NOTE_JOIN.to_owned())?
     }
@@ -380,9 +393,15 @@ pub fn work_prompt(
     card: &CardRow,
     transcript: &str,
     skills: &[SkillRow],
+    branch: &str,
 ) -> String {
     let mut prompt = task_prompt(cfg, card, skills);
     prompt.push_str(TEXT_SEP);
+    prompt.push_str(
+        &BRANCH_RULE
+            .replace("{branch}", branch)
+            .replace("{pr_base}", PR_BASE),
+    );
     prompt.push_str(TOOL_HINT);
     prompt.push_str(transcript);
     prompt
@@ -573,12 +592,19 @@ async fn execute_work(
         Ok(tree) => tree,
         Err(e) => return fail(&agent, &format!("{NOTE_SPAWN_ERR}{e}")),
     };
+    // One branch name for the whole run: prompt, push and PR all use the
+    // slot's spawn-time task branch (fallback derives the same name).
+    let branch = match wt.slot_branch(&bound.slot).await {
+        Ok(Some(b)) => b,
+        Ok(None) => task_branch(&bound.agent, &bound.task),
+        Err(e) => return fail(&agent, &format!("{NOTE_SPAWN_ERR}{e}")),
+    };
     let mut transcript = String::new();
     let mut final_text = String::new();
     let mut no_tool_replies = 0usize;
     let mut ran_out = true;
     for round in 0..CARD_TOOL_ROUNDS {
-        let prompt = work_prompt(&cfg, card, &transcript, &skills);
+        let prompt = work_prompt(&cfg, card, &transcript, &skills, &branch);
         let reply = match submit_retry(app, card.id, engine, engines, &cfg, prompt, WORK_MAX_TOKENS)
             .await
         {
@@ -621,7 +647,7 @@ async fn execute_work(
     } else {
         String::new()
     };
-    let publish = publish_work(wt, &bound, &card.title).await;
+    let publish = publish_work(wt, &bound, &branch, &card.title).await;
     teardown(app, card.id, wt, &bound.slot, &agent).await;
     match publish {
         // No commits is a failed run, not a passed one: the card moves to the
@@ -663,13 +689,12 @@ enum Publish {
 /// Commit the pending work, push the task branch, open the PR against
 /// [`PR_BASE`]. Ships both committed AND uncommitted work: dirty edits are
 /// committed here so an agent that edited but never ran GIT COMMIT still
-/// lands a PR. A PR failure does not fail the run: the branch is already
-/// on the remote and review can happen there.
-async fn publish_work(wt: &WorkTree, bound: &BoundRepo, title: &str) -> Publish {
-    let has = match wt.task_has_commits(&bound.slot).await {
-        Ok(v) => v,
-        Err(e) => return Publish::Failed(e),
-    };
+/// lands a PR. The branch is [`WorkTree::slot_branch`] — recorded at spawn —
+/// and is first reconciled to HEAD, so commits the agent stranded on another
+/// branch (e.g. a self-invented `test-push-branch`) land on the task branch
+/// before push and PR. A PR failure does not fail the run: the branch is
+/// already on the remote and review can happen there.
+async fn publish_work(wt: &WorkTree, bound: &BoundRepo, branch: &str, title: &str) -> Publish {
     let diff = match ManagerGit::to_proto(&GitOp::Diff) {
         Ok(tool) => wt.git(&bound.slot, tool).await,
         Err(e) => return Publish::Failed(e),
@@ -678,12 +703,6 @@ async fn publish_work(wt: &WorkTree, bound: &BoundRepo, title: &str) -> Publish 
         Ok(d) => diff_is_dirty(&d),
         Err(e) => return Publish::Failed(e),
     };
-    // Nothing only when the tree is clean AND there are no task commits:
-    // anything else is shippable work.
-    if !has && !dirty {
-        return Publish::Nothing;
-    }
-    let branch = task_branch(&bound.agent, &bound.task);
     if dirty {
         // The commit script is a no-op when nothing is staged, so this is
         // safe even on a racy tree.
@@ -697,8 +716,24 @@ async fn publish_work(wt: &WorkTree, bound: &BoundRepo, title: &str) -> Publish 
             return Publish::Failed(format!("commit: {e}"));
         }
     }
+    // Gate AFTER the commit: push needs at least one commit past the spawn
+    // HEAD, else the remote branch would point at main and every PR would
+    // die with "No commits between main and <branch>".
+    let has = match wt.task_has_commits(&bound.slot).await {
+        Ok(v) => v,
+        Err(e) => return Publish::Failed(e),
+    };
+    if !has {
+        return Publish::Nothing;
+    }
+    let reconcile = proto_rs::GitTool::TaskBranch {
+        name: branch.to_owned(),
+    };
+    if let Err(e) = wt.git(&bound.slot, reconcile).await {
+        return Publish::Failed(format!("task branch: {e}"));
+    }
     let push = ManagerGit::to_proto(&GitOp::Push {
-        branch: branch.clone(),
+        branch: branch.to_owned(),
         url: Some(bound.url.clone()),
         token: (!bound.token.is_empty()).then(|| bound.token.clone()),
     });
@@ -711,18 +746,18 @@ async fn publish_work(wt: &WorkTree, bound: &BoundRepo, title: &str) -> Publish 
         Err(e) => return Publish::Failed(format!("push: {e}")),
     };
     let pr = match ManagerGit::to_proto(&GitOp::PullRequest {
-        title: branch.clone(),
-        head: branch.clone(),
+        title: branch.to_owned(),
+        head: branch.to_owned(),
         base: PR_BASE.to_owned(),
         url: Some(bound.url.clone()),
         token: (!bound.token.is_empty()).then(|| bound.token.clone()),
     }) {
         Ok(tool) => wt.git(&bound.slot, tool).await,
-        Err(e) => return Publish::Done(branch, push, format!("failed: {e}")),
+        Err(e) => return Publish::Done(branch.to_owned(), push, format!("failed: {e}")),
     };
     match pr {
-        Ok(out) => Publish::Done(branch, push, out),
-        Err(e) => Publish::Done(branch, push, format!("failed: {e}")),
+        Ok(out) => Publish::Done(branch.to_owned(), push, out),
+        Err(e) => Publish::Done(branch.to_owned(), push, format!("failed: {e}")),
     }
 }
 
@@ -948,6 +983,12 @@ async fn exec_tool(wt: &WorkTree, bound: &BoundRepo, work_tree: &Path, call: Too
     match call {
         ToolCall::Shell(cmd) => tool_out(wt.run(&bound.slot, &cmd).await),
         ToolCall::AgentRun { cmd, .. } => tool_out(wt.run(&bound.slot, &cmd).await),
+        // Branch moves are publish-automation territory: a model-invented
+        // branch strands commits off the task branch and dead-ends the PR.
+        ToolCall::Git {
+            op: GitOp::Branch { .. },
+            ..
+        } => NOTE_BRANCH_DENIED.to_owned(),
         ToolCall::Git { op, .. } => match ManagerGit::to_proto(&bind_op(op, bound)) {
             Ok(tool) => tool_out(wt.git(&bound.slot, tool).await),
             Err(e) => e,

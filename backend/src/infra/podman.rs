@@ -121,6 +121,7 @@ impl Runner for AgentSandbox {
             },
             GitOp::Status => proto_rs::GitTool::Status,
             GitOp::Diff => proto_rs::GitTool::Diff,
+            GitOp::TaskBranch { name } => proto_rs::GitTool::TaskBranch { name: name.clone() },
             GitOp::Branch { .. }
             | GitOp::Commit { .. }
             | GitOp::Push { .. }

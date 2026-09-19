@@ -29,6 +29,7 @@ pub fn apply(work_tree: &Path, tool: &GitTool) -> Result<String, String> {
         GitTool::Status => status(work_tree),
         GitTool::Diff => diff(work_tree),
         GitTool::Branch { name } => branch(work_tree, name),
+        GitTool::TaskBranch { name } => task_branch_at_head(work_tree, name),
         GitTool::Commit { message } => commit(work_tree, message),
         GitTool::Push { branch, url, token } => {
             push(work_tree, branch, url.as_deref(), token.as_deref())
@@ -122,6 +123,14 @@ fn branch(workspace: &Path, name: &str) -> Result<String, String> {
     repo.create_checkout_branch(name)
         .map_err(|e| e.to_string())?;
     Ok(format!("on branch {name}"))
+}
+
+/// Publish-side reconcile: create-or-move `name` to HEAD and check it out,
+/// so the task branch carries the task commits before push and PR.
+fn task_branch_at_head(workspace: &Path, name: &str) -> Result<String, String> {
+    let repo = GitRepo::open(workspace).map_err(|e| e.to_string())?;
+    repo.move_branch_to_head(name).map_err(|e| e.to_string())?;
+    Ok(format!("branch {name} now at HEAD"))
 }
 
 /// Commits all pending work; a clean tree is a reported no-op, matching the

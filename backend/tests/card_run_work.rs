@@ -2,7 +2,7 @@
 //! the slot key, the prompt build and the bound-repo op resolution.
 
 use backend::app::card_run::{
-    BoundRepo, WorkStep, bind_op, resolve_in_tree, slot_key, work_prompt, work_step,
+    BoundRepo, WorkStep, bind_op, resolve_in_tree, slot_key, task_branch, work_prompt, work_step,
 };
 use backend::domain::GitOp;
 use std::path::Path;
@@ -107,7 +107,13 @@ fn work_prompt_carries_task_and_hint() {
         estimate: None,
         image: None,
     };
-    let prompt = work_prompt(&cfg, &card, "Tool results:\n- SHELL ls\n", &[]);
+    let prompt = work_prompt(
+        &cfg,
+        &card,
+        "Tool results:\n- SHELL ls\n",
+        &[],
+        "task/7-dev",
+    );
     assert!(prompt.contains("persona: tester"));
     assert!(prompt.contains("task:"));
     assert!(prompt.contains("fix the bug"));
@@ -144,11 +150,50 @@ fn work_prompt_embeds_attached_skills() {
         name: "susutaku-project".into(),
         body: "cargo check && cargo clippy".into(),
     }];
-    let prompt = work_prompt(&cfg, &card, "", &skills);
+    let prompt = work_prompt(&cfg, &card, "", &skills, "task/7-dev");
     assert!(prompt.contains("project skills:"));
     assert!(prompt.contains("## susutaku-project"));
     assert!(prompt.contains("cargo check && cargo clippy"));
     assert!(prompt.ends_with("cargo check && cargo clippy\n\n") || prompt.contains("clippy\n"));
+}
+
+#[test]
+fn task_branch_is_deterministic() {
+    assert_eq!(task_branch("zai", "35"), "task/35-zai");
+    assert_eq!(task_branch("z ai", "3/5"), "task/3_5-z_ai");
+}
+
+#[test]
+fn work_prompt_names_the_task_branch() {
+    let cfg = work_cfg();
+    let card = CardRow {
+        id: 35,
+        column_id: "todo".into(),
+        project_id: Some(1),
+        title: "verify push".into(),
+        description: String::new(),
+        priority: "normal".into(),
+        position: 0,
+        agent_name: Some("zai".into()),
+        agent_state: None,
+        run_status: String::new(),
+        last_agent: None,
+        last_run_id: None,
+        assignee: None,
+        cron: None,
+        deadline: None,
+        labels: None,
+        checklist: None,
+        estimate: None,
+        image: None,
+    };
+    let prompt = work_prompt(&cfg, &card, "", &[], "task/35-zai");
+    // the model must see the exact branch and never invent one like
+    // test-push-branch; PR head/base must match the publish step
+    assert!(prompt.contains("`task/35-zai`"));
+    assert!(prompt.contains("`main` <- `task/35-zai`"));
+    assert!(prompt.contains("GIT BRANCH is denied"));
+    assert!(!prompt.contains("test-push-branch"));
 }
 
 #[test]

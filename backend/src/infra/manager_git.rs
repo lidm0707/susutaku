@@ -25,6 +25,7 @@ impl ManagerGit {
             GitOp::Status => Ok(proto_rs::GitTool::Status),
             GitOp::Diff => Ok(proto_rs::GitTool::Diff),
             GitOp::Branch { name } => Ok(proto_rs::GitTool::Branch { name: name.clone() }),
+            GitOp::TaskBranch { name } => Ok(proto_rs::GitTool::TaskBranch { name: name.clone() }),
             GitOp::Commit { message } => Ok(proto_rs::GitTool::Commit {
                 message: message.clone(),
             }),

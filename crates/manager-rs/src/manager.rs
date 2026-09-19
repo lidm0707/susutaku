@@ -263,6 +263,15 @@ impl Manager {
         git_state::apply(&slot.sandbox.root(), tool)
     }
 
+    /// The task branch the slot's work landed on — created at spawn from
+    /// `task/<task>-<agent>`. Single source of truth for publish: push and
+    /// PR must use this name, never a re-derived one. `None` for slots that
+    /// are not task-scoped.
+    pub fn slot_task_branch(&self, agent: &str) -> Result<Option<String>, String> {
+        let slot = self.slot(agent)?;
+        Ok(slot.branch.clone())
+    }
+
     /// Whether the slot's HEAD advanced past the base commit recorded at
     /// spawn — i.e. this task produced at least one commit. Publish (push
     /// and PR) must be gated on this: a dirty work-dir diff alone can come

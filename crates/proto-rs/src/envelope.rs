@@ -61,6 +61,12 @@ pub enum GitTool {
     Branch {
         name: String,
     },
+    /// Publish-side reconcile: create-or-move a local branch to HEAD and
+    /// check it out. Never parsed from agent tool lines — the run automation
+    /// issues it so the task branch always contains the task commits.
+    TaskBranch {
+        name: String,
+    },
     Commit {
         message: String,
     },
