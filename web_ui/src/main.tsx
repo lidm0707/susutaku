@@ -10,7 +10,7 @@ import Settings from "./pages/Settings.jsx";
 import Sandbox from "./pages/Sandbox.jsx";
 import Attachments from "./pages/Attachments.jsx";
 import Routines from "./pages/Routines.tsx";
-import { get_token } from "./lib.js";
+import { get_token, set_query_param } from "./lib.js";
 import { Toaster } from "./ui/Toast.jsx";
 import SideNav from "./components/SideNav.tsx";
 import { WorkspaceProvider } from "./components/WorkspaceContext.tsx";
@@ -57,7 +57,7 @@ function App() {
         </Routes>
         </div>
         <SideNav on_chat={() => set_chat_open((o) => !o)} chat_open={chat_open} shifted={chat_open && docked} />
-        <ChatModal open={chat_open} on_close={() => set_chat_open(false)} />
+        <ChatModal open={chat_open} on_close={() => { set_chat_open(false); set_query_param(CHAT_PARAM, null); }} />
         </ProjectProvider>
       <Toaster />
     </WorkspaceProvider>
