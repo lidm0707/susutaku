@@ -54,6 +54,37 @@ const TOAST_MS = 4000;
 
 const THREAD_TITLE_LEN = 24;
 
+/// Manual context-window budget (tokens): the model APIs don't report the
+/// window size, so the user sets it; usage shows as `ctx used / limit`.
+const DEFAULT_CTX_TOKENS = 128000;
+const CTX_LIMIT_KEY = "susutaku.ctx_limit";
+const CTX_POLICY_KEY = "susutaku.ctx_policy";
+
+/// What happens on the next send when the context budget is full.
+type CtxPolicy = "warn" | "new_thread" | "keep_going";
+const CTX_POLICIES: readonly CtxPolicy[] = ["warn", "new_thread", "keep_going"];
+const CTX_POLICY_LABELS: Record<CtxPolicy, string> = {
+  warn: "full: block",
+  new_thread: "full: new thread",
+  keep_going: "full: keep going",
+};
+
+function read_ctx_policy(): CtxPolicy {
+  const v = localStorage.getItem(CTX_POLICY_KEY);
+  return CTX_POLICIES.includes(v as CtxPolicy) ? (v as CtxPolicy) : "warn";
+}
+
+function read_ctx_limit(): number {
+  const v = Number(localStorage.getItem(CTX_LIMIT_KEY));
+  return Number.isFinite(v) && v > 0 ? v : DEFAULT_CTX_TOKENS;
+}
+
+/// Compact token count like Zed: 51200 -> "51.2k".
+function fmt_k(n: number): string {
+  if (n < 1000) return String(n);
+  return `${(n / 1000).toFixed(n < 10000 ? 1 : 0)}k`;
+}
+
 const SCROLL_STICK_PX = 48;
 
 const CARD_MIME = "application/x-susutaku-card";
@@ -456,6 +487,8 @@ interface Msg {
   thinking?: string;
   agent_name?: string;
   model?: string;
+  prompt_tokens?: number;
+  tokens?: number;
   prompt_tps?: number;
   tps?: number;
   /// annotated screenshot attached to this message
@@ -522,6 +555,8 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
   // per-thread queued message: sending while busy parks the text here instead
   // of interrupting — Send Now interrupts, run completion auto-flushes
   const [queued, setQueued] = useState<Record<number, QueuedMsg | undefined>>({});
+  const [ctxLimit, setCtxLimit] = useState<number>(read_ctx_limit);
+  const [ctxPolicy, setCtxPolicy] = useState<CtxPolicy>(read_ctx_policy);
   const queuedRef = useRef(queued);
   queuedRef.current = queued;
   function bump_busy(tid: number, d: number) {
@@ -743,6 +778,7 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
   // keep ?chat=<server id> in the url pointing at the active thread so a
   // page refresh reopens the same chat instead of falling back to a new one
   useEffect(() => {
+    if (!open) return;
     const t = threads.find((x) => x.id === activeId);
     const sid = t?.server_id ?? null;
     const params = new URLSearchParams(window.location.search);
@@ -751,7 +787,7 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
     else params.set(CHAT_PARAM, String(sid));
     const q = params.toString();
     window.history.replaceState(null, "", window.location.pathname + (q ? `?${q}` : ""));
-  }, [activeId, threads]);
+  }, [open, activeId, threads]);
 
   function toggle_dock() {
     setDocked((d) => {
@@ -984,13 +1020,18 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
       return;
     }
     const tid = activeId;
+    const policy = apply_ctx_policy(tid);
+    if (policy.block) {
+      setError(policy.block);
+      return;
+    }
     // one image per message on the wire: the first rides with the text, the
     // rest go out sequentially as image-only follow-ups
     const images = [...pendingImages];
     setInput("");
     write_draft(thread_key(threads.find((t) => t.id === tid), project_id), "");
     setPendingImages([]);
-    await dispatch(text, images, tid);
+    await dispatch(text, images, policy.tid ?? tid);
   }
 
   async function dispatch(text: string, images: string[], tid: number) {
@@ -1134,6 +1175,8 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
           ? { id: Number(created[1]), project_id: Number(created[2]), title: created[3] }
           : undefined,
         model: data.model,
+        prompt_tokens: data.prompt_tokens,
+        tokens: data.decode_tokens,
         prompt_tps: data.prompt_tps,
         tps: data.decode_tps,
         tools: data.tools,
@@ -1203,6 +1246,40 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
       : selected
           .map((a) => `${a.name}${a.model ? ` · ${pretty_name(a.model)}` : ""}`)
           .join(", ");
+
+  // context size of the active thread = input tokens of the latest turn
+  const ctxUsed = [...messages]
+    .reverse()
+    .find((m) => m.role === "assistant" && !!m.prompt_tokens)?.prompt_tokens ?? 0;
+
+  /// Apply the context-full policy for a thread: returns an error string when
+  /// the send must be blocked, or a replacement thread id when the send was
+  /// moved to a fresh thread (undefined = send as-is).
+  function apply_ctx_policy(tid: number): { block?: string; tid?: number } {
+    const msgs = threads.find((t) => t.id === tid)?.messages ?? [];
+    const used = [...msgs]
+      .reverse()
+      .find((m) => m.role === "assistant" && !!m.prompt_tokens)?.prompt_tokens ?? 0;
+    if (used < ctxLimit) return {};
+    switch (ctxPolicy) {
+      case "warn":
+        return {
+          block: `context full (${fmt_k(used)} / ${fmt_k(ctxLimit)} tokens) — start a new thread or raise the limit`,
+        };
+      case "new_thread": {
+        const id = nextThreadId.current++;
+        setThreads((ts) => [
+          ...ts,
+          { id, title: `thread ${id + 1}`, messages: [], server_id: null, loaded: true, updated_at: Date.now() },
+        ]);
+        setActiveId(id);
+        setToast(`context full — continued in ${`thread ${id + 1}`}`);
+        return { tid: id };
+      }
+      case "keep_going":
+        return {};
+    }
+  }
 
   return (
     <Modal
@@ -1314,6 +1391,9 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
                 )}
                 {!m.pending && !m.failed && !!m.tps && m.tps > 0 && (
                   <small>{m.model} · prompt {m.prompt_tps?.toFixed(1)} tok/s · decode {m.tps.toFixed(1)} tok/s</small>
+                )}
+                {!m.pending && !m.failed && !!m.tokens && (
+                  <small>{m.model} · in {m.prompt_tokens ?? 0} · out {m.tokens} tokens</small>
                 )}
               </div>
             ))}
@@ -1479,6 +1559,37 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
                   <option value="auto">search: auto</option>
                   <option value="on">search: on</option>
                 </select>
+                <span className="chat-ctx" title="context usage — limit is set manually">
+                  ctx {fmt_k(ctxUsed)} / {fmt_k(ctxLimit)}
+                  <input
+                    type="number"
+                    min={1}
+                    value={ctxLimit}
+                    onChange={(e) => {
+                      const v = Number(e.target.value);
+                      if (Number.isFinite(v) && v > 0) {
+                        setCtxLimit(v);
+                        localStorage.setItem(CTX_LIMIT_KEY, String(v));
+                      }
+                    }}
+                    aria-label="context window limit (tokens)"
+                  />
+                  <select
+                    className="ctx-policy"
+                    value={ctxPolicy}
+                    onChange={(e) => {
+                      const p = e.target.value as CtxPolicy;
+                      setCtxPolicy(p);
+                      localStorage.setItem(CTX_POLICY_KEY, p);
+                    }}
+                    title="what to do on the next send when the context is full"
+                    aria-label="context-full policy"
+                  >
+                    {CTX_POLICIES.map((p) => (
+                      <option key={p} value={p}>{CTX_POLICY_LABELS[p]}</option>
+                    ))}
+                  </select>
+                </span>
                 <button
                   type="button"
                   className={focusOn ? "chat-capscreen on" : "chat-capscreen"}

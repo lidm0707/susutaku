@@ -12,6 +12,27 @@ pub const DELTA_FIELD: &str = "delta";
 pub const TEXT_PART: &str = "text";
 pub const IMAGE_PART: &str = "image_url";
 pub const IMAGE_URL_FIELD: &str = "url";
+pub const USAGE_FIELD: &str = "usage";
+pub const PROMPT_TOKENS_FIELD: &str = "prompt_tokens";
+pub const COMPLETION_TOKENS_FIELD: &str = "completion_tokens";
+
+/// Token usage reported by the API for one completion.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Usage {
+    pub prompt_tokens: u64,
+    pub completion_tokens: u64,
+}
+
+/// Pull token usage out of an SSE chunk or a completion body. Chunks without
+/// a `usage` object (all but the final one when streaming) yield `None`.
+pub fn extract_usage(raw: &str) -> Option<Usage> {
+    let value: Value = serde_json::from_str(raw).ok()?;
+    let usage = value.get(USAGE_FIELD)?;
+    Some(Usage {
+        prompt_tokens: usage[PROMPT_TOKENS_FIELD].as_u64().unwrap_or(0),
+        completion_tokens: usage[COMPLETION_TOKENS_FIELD].as_u64().unwrap_or(0),
+    })
+}
 
 /// Serialize the conversation for the OpenAI-compatible chat body. Messages
 /// carrying an image become multimodal content-part arrays.

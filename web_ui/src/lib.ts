@@ -42,6 +42,8 @@ export interface CodexModel {
 export interface ChatReply {
   reply?: string;
   model?: string;
+  prompt_tokens?: number;
+  decode_tokens?: number;
   prompt_tps?: number;
   decode_tps?: number;
   searched?: boolean;
@@ -335,12 +337,6 @@ export async function agent_git(
   return (reply as { output: string }).output;
 }
 
-export interface ManagerAgent {
-  agent: string;
-  work_tree: string;
-  runs: number;
-  last_cmd: string | null;
-}
 
 export interface PromptSection {
   role: string;
@@ -1288,17 +1284,6 @@ export async function run_machine_git(
   return res.output;
 }
 
-export interface ManagerAgent {
-  agent: string;
-  work_tree: string;
-  runs: number;
-  last_cmd: string | null;
-}
-
-export async function fetch_manager_agents(): Promise<ManagerAgent[]> {
-  const body = (await api("/api/manager/agents").then((r) => r.json())) as { agents: ManagerAgent[] };
-  return body.agents ?? [];
-}
 
 export interface StoredOutcome {
   agent: string;

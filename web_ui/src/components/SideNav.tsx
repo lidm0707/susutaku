@@ -32,7 +32,7 @@ import { ActivityModal } from "./ActivityModal.tsx";
 import { Modal, PromptModal } from "../ui/Overlay.js";
 import { AgentInspect, MachinesModal } from "./MachinesModal.tsx";
 import { SandboxMonitorOverlay, type SandboxMonitorTarget } from "./SandboxMonitor.tsx";
-import { AgentRunsModal } from "./AgentRunsModal.tsx";
+
 import { toast } from "../ui/Toast.js";
 import { use_projects } from "./ProjectContext.tsx";
 import QuotaBoard from "./QuotaBoard.tsx";
@@ -101,7 +101,7 @@ export default function SideNav({ on_chat, chat_open, shifted }: { on_chat: () =
   const [pw_open, set_pw_open] = useState(false);
   const [machines_open, set_machines_open] = useState(false);
   const [monitor, set_monitor] = useState<SandboxMonitorTarget | null>(null);
-  const [outputs_open, set_outputs_open] = useState(false);
+
   const [logs_agent, set_logs_agent] = useState<string | null>(null);
   const [activity_open, set_activity_open] = useState(false);
   const [quota_open, set_quota_open] = useState(false);
@@ -212,18 +212,7 @@ export default function SideNav({ on_chat, chat_open, shifted }: { on_chat: () =
             <span className="dock-label">runtime</span>
           </button>
         </div>
-        <div className="dock-profile">
-          <button
-            className={`dock-profile-btn ${outputs_open ? "open" : ""}`}
-            onClick={() => set_outputs_open((v) => !v)}
-            title="agents"
-            aria-haspopup="dialog"
-            aria-expanded={outputs_open}
-          >
-            <Bot size={16} />
-            <span className="dock-label">agents</span>
-          </button>
-        </div>
+
         <div className="dock-profile">
           <button
             className={`dock-profile-btn ${activity_open ? "open" : ""}`}
@@ -256,7 +245,7 @@ export default function SideNav({ on_chat, chat_open, shifted }: { on_chat: () =
       <AgentLogsModal agent={logs_agent} on_close={() => set_logs_agent(null)} />
       <MachinesModal open={machines_open} on_close={() => set_machines_open(false)} on_monitor={set_monitor} />
       <SandboxMonitorOverlay target={monitor} on_close={() => set_monitor(null)} />
-      <AgentRunsModal open={outputs_open} on_close={() => set_outputs_open(false)} />
+
       <ActivityModal open={activity_open} on_close={() => set_activity_open(false)} />
     </nav>
   );

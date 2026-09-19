@@ -1,5 +1,7 @@
 # Default sandbox image for agent commands (see core-agent sandbox_jail::podman).
 # Build: make sandbox-image
+FROM docker.io/library/rust:slim AS toolchain
+
 FROM debian:stable-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -11,5 +13,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
-ENV PATH=/usr/bin:/bin:/usr/sbin:/sbin
+COPY --from=toolchain /usr/local/rustup /usr/local/rustup
+COPY --from=toolchain /usr/local/cargo /usr/local/cargo
+ENV RUSTUP_HOME=/usr/local/rustup \
+    CARGO_HOME=/usr/local/cargo
+ENV PATH=/usr/local/cargo/bin:/usr/bin:/bin:/usr/sbin:/sbin
 WORKDIR /workspace

@@ -21,6 +21,8 @@ pub const CHOICES_FIELD: &str = "choices";
 pub const MESSAGE_FIELD: &str = "message";
 pub const CONTENT_FIELD: &str = "content";
 pub const STREAM_FIELD: &str = "stream";
+pub const STREAM_OPTIONS_FIELD: &str = "stream_options";
+pub const INCLUDE_USAGE_FIELD: &str = "include_usage";
 pub const SSE_DATA_PREFIX: &str = "data:";
 pub const SSE_DONE_MARKER: &str = "[DONE]";
 pub const EMPTY_BODY_NOTE: &str = "<unreadable body>";
@@ -143,17 +145,21 @@ impl ZaiClient {
         Ok(DeltaStream {
             reader: std::io::BufReader::new(Box::new(reader)),
             done: false,
+            usage: None,
         })
     }
 
     fn request_body(&self, request: &ChatRequest, stream: bool) -> String {
-        json!({
+        let mut body = json!({
             "model": self.effective_model(request),
             "messages": crate::parse::messages_value(request),
             "temperature": request.temperature,
             STREAM_FIELD: stream,
-        })
-        .to_string()
+        });
+        if stream {
+            body[STREAM_OPTIONS_FIELD] = json!({ INCLUDE_USAGE_FIELD: true });
+        }
+        body.to_string()
     }
 }
 
@@ -162,6 +168,7 @@ impl ZaiClient {
 pub struct DeltaStream {
     reader: std::io::BufReader<Box<dyn std::io::Read + Send + Sync>>,
     done: bool,
+    usage: Option<crate::parse::Usage>,
 }
 
 impl Iterator for DeltaStream {
@@ -183,8 +190,13 @@ impl Iterator for DeltaStream {
                     let payload = payload.trim();
                     if payload == SSE_DONE_MARKER {
                         self.done = true;
-                    } else if let Some(delta) = crate::parse::extract_delta(payload) {
-                        return Some(Ok(delta));
+                    } else {
+                        if let Some(u) = crate::parse::extract_usage(payload) {
+                            self.usage = Some(u);
+                        }
+                        if let Some(delta) = crate::parse::extract_delta(payload) {
+                            return Some(Ok(delta));
+                        }
                     }
                 }
                 Err(e) => {
@@ -193,6 +205,13 @@ impl Iterator for DeltaStream {
                 }
             }
         }
+    }
+}
+
+impl DeltaStream {
+    /// Usage from the final chunk, when the endpoint reported it.
+    pub fn usage(&self) -> Option<crate::parse::Usage> {
+        self.usage
     }
 }
 

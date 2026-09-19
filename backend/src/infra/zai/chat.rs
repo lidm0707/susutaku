@@ -26,6 +26,19 @@ pub enum StreamEvent {
 /// Error text returned when a run is cancelled via [`CancelFlag`].
 pub const CANCELLED: &str = "interrupted";
 
+/// Token counts from the API-reported usage; timings stay zero because the
+/// cloud endpoint only reports totals (chat replies zero the tps fields).
+fn usage_stats(usage: Option<zai_api::parse::Usage>) -> GenStats {
+    match usage {
+        Some(u) => GenStats {
+            prompt_tokens: usize::try_from(u.prompt_tokens).unwrap_or(0),
+            decode_tokens: usize::try_from(u.completion_tokens).unwrap_or(0),
+            ..GenStats::default()
+        },
+        None => GenStats::default(),
+    }
+}
+
 /// Capacity of the per-request broadcast of [`StreamEvent`]s; a slow SSE
 /// client lags instead of blocking generation.
 pub const STREAM_EVENT_CAPACITY: usize = 256;
@@ -100,9 +113,9 @@ impl ZaiEngine {
         let req = ChatRequest::new(String::new(), vec![message]);
         let _ = events.send(StreamEvent::Turn);
         match client.complete_stream(&req) {
-            Ok(stream) => {
+            Ok(mut stream) => {
                 let mut text = String::new();
-                for delta in stream {
+                for delta in stream.by_ref() {
                     if self.cancelled() {
                         // keep what was generated so far: the partial reply
                         // reaches the transcript/memory and the next send
@@ -114,7 +127,7 @@ impl ZaiEngine {
                         return Ok(GenReply {
                             model,
                             text,
-                            stats: GenStats::default(),
+                            stats: usage_stats(stream.usage()),
                         });
                     }
                     match delta {
@@ -143,7 +156,7 @@ impl ZaiEngine {
                 Ok(GenReply {
                     model,
                     text,
-                    stats: GenStats::default(),
+                    stats: usage_stats(stream.usage()),
                 })
             }
             Err(_) => {

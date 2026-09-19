@@ -4942,6 +4942,35 @@ select.agent-multi {
   border-radius: 999px;
 }
 
+/* manual context budget: `ctx used / limit` + editable limit (tokens) */
+.chat-ctx {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.75rem;
+  color: #aaa;
+  white-space: nowrap;
+}
+.chat-ctx input {
+  flex: 0 0 5.5rem;
+  width: 5.5rem;
+  padding: 0.15rem 0.3rem;
+  font-size: 0.75rem;
+  border-radius: 999px;
+  border: 1px solid #333;
+  background: #1a1a20;
+  color: #aaa;
+}
+.chat-ctx .ctx-policy {
+  font-size: 0.75rem;
+  padding: 0.15rem 0.3rem;
+  border-radius: 999px;
+  border: 1px solid #333;
+  background: #1a1a20;
+  color: #aaa;
+  cursor: pointer;
+}
+
 .chat-modal-body form textarea.chat-input {
   width: 100%;
   resize: none;
