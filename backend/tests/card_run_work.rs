@@ -15,6 +15,7 @@ fn bound() -> BoundRepo {
         task: "7".into(),
         url: "https://git.example.com/acme/repo".into(),
         token: "tok".into(),
+        image: None,
     }
 }
 
