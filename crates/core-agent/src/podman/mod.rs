@@ -44,7 +44,7 @@ pub mod sandbox;
 pub mod state;
 pub mod util;
 
-pub use image::{AgentImage, cached_tag, resolve as resolve_image};
+pub use image::{AgentImage, cached_tag, ensure as ensure_image, resolve as resolve_image};
 pub use limits::{NetworkPolicy, NetworkPolicyChoice, SandboxConfig, SandboxLimits};
 pub use sandbox::{Role, Sandbox, run};
 pub use state::SANDBOX_PREFIX;

@@ -9,7 +9,9 @@ use std::sync::Arc;
 use std::sync::RwLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use core_agent::podman::{Sandbox, cached_tag, resolve_image};
+use core_agent::podman::{
+    NetworkPolicyChoice, Sandbox, SandboxLimits, cached_tag, ensure_image, resolve_image,
+};
 use core_agent::sandbox_abstract_layer::{Role, SandboxState};
 use git_rs::GitRepo;
 use proto_rs::GitTool;
@@ -115,7 +117,7 @@ impl Manager {
     /// non-empty tree (crashed run, backend restart) holds no live agent, so
     /// it is reclaimed before the fresh sandbox is created.
     pub fn spawn(&self, agent: &str) -> Result<PathBuf, String> {
-        self.spawn_task_impl(agent, None, None)
+        self.spawn_task_impl(agent, None, None, None)
     }
 
     /// Like [`spawn`](Self::spawn), but seeds a fresh work tree by cloning
@@ -126,7 +128,7 @@ impl Manager {
         agent: &str,
         repo: Option<&RemoteRepo>,
     ) -> Result<PathBuf, String> {
-        self.spawn_task_impl(agent, None, repo)
+        self.spawn_task_impl(agent, None, repo, None)
     }
 
     /// Spawns a dedicated work tree + sandbox for one task of `agent`. Two
@@ -137,19 +139,22 @@ impl Manager {
     /// The returned path doubles as the slot key: [`run`](Self::run),
     /// [`finish`](Self::finish) and friends address the slot by it.
     pub fn spawn_task(&self, agent: &str, task: &str) -> Result<PathBuf, String> {
-        self.spawn_task_impl(agent, Some(task), None)
+        self.spawn_task_impl(agent, Some(task), None, None)
     }
 
     /// Like [`spawn_task`](Self::spawn_task), but seeds the fresh work tree
     /// by cloning `repo`. This is the card-run entry point: one container +
-    /// one task branch per (agent, task) pair.
+    /// one task branch per (agent, task) pair. `image` overrides the agent's
+    /// default sandbox image (the card's pinned image) and is pulled when
+    /// missing.
     pub fn spawn_task_with_repo(
         &self,
         agent: &str,
         task: &str,
         repo: &RemoteRepo,
+        image: Option<&str>,
     ) -> Result<PathBuf, String> {
-        self.spawn_task_impl(agent, Some(task), Some(repo))
+        self.spawn_task_impl(agent, Some(task), Some(repo), image)
     }
 
     fn spawn_task_impl(
@@ -157,6 +162,7 @@ impl Manager {
         agent: &str,
         task: Option<&str>,
         repo: Option<&RemoteRepo>,
+        image: Option<&str>,
     ) -> Result<PathBuf, String> {
         let key = slot_key(agent, task);
         if let Some(slot) = self
@@ -172,11 +178,18 @@ impl Manager {
         // must never wait on it.
         let work_tree = PathBuf::from(AGENTS_ROOT).join(sanitize(&key));
         reclaim_stale(&work_tree);
-        // Run from the agent's cached image when one exists (installs from a
-        // previous task), else the default coding image; every run is then
-        // committed back into the cache tag for the next spawn.
+        // An explicit image (card pin) wins; otherwise the agent's cached
+        // image when one exists (installs from a previous task), else the
+        // default coding image. Every run commits back into the cache tag.
         let cache = cached_tag(agent);
-        let sandbox = Sandbox::new_in_with_image(&work_tree, &resolve_image(agent), Some(cache))
+        let base = match image {
+            Some(img) => {
+                ensure_image(img)?;
+                img.to_owned()
+            }
+            None => resolve_image(agent),
+        };
+        let sandbox = Sandbox::new_in_with_image(&work_tree, &base, Some(cache))
             .map_err(|e| e.to_string())?;
         // The container mounts sandbox.root() at /workspace — the repo must
         // live there, or host-side git ops never see it.
@@ -219,8 +232,26 @@ impl Manager {
     /// Runs one command as `agent` inside its sandbox; the output is kept as
     /// the agent's pending result and the command appended to its transcript.
     pub fn run(&self, agent: &str, cmd: &str) -> Result<String, String> {
+        self.run_impl(agent, cmd, NetworkPolicyChoice::Disabled)
+    }
+
+    /// Like [`run`](Self::run), but with outbound network (slirp4netns) —
+    /// card runs need it to fetch dependencies (cargo, npm, pip, …).
+    pub fn run_with_network(&self, agent: &str, cmd: &str) -> Result<String, String> {
+        self.run_impl(agent, cmd, NetworkPolicyChoice::Enabled)
+    }
+
+    fn run_impl(
+        &self,
+        agent: &str,
+        cmd: &str,
+        network: NetworkPolicyChoice,
+    ) -> Result<String, String> {
         let slot = self.slot(agent)?;
-        let output = slot.sandbox.run(cmd).map_err(|e| e.to_string())?;
+        let output = slot
+            .sandbox
+            .run_with(cmd, &SandboxLimits::default(), network)
+            .map_err(|e| e.to_string())?;
         slot.sandbox
             .push_context(Role::Agent, format!("$ {cmd}\n{output}"));
         slot.runs.fetch_add(1, Ordering::Relaxed);

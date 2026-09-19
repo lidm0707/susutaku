@@ -60,6 +60,22 @@ pub fn exists(reference: &str) -> bool {
         .is_ok_and(|s| s.success())
 }
 
+/// Pull `reference` from its registry when it is not in host podman storage.
+pub fn ensure(reference: &str) -> Result<(), String> {
+    if exists(reference) {
+        return Ok(());
+    }
+    let status = Command::new(PODMAN_BIN)
+        .args(["pull", reference])
+        .status()
+        .map_err(|e| format!("podman pull {reference}: {e}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("podman pull {reference} failed"))
+    }
+}
+
 /// The image a fresh sandbox for `agent` should run from: the cached image
 /// when present, otherwise the profile default.
 pub fn resolve(agent: &str) -> String {

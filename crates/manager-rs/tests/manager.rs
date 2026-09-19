@@ -175,6 +175,7 @@ fn publish_flow_reaches_pr_step() {
                 url: remote_url.clone(),
                 token: None,
             },
+            None,
         )
         .expect("spawn task with repo");
 
@@ -328,6 +329,7 @@ fn publish_e2e_push_and_pr_succeed() {
                 url: remote_url.clone(),
                 token: None,
             },
+            None,
         )
         .expect("spawn task with repo");
 

@@ -123,6 +123,7 @@ impl WorkTree {
         slot: &str,
         task: &str,
         repo: RemoteRepo,
+        image: Option<String>,
     ) -> Result<PathBuf, String> {
         let (m, agent, slot, task) = (
             self.manager.clone(),
@@ -138,7 +139,7 @@ impl WorkTree {
                 let _ = m.finish(&slot);
             }
             // The manager composes the slot key as agent#task itself.
-            m.spawn_task_with_repo(&agent, &task, &repo)
+            m.spawn_task_with_repo(&agent, &task, &repo, image.as_deref())
         })
         .await
         .map_err(|_| NOTE_JOIN.to_owned())?
@@ -146,9 +147,9 @@ impl WorkTree {
 
     pub async fn run(&self, slot: &str, cmd: &str) -> Result<String, String> {
         let (m, slot, cmd) = (self.manager.clone(), slot.to_owned(), cmd.to_owned());
-        tokio::task::spawn_blocking(move || m.run(&slot, &cmd))
+        tokio::task::spawn_blocking(move || m.run_with_network(&slot, &cmd))
             .await
-            .map_err(|_| NOTE_JOIN.to_owned())?
+            .map_err(|_| NOTE_JOIN)?
     }
 
     pub async fn git(&self, slot: &str, tool: proto_rs::GitTool) -> Result<String, String> {
@@ -191,6 +192,8 @@ pub struct BoundRepo {
     pub task: String,
     pub url: String,
     pub token: String,
+    /// Card-pinned sandbox image; None = agent default.
+    pub image: Option<String>,
 }
 
 enum RunMode {
@@ -213,6 +216,7 @@ fn select_mode(wt: Option<&WorkTree>, card: &CardRow) -> RunMode {
             task: card.id.to_string(),
             url: repo.url,
             token: repo.secret.unwrap_or_default(),
+            image: card.image.clone(),
         }),
         None => RunMode::Text,
     }
@@ -638,7 +642,13 @@ async fn execute_work(
         token: (!bound.token.is_empty()).then(|| bound.token.clone()),
     };
     let work_tree = match wt
-        .spawn_task(&bound.agent, &bound.slot, &bound.task, repo)
+        .spawn_task(
+            &bound.agent,
+            &bound.slot,
+            &bound.task,
+            repo,
+            bound.image.clone(),
+        )
         .await
     {
         Ok(tree) => tree,

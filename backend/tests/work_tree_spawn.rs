@@ -58,7 +58,7 @@ async fn stale_slot_without_branch_is_reseeded_from_repo() {
 
     let wt = WorkTree::new(manager.clone());
     let tree = wt
-        .spawn_task(AGENT, &slot, &TASK.to_string(), repo)
+        .spawn_task(AGENT, &slot, &TASK.to_string(), repo, None)
         .await
         .unwrap();
     assert!(tree.exists());
