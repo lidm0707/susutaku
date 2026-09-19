@@ -415,9 +415,9 @@ async fn submit(
     let rx = target
         .submit(prompt, max_tokens, TokKind::Normal, false)
         .map_err(|e| e.to_string())?;
-    match rx.await {
-        Ok(Ok(reply)) => Ok(reply.text),
-        Err(_) | Ok(Err(_)) => Err(NOTE_INFER_DROP.to_owned()),
+    match tokio::time::timeout(std::time::Duration::from_secs(INFER_TURN_TIMEOUT_SECS), rx).await {
+        Ok(Ok(Ok(reply))) => Ok(reply.text),
+        Ok(Err(_)) | Ok(Ok(Err(_))) | Err(_) => Err(NOTE_INFER_DROP.to_owned()),
     }
 }
 
@@ -426,6 +426,10 @@ pub const NOTE_INFER_DROP: &str = "inference: engine dropped or rejected the job
 pub const INFER_RETRY_MAX: usize = 5;
 pub const INFER_RETRY_DELAY_MS: u64 = 2000;
 pub const MS_PER_S: u64 = 1000;
+/// Hard bound on one inference turn: a stalled cloud stream (SSE reader
+/// blocked with no data) must fail the turn and trigger a retry instead of
+/// parking the run in "running" forever.
+pub const INFER_TURN_TIMEOUT_SECS: u64 = 600;
 pub const PROGRESS_TOOL_INFER: &str = "inference";
 pub const RETRY_LABEL: &str = "retry";
 pub const RETRY_NEXT_IN: &str = "next in";

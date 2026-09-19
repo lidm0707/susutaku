@@ -25,6 +25,9 @@ pub const SSE_DATA_PREFIX: &str = "data:";
 pub const SSE_DONE_MARKER: &str = "[DONE]";
 pub const EMPTY_BODY_NOTE: &str = "<unreadable body>";
 pub const REQUEST_TIMEOUT_SECS: u64 = 300;
+/// Max gap between SSE bytes: ureq's request timeout ends at the response
+/// headers, so without this a stalled stream blocks the reader forever.
+pub const STREAM_READ_TIMEOUT_SECS: u64 = 180;
 
 /// Which z.ai endpoint a key works against: coding-plan keys only accept
 /// `/api/coding/paas/v4`, regular api keys only `/api/paas/v4`.
@@ -97,13 +100,27 @@ impl ZaiClient {
     }
 
     fn send(&self, body: &str) -> Result<String, AiError> {
-        self.post(body)?
+        self.post(&Self::plain_agent(), body)?
             .into_string()
             .map_err(|e| AiError::Http(e.to_string()))
     }
 
-    fn post(&self, body: &str) -> Result<ureq::Response, AiError> {
-        ureq::post(self.endpoint.url())
+    fn plain_agent() -> ureq::Agent {
+        ureq::AgentBuilder::new().build()
+    }
+
+    /// Agent whose socket reads time out: ureq's request timeout ends when
+    /// the response headers arrive, so a stalled SSE stream would otherwise
+    /// block the reader thread forever.
+    fn streaming_agent() -> ureq::Agent {
+        ureq::AgentBuilder::new()
+            .timeout_read(std::time::Duration::from_secs(STREAM_READ_TIMEOUT_SECS))
+            .build()
+    }
+
+    fn post(&self, agent: &ureq::Agent, body: &str) -> Result<ureq::Response, AiError> {
+        agent
+            .post(self.endpoint.url())
             .timeout(std::time::Duration::from_secs(REQUEST_TIMEOUT_SECS))
             .set(CONTENT_TYPE, JSON_CONTENT_TYPE)
             .set(AUTH_HEADER, &format!("{BEARER_PREFIX}{}", self.api_key))
@@ -122,7 +139,7 @@ impl ZaiClient {
     /// OpenAI-compatible SSE stream of content deltas. The request sets
     /// `"stream": true` and the caller iterates `DeltaStream` as tokens arrive.
     fn send_stream(&self, body: &str) -> Result<DeltaStream, AiError> {
-        let reader = self.post(body)?.into_reader();
+        let reader = self.post(&Self::streaming_agent(), body)?.into_reader();
         Ok(DeltaStream {
             reader: std::io::BufReader::new(Box::new(reader)),
             done: false,
