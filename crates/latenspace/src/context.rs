@@ -12,8 +12,14 @@ use katgpt_core::kv_eviction::{UsageRow, observe, score, select_evict};
 
 pub const DEFAULT_MAX_TOKENS: usize = 8192;
 pub const MIN_ENTRIES_KEPT: usize = 1;
+pub const CHARS_PER_TOKEN: usize = 4;
 const TOUCH_MASS: f32 = 1.0;
 const EVICT_BATCH: usize = 1;
+
+/// Rough token estimate for budget checks when no tokenizer is wired.
+pub fn estimate_tokens(text: &str) -> usize {
+    text.chars().count().div_ceil(CHARS_PER_TOKEN)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EntryKind {

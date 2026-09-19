@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+latenspace = { workspace = true }
 lsp-rs = { workspace = true }
 proto-rs = { workspace = true }
 serde = { workspace = true }
