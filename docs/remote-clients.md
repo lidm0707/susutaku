@@ -38,34 +38,31 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    A[client machine] --> B[curl install.sh?role=auto from backend :8991]
+    A[client machine] --> B[curl install.sh?server=… from backend :8991]
     B --> C{probe machine}
     C --> C1[OS / arch check<br/>macos linux windows]
     C --> C2[sandbox shell deps check<br/>zsh / bash / powershell]
-    C --> C3[RAM check via sysctl / meminfo]
-    C1 & C2 & C3 --> D{role decision}
-    D -->|auto + Apple Silicon ≥32GiB| E[model]
-    D -->|auto otherwise| F[worker]
-    D -->|model forced but incapable| X[abort install]
-    E & F --> G{cargo installed?}
+    C --> C3[RAM measure via sysctl / meminfo<br/>registration metadata]
+    C1 & C2 & C3 --> G{cargo installed?}
     G -->|no| H[rustup install]
     G -->|yes| I
     H --> I[shallow clone repo to ~/.susutaku/src]
-    I --> J[cargo build --release<br/>local-model + backend]
-    J --> K{role}
-    K -->|model| L[start local-model<br/>logs ~/.susutaku/local-model.log]
-    K -->|worker| M[start backend client mode<br/>SUSUTAKU_LOCAL_MODEL_URL + SUSUTAKU_HUB_ADDR<br/>logs ~/.susutaku/backend.log]
+    I --> J[cargo build --release backend]
+    J --> M[start backend client mode<br/>SUSUTAKU_LOCAL_MODEL_URL + SUSUTAKU_HUB_ADDR<br/>logs ~/.susutaku/backend.log]
 ```
+
+The installer is runtime-only: every client machine installs the sandbox
+client (worker) and inference comes from the server's model endpoint
+(`SUSUTAKU_LOCAL_MODEL_URL`). No model is built or hosted on client machines.
 
 ## 2. Client machine: register & run dispatched commands (TCP, proto-rs)
 
 Registration requires full machine metadata (`proto_rs::ClientMeta`:
-hostname, os, arch, role, ram_gib). The installer probe decides `role`
-(model|worker) and measures `ram_gib`, then exports them as
-`SUSUTAKU_CLIENT_ROLE` / `SUSUTAKU_CLIENT_RAM_GIB` before launching the
-client node; the client node refuses to run without them, and the hub
-closes the connection of any Register that carries missing/invalid
-metadata.
+hostname, os, arch, role, ram_gib). The installer measures `ram_gib` and
+exports it as `SUSUTAKU_CLIENT_RAM_GIB` before launching the client node;
+the client node registers as `worker`, refuses to run without the
+metadata, and the hub closes the connection of any Register that carries
+missing/invalid metadata.
 
 ```mermaid
 sequenceDiagram
@@ -146,7 +143,7 @@ Client machine (one line) — `server` is the backend URL; the installer expects
 the local-model server on that same host at :8992:
 
 ```sh
-curl -fsSL "http://<backend-host>:8991/install.sh?role=auto&server=http%3A%2F%2F<backend-host>%3A8991" | sh
+curl -fsSL "http://<backend-host>:8991/install.sh?server=http%3A%2F%2F<backend-host>%3A8991" | sh
 ```
 
 Web UI: open `http://<backend-host>:8991` in a browser (vite dev: `make web`

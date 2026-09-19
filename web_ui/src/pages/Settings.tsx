@@ -127,23 +127,14 @@ export default function Settings() {
 
 const INSTALL_PATH = "/install.sh";
 
-type InstallRole = "auto" | "model" | "worker";
-
-const INSTALL_ROLES: { id: InstallRole; label: string; desc: string }[] = [
-  { id: "auto", label: "auto", desc: "probe decides: model+worker when capable" },
-  { id: "model", label: "model host", desc: "force local-model host (macos + aarch64 + ≥32 GiB)" },
-  { id: "worker", label: "worker only", desc: "external provider jobs only (cloud api / codex / claude)" },
-];
-
-function install_command(role: InstallRole): string {
-  const params = new URLSearchParams({ role, server: window.location.origin });
+function install_command(): string {
+  const params = new URLSearchParams({ server: window.location.origin });
   return `curl -fsSL "${window.location.origin}${INSTALL_PATH}?${params}" | sh`;
 }
 
 function InstallCmd() {
   const [copied, setCopied] = useState(false);
-  const [role, setRole] = useState<InstallRole>("auto");
-  const cmd = install_command(role);
+  const cmd = install_command();
   async function copy() {
     try {
       await navigator.clipboard.writeText(cmd);
@@ -155,21 +146,6 @@ function InstallCmd() {
   }
   return (
     <div className="install-cmd">
-      <fieldset className="install-role-picker">
-        <legend>installer type</legend>
-        {INSTALL_ROLES.map((r) => (
-          <label key={r.id} className="install-role">
-            <input
-              type="radio"
-              name="install-role"
-              checked={role === r.id}
-              onChange={() => setRole(r.id)}
-            />
-            <span className="install-role-label">{r.label}</span>
-            <span className="install-role-desc">{r.desc}</span>
-          </label>
-        ))}
-      </fieldset>
       <div className="install-cmd-row">
         <code>{cmd}</code>
         <button type="button" className="icon-btn" onClick={copy} aria-label="copy install command">
@@ -177,7 +153,7 @@ function InstallCmd() {
         </button>
       </div>
       <p className="install-cmd-hint">
-        paste in a terminal on the other machine — it registers itself as a sandbox client
+        paste in a terminal on the other machine — it registers itself as a sandbox client; inference uses this server's model endpoint
       </p>
 
       <h3 className="install-cmd-title">how it works</h3>

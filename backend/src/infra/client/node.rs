@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use manager_rs::manager::Manager;
 use proto_rs::client;
-use proto_rs::{AgentBrief, ClientMeta, GitTool, ROLE_MODEL, ROLE_WORKER};
+use proto_rs::{AgentBrief, ClientMeta, GitTool, ROLE_WORKER};
 use tokio::time::sleep;
 
 use crate::infra::podman::AgentSandbox;
@@ -17,8 +17,6 @@ use crate::port::outbound::Runner;
 const OS_NAME: &str = std::env::consts::OS;
 const ARCH_NAME: &str = std::env::consts::ARCH;
 const RECONNECT_SECS: u64 = 3;
-/// Role the installer probe decided for this machine (exported by install.sh).
-pub const CLIENT_ROLE_ENV: &str = "SUSUTAKU_CLIENT_ROLE";
 /// Installed RAM in GiB as measured by the installer probe.
 pub const CLIENT_RAM_ENV: &str = "SUSUTAKU_CLIENT_RAM_GIB";
 
@@ -123,14 +121,9 @@ fn hostname() -> String {
 
 /// Machine metadata from the environment the installer sets up. Missing or
 /// malformed values are a hard error: an un-describable machine must not
-/// register.
+/// register. Every installed runtime is a worker — inference uses the
+/// server's model endpoint.
 fn client_meta() -> Result<ClientMeta, String> {
-    let role = std::env::var(CLIENT_ROLE_ENV).unwrap_or_default();
-    if role != ROLE_MODEL && role != ROLE_WORKER {
-        return Err(format!(
-            "missing or invalid {CLIENT_ROLE_ENV} (set it to model or worker, as decided by the installer probe)"
-        ));
-    }
     let ram_gib: u64 = std::env::var(CLIENT_RAM_ENV)
         .unwrap_or_default()
         .parse()
@@ -142,7 +135,7 @@ fn client_meta() -> Result<ClientMeta, String> {
         hostname: hostname(),
         os: OS_NAME.to_string(),
         arch: ARCH_NAME.to_string(),
-        role,
+        role: ROLE_WORKER.to_string(),
         ram_gib,
     })
 }

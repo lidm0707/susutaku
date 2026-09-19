@@ -4631,23 +4631,12 @@ struct StoredOutcome {
     push: Option<String>,
 }
 
-/// Installer for remote sandbox clients; `role` selects auto/model/worker.
-/// Unauthenticated by design — it only probes the downloading machine.
+/// Installer for remote runtime clients. Unauthenticated by design — it only
+/// probes the downloading machine.
 async fn install_script(
     axum::extract::Query(q): axum::extract::Query<crate::infra::client::install::InstallQuery>,
 ) -> Response {
     use crate::infra::client::install;
-    let role = match q.role.as_deref().map(install::parse_role) {
-        None => install::Role::default(),
-        Some(Some(r)) => r,
-        Some(None) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                "invalid role: use auto | model | worker",
-            )
-                .into_response();
-        }
-    };
     let server = q
         .server
         .unwrap_or_else(|| "http://127.0.0.1:8991".to_owned());
@@ -4662,7 +4651,7 @@ async fn install_script(
                 "attachment; filename=\"install.sh\"",
             ),
         ],
-        install::render_install_script(role, &server),
+        install::render_install_script(&server),
     )
         .into_response()
 }

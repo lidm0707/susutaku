@@ -4095,42 +4095,6 @@ button {
   margin: 0 0 0.6rem;
 }
 
-.install-role-picker {
-  display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
-  margin: 0 0 0.75rem;
-  padding: 0.6rem 0.75rem;
-  border: 1px solid #2a2a2a;
-  border-radius: 8px;
-}
-
-.install-role-picker legend {
-  font-size: 0.8rem;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: #888;
-  padding: 0 0.3rem;
-}
-
-.install-role {
-  display: grid;
-  grid-template-columns: auto auto 1fr;
-  align-items: baseline;
-  gap: 0.45rem;
-  font-size: 0.9rem;
-  cursor: pointer;
-}
-
-.install-role-label {
-  color: #e6e6ea;
-}
-
-.install-role-desc {
-  color: #aaa;
-  font-size: 0.85rem;
-}
-
 .install-cmd-row {
   display: flex;
   align-items: center;

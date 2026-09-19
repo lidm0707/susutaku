@@ -1,68 +1,39 @@
 //! Integration tests for the public installer API surface only.
 
-use backend::infra::client::install::{self, Capability, Role};
-
-const GIB: usize = 1024 * 1024 * 1024;
+use backend::infra::client::install;
 
 #[test]
-fn classify_needs_apple_silicon_and_ram() {
-    assert_eq!(
-        install::classify("macos", "aarch64", 48 * GIB),
-        Capability::Model
-    );
-    assert_eq!(
-        install::classify("macos", "aarch64", 16 * GIB),
-        Capability::WorkerOnly
-    );
-    assert_eq!(
-        install::classify("macos", "x86_64", 64 * GIB),
-        Capability::WorkerOnly
-    );
-    assert_eq!(
-        install::classify("linux", "aarch64", 64 * GIB),
-        Capability::WorkerOnly
-    );
-}
-
-#[test]
-fn parse_role_accepts_known_names() {
-    assert_eq!(install::parse_role("auto"), Some(Role::Auto));
-    assert_eq!(install::parse_role("model"), Some(Role::Model));
-    assert_eq!(install::parse_role("worker"), Some(Role::Worker));
-    assert_eq!(install::parse_role("nope"), None);
-}
-
-#[test]
-fn script_bakes_role_and_server() {
-    let script = install::render_install_script(Role::Worker, "http://host:3334");
+fn script_bakes_server() {
+    let script = install::render_install_script("http://host:3334");
     assert!(script.contains("server=http://host:3334"));
-    assert!(script.contains("role=worker"));
-    let script = install::render_install_script(Role::Auto, "http://host:3334");
-    assert!(script.contains("role=auto"));
 }
 
 #[test]
-fn script_model_role_enforces_probe() {
-    let script = install::render_install_script(Role::Model, "http://host:3334");
+fn script_installs_runtime_worker_only() {
+    let script = install::render_install_script("http://host:3334");
+    assert!(script.contains("-p backend"));
     assert!(
-        script.contains("cannot host a local model"),
-        "model role must refuse incapable machines"
+        !script.contains("local-model"),
+        "runtime install must not build or launch the model server"
     );
+    assert!(script.contains(install::SERVER_URL_ENV));
+    assert!(script.contains(install::HUB_ADDR_ENV));
+    assert!(script.contains(install::CLIENT_RAM_ENV));
 }
 
 #[test]
-fn script_checks_sandbox_dependencies_per_os() {
-    let script = install::render_install_script(Role::Auto, "http://host:3334");
+fn script_checks_runtime_dependencies_per_os() {
+    let script = install::render_install_script("http://host:3334");
     assert!(script.contains(install::SANDBOX_SHELL_MACOS));
     assert!(script.contains(install::SANDBOX_SHELL_LINUX));
     assert!(script.contains(install::SANDBOX_SHELL_WINDOWS));
-    assert!(script.contains("missing sandbox dependencies"));
-    assert!(script.contains("windows sandbox client is not supported yet"));
+    assert!(script.contains("missing runtime dependencies"));
+    assert!(script.contains("windows runtime client is not supported yet"));
 }
 
 #[test]
 fn script_passes_shell_syntax_check() {
-    let script = install::render_install_script(Role::Auto, "http://host:3334");
+    let script = install::render_install_script("http://host:3334");
     let path = std::env::temp_dir().join("susutaku-install-test.sh");
     std::fs::write(&path, script).unwrap();
     let status = std::process::Command::new("sh")
@@ -76,7 +47,7 @@ fn script_passes_shell_syntax_check() {
 
 #[test]
 fn script_is_valid_posix_shell_shape() {
-    let script = install::render_install_script(Role::Auto, "http://host:3334");
+    let script = install::render_install_script("http://host:3334");
     assert!(script.starts_with("#!/bin/sh"));
     assert!(script.contains("set -eu"));
 }
