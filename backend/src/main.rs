@@ -128,7 +128,10 @@ async fn main() {
         .with_project_git(Arc::new(
             backend::infra::project_git::SettingsProjectGit::new(task_store.clone()),
         ))
-        .with_skills(skills),
+        .with_skills(skills)
+        .with_engines(Arc::new(backend::infra::zai::router::ZaiRouter::new(
+            Arc::new(backend::infra::zai::settings::SettingsState::load()),
+        ))),
     );
 
     let usage_store = Arc::new(codex_usage::connect().await);

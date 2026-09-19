@@ -10,6 +10,7 @@ use crate::domain::{
     ToolKind, ToolSet, ToolUse,
 };
 use crate::port::inbound::ChatHandling;
+use crate::port::outbound::ModelEngines;
 use crate::port::outbound::{
     AgentConfigRepo, AgentGit, AgentRun, BoardOps, ChatMemory, Fetcher, Inference, ModelSwitch,
     ProjectGit, Runner, Searcher, ThreadEnvs,
@@ -103,6 +104,9 @@ pub struct ChatUseCase {
     skills: Option<Arc<SkillService>>,
     /// Live tool-progress sink for streamed turns; `None` emits nothing.
     tools_tx: Option<tokio::sync::broadcast::Sender<ToolEvent>>,
+    /// Routes a mentioned agent's configured cloud model to its engine;
+    /// `None` (or an unknown model) keeps every turn on the shared engine.
+    engines: Option<Arc<dyn ModelEngines>>,
 }
 
 impl ChatUseCase {
@@ -133,7 +137,35 @@ impl ChatUseCase {
             project_git: None,
             skills: None,
             tools_tx: None,
+            engines: None,
         }
+    }
+
+    /// Enable per-agent model routing (Z.ai cloud engines).
+    pub fn with_engines(mut self, engines: Arc<dyn ModelEngines>) -> Self {
+        self.engines = Some(engines);
+        self
+    }
+
+    /// The engine serving a mentioned agent: its configured model when the
+    /// router knows it, else the shared engine. Card-comment mentions must
+    /// reach the same cloud model the card run would use — without this they
+    /// land on the shared engine (the e2e mock in the deploy stack) and the
+    /// agent answers in canned mock lines.
+    async fn agent_engine(&self, agent: Option<&str>) -> Arc<dyn Inference> {
+        let routed = match (self.engines.as_ref(), agent) {
+            (Some(engines), Some(name)) => {
+                let cfg = self.agents.by_name(name.trim()).await.ok().flatten();
+                match cfg {
+                    Some(cfg) if !cfg.model.trim().is_empty() => {
+                        engines.engine_for(cfg.model.trim())
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        routed.unwrap_or_else(|| self.engine.clone())
     }
 
     /// Stream one event per completed tool call to the UI while the loop runs.
@@ -316,7 +348,7 @@ impl ChatUseCase {
     async fn is_work_request(&self, message: &str, tok: TokKind) -> bool {
         let prompt = format!("{CLASSIFY_PROMPT}{message}{CLASSIFY_QUESTION}");
         match self
-            .infer(prompt, None, CLASSIFY_MAX_TOKENS, tok, false)
+            .infer(&self.engine, prompt, None, CLASSIFY_MAX_TOKENS, tok, false)
             .await
         {
             Ok(r) => r.text.trim().to_uppercase().starts_with(CLASSIFY_YES),
@@ -326,15 +358,14 @@ impl ChatUseCase {
 
     async fn infer(
         &self,
+        engine: &Arc<dyn Inference>,
         prompt: String,
         image: Option<String>,
         max_tokens: usize,
         tok: TokKind,
         think: bool,
     ) -> Result<GenReply, String> {
-        let rx = self
-            .engine
-            .submit_with_image(prompt, image, max_tokens, tok, think)?;
+        let rx = engine.submit_with_image(prompt, image, max_tokens, tok, think)?;
         rx.await
             .map_err(|_| "inference dropped the job".to_string())?
     }
@@ -814,8 +845,10 @@ impl ChatHandling for ChatUseCase {
             cmd.board_token.is_some(),
             &tools,
         );
+        let engine = self.agent_engine(cmd.agent.as_deref()).await;
         let mut reply = self
             .infer(
+                &engine,
                 prompt,
                 cmd.image.clone(),
                 cmd.max_tokens,
@@ -841,7 +874,7 @@ impl ChatHandling for ChatUseCase {
                         &tools,
                     );
                     reply = match self
-                        .infer(prompt, None, cmd.max_tokens, cmd.tokenizer, think)
+                        .infer(&engine, prompt, None, cmd.max_tokens, cmd.tokenizer, think)
                         .await
                     {
                         Ok(r) => {
@@ -1051,7 +1084,7 @@ impl ChatHandling for ChatUseCase {
                 &tools,
             );
             reply = match self
-                .infer(prompt, None, cmd.max_tokens, cmd.tokenizer, think)
+                .infer(&engine, prompt, None, cmd.max_tokens, cmd.tokenizer, think)
                 .await
             {
                 Ok(r) => {
@@ -1093,6 +1126,7 @@ impl ChatHandling for ChatUseCase {
         if allow_tools && rounds > 0 && ToolCall::offers(&reply.text) {
             reply = match self
                 .infer(
+                    &engine,
                     Prompt::build(&cmd.message, &context, false, false, &tools),
                     None,
                     cmd.max_tokens,
