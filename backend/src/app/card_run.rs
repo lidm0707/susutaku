@@ -491,7 +491,10 @@ async fn submit(
         .map_err(|e| e.to_string())?;
     match tokio::time::timeout(std::time::Duration::from_secs(INFER_TURN_TIMEOUT_SECS), rx).await {
         Ok(Ok(Ok(reply))) => Ok(reply.text),
-        Ok(Err(_)) | Ok(Ok(Err(_))) | Err(_) => Err(NOTE_INFER_DROP.to_owned()),
+        // Surface the engine's own error — collapsing it into the generic
+        // drop note hides the root cause (http failure, bad reply, …).
+        Ok(Ok(Err(e))) => Err(e),
+        Ok(Err(_)) | Err(_) => Err(NOTE_INFER_DROP.to_owned()),
     }
 }
 
