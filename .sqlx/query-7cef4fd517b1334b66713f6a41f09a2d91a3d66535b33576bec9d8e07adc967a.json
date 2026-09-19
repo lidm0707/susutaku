@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE agent_settings\n               SET name = $2, model = $3, persona = $4, prompt = $5, output = $6,\n                   allowed_tools = $7, receive_images = $8, thinking = $9,\n                   ctx_limit = $10, ctx_policy = $11\n               WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "TextArray",
+        "Bool",
+        "Text",
+        "Int8",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "7cef4fd517b1334b66713f6a41f09a2d91a3d66535b33576bec9d8e07adc967a"
+}

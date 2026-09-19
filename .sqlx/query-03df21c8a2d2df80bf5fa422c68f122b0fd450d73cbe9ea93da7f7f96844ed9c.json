@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, name, model, persona, prompt, output, allowed_tools, receive_images, thinking\n               FROM agent_settings WHERE name = $1",
+  "query": "SELECT id, name, model, persona, prompt, output, allowed_tools, receive_images, thinking, ctx_limit, ctx_policy\n               FROM agent_settings WHERE name = $1",
   "describe": {
     "columns": [
       {
@@ -47,6 +47,16 @@
         "ordinal": 8,
         "name": "thinking",
         "type_info": "Text"
+      },
+      {
+        "ordinal": 9,
+        "name": "ctx_limit",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 10,
+        "name": "ctx_policy",
+        "type_info": "Text"
       }
     ],
     "parameters": {
@@ -63,8 +73,10 @@
       false,
       false,
       false,
+      false,
+      false,
       false
     ]
   },
-  "hash": "9901dfd619e9965b96524d0c783d887f66388a91c0096dcdf05590e56dd39ca9"
+  "hash": "03df21c8a2d2df80bf5fa422c68f122b0fd450d73cbe9ea93da7f7f96844ed9c"
 }
