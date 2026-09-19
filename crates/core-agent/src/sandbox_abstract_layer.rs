@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 
 /// Speaker role in a sandbox transcript (canonical definition; every platform
 /// module re-exports this).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Role {
     User,
     Agent,

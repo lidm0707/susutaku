@@ -5,8 +5,10 @@
 use std::fs;
 use std::io::Error;
 use std::path::{Path, PathBuf};
-use std::sync::RwLock;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{OnceLock, RwLock};
+
+use latenspace::{Context, DEFAULT_MAX_TOKENS, Entry, EntryKind, estimate_tokens};
 
 use super::WORKSPACE_MOUNT;
 use super::limits::{NetworkPolicyChoice, SandboxLimits};
@@ -17,7 +19,58 @@ use crate::sandbox_abstract_layer::{Guarantee, SandboxLayer};
 
 pub use crate::sandbox_abstract_layer::{HistoryEntry, Role, SandboxState};
 
-const MAX_HISTORY: usize = 128;
+const MAX_CONTEXT_TOKENS_ENV: &str = "SUSUTAKU_MAX_CONTEXT_TOKENS";
+
+/// Token budget for the per-agent transcript. Settable via
+/// [`MAX_CONTEXT_TOKENS_ENV`], read once per process.
+fn max_context_tokens() -> usize {
+    static BUDGET: OnceLock<usize> = OnceLock::new();
+    *BUDGET.get_or_init(|| {
+        std::env::var(MAX_CONTEXT_TOKENS_ENV)
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .filter(|&b| b > 0)
+            .unwrap_or(DEFAULT_MAX_TOKENS)
+    })
+}
+
+fn entry_kind(role: Role) -> EntryKind {
+    match role {
+        Role::User => EntryKind::Thread,
+        Role::Agent => EntryKind::Memory,
+        Role::Tool => EntryKind::Tool,
+    }
+}
+
+fn entry_role(kind: EntryKind) -> Role {
+    match kind {
+        EntryKind::Thread => Role::User,
+        EntryKind::Memory => Role::Agent,
+        EntryKind::Tool | EntryKind::System | EntryKind::Focus => Role::Tool,
+    }
+}
+
+fn latenspace_entry(content: &str, role: Role) -> Entry {
+    Entry::new(entry_kind(role), content, estimate_tokens(content))
+}
+
+fn context_of(history: &[HistoryEntry]) -> Context {
+    let mut ctx = Context::new(max_context_tokens());
+    for e in history {
+        ctx.push(latenspace_entry(&e.content, e.role));
+    }
+    ctx
+}
+
+fn history_of(ctx: &Context) -> Vec<HistoryEntry> {
+    ctx.entries_ref()
+        .iter()
+        .map(|e| HistoryEntry {
+            role: entry_role(e.kind),
+            content: e.text.clone(),
+        })
+        .collect()
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Lifecycle {
@@ -37,6 +90,9 @@ pub struct Sandbox {
     /// run, keeping installs for the next spawn.
     cache_tag: RwLock<Option<String>>,
     state: RwLock<SandboxState>,
+    /// Token-budgeted transcript authority (latenspace): push evicts the
+    /// lowest-usage unpinned entries until back under budget.
+    ctx: RwLock<Context>,
     lifecycle: RwLock<Lifecycle>,
     run_seq: AtomicU64,
     /// `run` holds a read guard; `purge` takes the write guard, so a
@@ -145,13 +201,15 @@ impl Sandbox {
         image: &str,
         cache_tag: Option<String>,
     ) -> Result<Self, Error> {
-        let (state, state_file) = match restored {
+        let (mut state, state_file) = match restored {
             Some((s, f)) => (s, f),
             None => (
                 SandboxState::default(),
                 state::state_file_path(&sandbox_id)?,
             ),
         };
+        let ctx = context_of(&state.history);
+        state.history = history_of(&ctx);
         Ok(Self {
             sandbox_id,
             root,
@@ -159,6 +217,7 @@ impl Sandbox {
             image: RwLock::new(image.to_owned()),
             cache_tag: RwLock::new(cache_tag),
             state: RwLock::new(state),
+            ctx: RwLock::new(ctx),
             lifecycle: RwLock::new(Lifecycle::Idle),
             run_seq: AtomicU64::new(0),
             run_gate: RwLock::new(()),
@@ -320,9 +379,9 @@ impl Sandbox {
     }
 
     pub fn transcript(&self) -> Vec<HistoryEntry> {
-        self.state
+        self.ctx
             .read()
-            .map(|s| s.history.clone())
+            .map(|ctx| history_of(&ctx))
             .unwrap_or_default()
     }
 
@@ -364,14 +423,11 @@ impl Sandbox {
     }
 
     fn record(&self, entry: HistoryEntry) -> Result<(), Error> {
-        {
-            let mut s = self
-                .state
-                .write()
-                .map_err(|e| Error::other(e.to_string()))?;
-            s.history.push(entry);
-            let excess = s.history.len().saturating_sub(MAX_HISTORY);
-            s.history.drain(..excess);
+        if let Ok(mut ctx) = self.ctx.write() {
+            ctx.push(latenspace_entry(&entry.content, entry.role));
+            if let Ok(mut s) = self.state.write() {
+                s.history = history_of(&ctx);
+            }
         }
         self.save()
     }
