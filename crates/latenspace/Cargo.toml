@@ -9,3 +9,6 @@ katgpt-core = { workspace = true }
 katgpt-validator = { workspace = true }
 modelless = { workspace = true }
 serde_json = { workspace = true }
+
+[lints]
+workspace = true

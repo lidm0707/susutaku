@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)] // tests: unwrap is the assertion tool
+
 use backend::domain::{ToolCall, ToolKind, ToolSet};
 
 #[test]

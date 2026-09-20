@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)] // tests: unwrap is the assertion tool
+
 //! Integration tests for the public installer API surface only.
 
 use backend::infra::client::install;

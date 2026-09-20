@@ -10,3 +10,6 @@ serde_json = { workspace = true }
 thiserror = "2"
 
 [dev-dependencies]
+
+[lints]
+workspace = true

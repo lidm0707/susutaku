@@ -23,3 +23,6 @@ sqlx = { version = "0.8", default-features = false, features = [
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+
+[lints]
+workspace = true

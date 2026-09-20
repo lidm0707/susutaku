@@ -6,3 +6,6 @@ license.workspace = true
 
 [dependencies]
 pdf-extract = { workspace = true }
+
+[lints]
+workspace = true

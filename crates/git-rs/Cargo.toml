@@ -11,3 +11,6 @@ git2 = { version = "0.20", default-features = false, features = [
     "https",
     "vendored-openssl",
 ] }
+
+[lints]
+workspace = true

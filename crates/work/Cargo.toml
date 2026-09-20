@@ -8,3 +8,6 @@ license.workspace = true
 susutaku-mlx = { workspace = true }
 pdf-rs = { workspace = true }
 tokenizers = { workspace = true }
+
+[lints]
+workspace = true

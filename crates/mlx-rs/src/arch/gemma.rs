@@ -262,17 +262,21 @@ impl Attn {
                 (kc.clone(), vc.clone(), (kc.shape()[2] - l) as usize, offset)
             }
             None => {
-                let raw_k =
-                    self.k_proj
-                        .as_mut()
-                        .unwrap()
-                        .forward(x)?
-                        .reshape(&[b, l, self.kv_heads, d])?;
+                let raw_k = self
+                    .k_proj
+                    .as_mut()
+                    .ok_or("gemma4: k_proj required when KV is not shared")?
+                    .forward(x)?
+                    .reshape(&[b, l, self.kv_heads, d])?;
                 let mut v = match self.v_proj.as_mut() {
                     Some(vp) => vp.forward(x)?.reshape(&[b, l, self.kv_heads, d])?,
                     None => raw_k.clone(),
                 };
-                let k = self.k_norm.as_mut().unwrap().forward(&raw_k)?;
+                let k = self
+                    .k_norm
+                    .as_mut()
+                    .ok_or("gemma4: k_norm required when KV is not shared")?
+                    .forward(&raw_k)?;
                 let mut k = k.transpose_axes(&[0, 2, 1, 3])?;
                 v = rms_scale(&v, 1.0)?.as_dtype(raw_k.dtype())?;
                 v = v.transpose_axes(&[0, 2, 1, 3])?;
@@ -287,17 +291,15 @@ impl Attn {
                 // cached history (dequantized) + the new block, for attention
                 let (mut keys, mut values) = match cache {
                     AttnCache::Full(c) => match c.read()? {
-                        Some((kc, vc)) => (
-                            concatenate(&[&kc, &k], 2)?,
-                            concatenate(&[&vc, &v], 2)?,
-                        ),
+                        Some((kc, vc)) => {
+                            (concatenate(&[&kc, &k], 2)?, concatenate(&[&vc, &v], 2)?)
+                        }
                         None => (k.clone(), v.clone()),
                     },
                     AttnCache::Roll(r) => match r.kv.read()? {
-                        Some((kc, vc)) => (
-                            concatenate(&[&kc, &k], 2)?,
-                            concatenate(&[&vc, &v], 2)?,
-                        ),
+                        Some((kc, vc)) => {
+                            (concatenate(&[&kc, &k], 2)?, concatenate(&[&vc, &v], 2)?)
+                        }
                         None => (k.clone(), v.clone()),
                     },
                 };
@@ -495,15 +497,14 @@ impl Moe {
         let idx_flat = idx.reshape(&[b * l, self.top_k as i32])?;
         let w_flat = weights.reshape(&[b * l, self.top_k as i32])?;
 
-        let idx_host: Vec<u32> = (0..(b * l) as usize)
-            .flat_map(|rr| {
-                let rowv = idx_flat
-                    .index((rr as i32, ..))
-                    .as_dtype(Dtype::Uint32)
-                    .unwrap();
-                rowv.as_slice::<u32>().to_vec()
-            })
-            .collect();
+        let idx_host: Vec<u32> = {
+            let mut flat = Vec::with_capacity((b * l) as usize * self.top_k);
+            for rr in 0..b * l {
+                let rowv = idx_flat.index((rr, ..)).as_dtype(Dtype::Uint32)?;
+                flat.extend_from_slice(rowv.as_slice::<u32>().to_vec().as_slice());
+            }
+            flat
+        };
         let mut out = zeros::<f32>(&[b * l, hdim])?.as_dtype(x.dtype())?;
         for k in 0..self.top_k {
             let mut groups: HashMap<u32, Vec<usize>> = HashMap::new();
@@ -600,11 +601,23 @@ impl Layer {
                 let eps = self.ln_pre_ff.eps;
                 let pre = self.ln_pre_ff.forward(&h.clone())?;
                 let ff = self.mlp.forward(&pre)?;
-                let h1 = self.ln_post_ff_1.as_mut().unwrap().forward(&ff)?;
-                let h2 = self.ln_pre_ff_2.as_mut().unwrap().forward(&h)?;
+                let h1 = self
+                    .ln_post_ff_1
+                    .as_mut()
+                    .ok_or("gemma4: moe block requires ln_post_ff_1")?
+                    .forward(&ff)?;
+                let h2 = self
+                    .ln_pre_ff_2
+                    .as_mut()
+                    .ok_or("gemma4: moe block requires ln_pre_ff_2")?
+                    .forward(&h)?;
                 let (idx, w) = moe.router(&h, hidden, eps)?;
                 let h2 = moe.experts(&h2, &idx, &w)?;
-                let h2 = self.ln_post_ff_2.as_mut().unwrap().forward(&h2)?;
+                let h2 = self
+                    .ln_post_ff_2
+                    .as_mut()
+                    .ok_or("gemma4: moe block requires ln_post_ff_2")?
+                    .forward(&h2)?;
                 h1.add(&h2)?
             }
             None => self.mlp.forward(&self.ln_pre_ff.forward(&h)?)?,
@@ -879,10 +892,14 @@ impl Gemma {
             let from_embed = self
                 .pli_embed
                 .as_mut()
-                .unwrap()
+                .ok_or("gemma4: pli_embed required when pli_hidden > 0")?
                 .forward(tokens)?
                 .multiply(&array!(self.pli_embed_scale).as_dtype(mlx_rs::Dtype::Float32)?)?;
-            let mut from_hidden = self.pli_model_proj.as_mut().unwrap().forward(&h)?;
+            let mut from_hidden = self
+                .pli_model_proj
+                .as_mut()
+                .ok_or("gemma4: pli_model_proj required when pli_hidden > 0")?
+                .forward(&h)?;
             let out_dt = from_hidden.dtype();
             from_hidden = from_hidden.multiply(&array!(self.pli_model_scale).as_dtype(out_dt)?)?;
             let n = self.layers.len() as i32;

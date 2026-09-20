@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)] // tests: unwrap is the assertion tool
+
 use codex_cli::auth::{account_id_from_id_token, authorize_url};
 
 const FAKE_ID_TOKEN: &str = concat!(

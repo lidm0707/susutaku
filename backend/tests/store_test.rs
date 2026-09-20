@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)] // tests: unwrap is the assertion tool
+
 //! Integration test: Store against a live Postgres (DATABASE_URL or default).
 
 

@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)] // tests: unwrap is the assertion tool
+
 use git_rs::GitRepo;
 #[test]
 fn open_does_not_climb_above_target() {

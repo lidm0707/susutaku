@@ -6,3 +6,6 @@ license.workspace = true
 
 [dependencies]
 math = { path = "../math" }
+
+[lints]
+workspace = true

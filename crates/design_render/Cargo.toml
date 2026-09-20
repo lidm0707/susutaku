@@ -16,3 +16,6 @@ toml = "0.8"
 
 [package.metadata.notes]
 design = "Skia via headless Chromium (CDP); wgpu reserved for future box-overlay mode"
+
+[lints]
+workspace = true

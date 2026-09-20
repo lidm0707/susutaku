@@ -9,3 +9,6 @@ tokenizers.workspace = true
 katgpt-tokenizer.workspace = true
 katgpt-speculative.workspace = true
 serde_json.workspace = true
+
+[lints]
+workspace = true

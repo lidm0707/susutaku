@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)] // tests: unwrap is the assertion tool
+
 use piplines::payload::Payload;
 use piplines::stage::{Stage, StageId};
 use piplines::{Pipeline, PipelineError};

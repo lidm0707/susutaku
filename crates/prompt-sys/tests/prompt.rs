@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)] // tests: unwrap is the assertion tool
+
 use prompt_sys::{MAX_PROMPT_CHARS, PromptBuilder, PromptError, Role};
 
 #[test]

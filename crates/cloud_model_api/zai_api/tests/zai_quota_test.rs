@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)] // tests: unwrap is the assertion tool
+
 use zai_api::quota::{Limit, Quota, parse_quota};
 
 const SAMPLE: &str = r#"{"code":200,"msg":"ok","data":{"limits":[{"type":"TIME_LIMIT","unit":5,"number":1,"percentage":0,"nextResetTime":1789001066999},{"type":"TOKENS_LIMIT","percentage":19,"nextResetTime":1787248407405}],"level":"lite"},"success":true}"#;

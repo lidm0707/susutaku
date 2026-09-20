@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)] // tests: unwrap is the assertion tool
+
 use git_rs::GitRepo;
 use std::path::Path;
 use std::process::Command;

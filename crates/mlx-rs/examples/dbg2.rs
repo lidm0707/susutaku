@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)] // tests: unwrap is the assertion tool
+
 //! Debug: specific logits + top-5 for ids from /tmp/ids.json.
 
 use std::path::Path;

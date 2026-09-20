@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)] // tests: unwrap is the assertion tool
+
 //! Debug: print top-5 last-token logits for "Say hello." to compare with the
 //! mlx-lm reference. Run: cargo run --release -p susutaku-mlx --example dbg -- models/gemma-4-26b-a4b-it-4bit
 

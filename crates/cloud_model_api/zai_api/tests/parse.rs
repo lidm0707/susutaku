@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)] // tests: unwrap is the assertion tool
+
 use ai_interface_layer::error::AiError;
 use ai_interface_layer::message::{Message, Role};
 use ai_interface_layer::request::ChatRequest;

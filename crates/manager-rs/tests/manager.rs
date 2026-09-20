@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)] // tests: unwrap is the assertion tool
+
 use std::fs;
 
 use manager_rs::manager::{AGENTS_ROOT, Manager, RemoteRepo};

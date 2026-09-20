@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)] // tests: unwrap is the assertion tool
+
 use chemi::{
     element_counts, grams_from_moles, molar_mass_of, moles_from_grams, parse_formula, Element,
     FormulaComponent,

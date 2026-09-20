@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)] // tests: unwrap is the assertion tool
+
 use susutaku_mlx::json_guard::{GuardState, JsonGuard};
 
 #[test]

@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)] // tests: unwrap is the assertion tool
+
 //! Sandbox integration tests, portable across macOS/Linux/Windows via `sb`.
 
 use core_agent::podman as sb;

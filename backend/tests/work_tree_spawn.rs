@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)] // tests: unwrap is the assertion tool
+
 //! Live work-tree spawn test (needs podman): a card run must tear down a
 //! stale slot seeded without a repo and re-spawn from the bound repo, so the
 //! task branch exists and publish is possible.

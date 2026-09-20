@@ -45,6 +45,10 @@ version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
 
+[workspace.lints.clippy]
+# Production code must never panic on None: propagate or handle explicitly.
+unwrap_used = "deny"
+
 [workspace.dependencies]
 hf_loader = { path = "crates/hf_loader" }
 susutaku-mlx = { path = "crates/mlx-rs" }

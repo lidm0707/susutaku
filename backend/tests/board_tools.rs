@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)] // tests: unwrap is the assertion tool
+
 use async_trait::async_trait;
 use backend::domain::{BoardOp, BoardRequest, BoardResult, ToolCall, ToolKind, ToolSet};
 use backend::port::outbound::BoardOps;

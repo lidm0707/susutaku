@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)] // tests: unwrap is the assertion tool
+
 use bio::{AminoAcid, Base, Dna};
 
 #[test]

@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)] // tests: unwrap is the assertion tool
+
 //! Measures this machine's real MLX/Metal peaks and prints the consts for
 //! `src/roofline.rs`. Run: cargo run -p susutaku-mlx --example bench_roofline
 

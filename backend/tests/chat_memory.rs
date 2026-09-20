@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)] // tests: unwrap is the assertion tool
+
 //! Chat-memory round trip at the trait boundary: a fake memory verifies the
 //! use case recalls before prompting and remembers after replying.
 

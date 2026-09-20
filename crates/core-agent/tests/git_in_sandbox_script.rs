@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)] // tests: unwrap is the assertion tool
+
 use core_agent::toolcall::git_in_sandbox::{PR_BASE_DEFAULT, repo_slug, script_for};
 use proto_rs::GitTool;
 

@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)] // tests: unwrap is the assertion tool
+
 use task_rs::{Board, BoardError, Priority};
 
 #[test]

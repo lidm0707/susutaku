@@ -126,7 +126,7 @@ fn main() -> Result<()> {
     if !chrome_path.is_empty() {
         opts.path(Some(PathBuf::from(chrome_path)));
     }
-    let browser = Browser::new(opts.build().unwrap())?;
+    let browser = Browser::new(opts.build()?)?;
     let tab = browser.new_tab()?;
 
     match login(&tab, &app) {

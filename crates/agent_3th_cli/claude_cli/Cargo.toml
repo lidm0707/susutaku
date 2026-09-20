@@ -13,3 +13,6 @@ ureq = { workspace = true, features = ["json"] }
 base64 = "0.22"
 sha2 = "0.10"
 rand = "0.8"
+
+[lints]
+workspace = true

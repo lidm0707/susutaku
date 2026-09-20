@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)] // tests: unwrap is the assertion tool
+
 use math::{Complex, Mat3, Vec2, Vec3, mean, variance};
 
 fn approx(a: f64, b: f64) {

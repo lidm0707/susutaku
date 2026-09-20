@@ -12,3 +12,6 @@ rand = "0.9"
 hf_loader = { workspace = true }
 susutaku-mlx = { workspace = true }
 katgpt-speculative = { workspace = true }
+
+[lints]
+workspace = true

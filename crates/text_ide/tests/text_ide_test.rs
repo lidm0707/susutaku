@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)] // tests: unwrap is the assertion tool
+
 use text_ide::{Buffer, Editor, Position, Selection, find_all};
 
 #[test]

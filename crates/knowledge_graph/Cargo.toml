@@ -14,3 +14,6 @@ katgpt-core = { workspace = true, features = [
 katgpt-types = { git = "https://github.com/lidm0707/katgpt-rs", branch = "main" }
 blake3 = "1"
 fastrand = "2"
+
+[lints]
+workspace = true

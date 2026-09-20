@@ -46,3 +46,6 @@ mockall = "0.13"
 chrono = "0.4"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres"] }
+
+[lints]
+workspace = true

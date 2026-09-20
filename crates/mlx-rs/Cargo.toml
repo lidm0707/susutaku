@@ -16,3 +16,6 @@ serde_json = { workspace = true }
 mlx-rs = { workspace = true }
 
 [dev-dependencies]
+
+[lints]
+workspace = true

@@ -36,10 +36,10 @@ impl PropRope {
         let x2 = x.index((.., .., .., half as i32..(2 * half) as i32));
         let o1 = x1.multiply(&cos)?.subtract(&x2.multiply(&sin)?)?;
         let o2 = x2.multiply(&cos)?.add(&x1.multiply(&sin)?)?;
-        let head = mlx_rs::ops::concatenate_axis(&[&o1, &o2], 3)?;
+        let head = mlx_rs::ops::concatenate(&[&o1, &o2], 3)?;
         if 2 * half < d {
             let tail = x.index((.., .., .., (2 * half) as i32..));
-            return mlx_rs::ops::concatenate_axis(&[&head, &tail], 3);
+            return mlx_rs::ops::concatenate(&[&head, &tail], 3);
         }
         Ok(head)
     }

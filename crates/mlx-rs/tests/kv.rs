@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)] // tests: unwrap is the assertion tool
+
 use mlx_rs::Array;
 use susutaku_mlx::kv::QuantKvPair;
 

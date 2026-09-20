@@ -67,7 +67,12 @@ fn inflect(base: &str, rule: SuffixRule) -> String {
         SuffixRule::D => format!("{base}d"),
         SuffixRule::Ied => format!("{}ied", &base[..base.len() - 1]),
         SuffixRule::DoubledConsonantEd => {
-            format!("{base}{last}ed", last = base.chars().next_back().unwrap())
+            let mut out = base.to_string();
+            if let Some(last) = base.chars().next_back() {
+                out.push(last);
+                out.push_str("ed");
+            }
+            out
         }
     }
 }

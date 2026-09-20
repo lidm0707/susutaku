@@ -1,3 +1,6 @@
+#![allow(clippy::unwrap_used)] // tests: unwrap is the assertion tool
+#![allow(clippy::unwrap_in_result)]
+
 use core_agent::toolcall::web_search::{
     MAX_RESULTS, NO_RESULTS_NOTE, SNIPPET_MAX, build_url, parse, request,
 };

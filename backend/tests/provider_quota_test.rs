@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)] // tests: unwrap is the assertion tool
+
 use std::path::PathBuf;
 
 use backend::infra::provider_quota::{codex, platform_from_codex_claims};

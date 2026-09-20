@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)] // tests: unwrap is the assertion tool
+
 use std::path::PathBuf;
 
 use token_gate_adapter::{DraftConfig, DraftGate, GateKind, TokenGate};

@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)] // tests: unwrap is the assertion tool
+
 use backend::domain::{GitOp, ToolCall, ToolKind, ToolSet};
 
 fn git(op: GitOp) -> ToolCall {

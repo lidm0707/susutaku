@@ -26,3 +26,6 @@ features = ["Window", "Storage", "Crypto", "CryptoKeyPair", "SubtleCrypto", "con
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3"
+
+[lints]
+workspace = true

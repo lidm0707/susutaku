@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)] // tests: unwrap is the assertion tool
+
 use queue_rs::{BoundedQueue, UnboundedQueue};
 
 #[test]

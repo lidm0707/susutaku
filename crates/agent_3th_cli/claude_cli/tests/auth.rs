@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)] // tests: unwrap is the assertion tool
+
 use claude_cli::auth::{authorize_url, to_tokens, unix_millis, CLIENT_ID};
 
 #[test]

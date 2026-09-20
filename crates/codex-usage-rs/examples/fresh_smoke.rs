@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)] // tests: unwrap is the assertion tool
+
 //! Live check: fresh snapshot via `codex exec`, then store + read back.
 //! Usage: cargo run -p codex-usage-rs --example fresh_smoke
 

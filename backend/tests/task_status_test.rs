@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)] // tests: unwrap is the assertion tool
+
 //! Task status transitions: canonical TaskStatus mapping, server-side
 //! transition validation in CardService, and run-driven status changes.
 

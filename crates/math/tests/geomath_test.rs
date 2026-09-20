@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)] // tests: unwrap is the assertion tool
+
 use math::geomath::eval;
 use math::{Vec2, geomath};
 

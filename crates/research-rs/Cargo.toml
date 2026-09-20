@@ -9,3 +9,6 @@ katgpt-pruners = { git = "https://github.com/lidm0707/katgpt-rs", branch = "main
     "self_distilling_bandit",
 ] }
 katgpt-speculative = { git = "https://github.com/lidm0707/katgpt-rs", branch = "main", default-features = false }
+
+[lints]
+workspace = true
