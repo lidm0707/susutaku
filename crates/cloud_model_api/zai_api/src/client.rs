@@ -33,6 +33,22 @@ pub const CONNECT_TIMEOUT_SECS: u64 = 10;
 /// Max gap between SSE bytes: ureq's request timeout ends at the response
 /// headers, so without this a stalled stream blocks the reader forever.
 pub const STREAM_READ_TIMEOUT_SECS: u64 = 180;
+/// Proxy env vars consulted for the zai endpoint, in priority order. ureq
+/// does not read these itself — without this the backend bypasses a proxy
+/// the browser uses, and z.ai connections black-hole (connect ok, no
+/// response headers).
+pub const ENV_PROXIES: [&str; 3] = ["SUSUTAKU_PROXY", "HTTPS_PROXY", "https_proxy"];
+
+/// Proxy from the environment, if any of the supported vars is set.
+fn env_proxy() -> Option<ureq::Proxy> {
+    ENV_PROXIES.iter().find_map(|name| {
+        env::var(name)
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .and_then(|url| ureq::Proxy::new(url.as_str()).ok())
+    })
+}
 
 /// Which z.ai endpoint a key works against: coding-plan keys only accept
 /// `/api/coding/paas/v4`, regular api keys only `/api/paas/v4`.
@@ -111,19 +127,25 @@ impl ZaiClient {
     }
 
     fn plain_agent() -> ureq::Agent {
-        ureq::AgentBuilder::new()
-            .timeout_connect(std::time::Duration::from_secs(CONNECT_TIMEOUT_SECS))
-            .build()
+        let mut builder = ureq::AgentBuilder::new()
+            .timeout_connect(std::time::Duration::from_secs(CONNECT_TIMEOUT_SECS));
+        if let Some(proxy) = env_proxy() {
+            builder = builder.proxy(proxy);
+        }
+        builder.build()
     }
 
     /// Agent whose socket reads time out: ureq's request timeout ends when
     /// the response headers arrive, so a stalled SSE stream would otherwise
     /// block the reader thread forever.
     fn streaming_agent() -> ureq::Agent {
-        ureq::AgentBuilder::new()
+        let mut builder = ureq::AgentBuilder::new()
             .timeout_connect(std::time::Duration::from_secs(CONNECT_TIMEOUT_SECS))
-            .timeout_read(std::time::Duration::from_secs(STREAM_READ_TIMEOUT_SECS))
-            .build()
+            .timeout_read(std::time::Duration::from_secs(STREAM_READ_TIMEOUT_SECS));
+        if let Some(proxy) = env_proxy() {
+            builder = builder.proxy(proxy);
+        }
+        builder.build()
     }
 
     fn post(&self, agent: &ureq::Agent, body: &str) -> Result<ureq::Response, AiError> {
