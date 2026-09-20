@@ -14,7 +14,9 @@ COPY .agents ./.agents
 # sqlx query! macros compile offline against the .sqlx query metadata
 # (regenerate with: DATABASE_URL=... cargo sqlx prepare --workspace).
 ENV SQLX_OFFLINE=true
-RUN cargo build --release -p backend
+# susutaku-mcp: the MCP bridge bin codex runs inside the sandbox image
+# (resolved as a sibling of the backend exe, bind-mounted into sandboxes).
+RUN cargo build --release -p backend -p core-agent --bin susutaku-mcp
 
 # Hub-only build: the client-test stack uses a tiny proto-rs stub hub instead
 # of the model server, so no MLX/model deps are needed at runtime.
@@ -43,6 +45,7 @@ COPY docker/sandbox/Containerfile /usr/share/susutaku/sandbox/Containerfile
 COPY docker/backend/entrypoint-backend.sh /usr/local/bin/docker-entrypoint
 RUN chmod +x /usr/local/bin/docker-entrypoint
 COPY --from=build /app/target/release/backend /usr/local/bin/backend
+COPY --from=build /app/target/release/susutaku-mcp /usr/local/bin/susutaku-mcp
 WORKDIR /app
 EXPOSE 8991
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint"]
