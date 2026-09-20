@@ -105,6 +105,12 @@ pub const RUN_EVENT_RETRY: &str = "retry";
 pub const RUN_EVENT_NOTE: &str = "note";
 pub const RUN_EVENT_FINAL: &str = "final";
 
+/// Retry-with-context: a fresh run primed with the prior run's event stream.
+pub const CONTEXT_HEADING: &str = "PREVIOUS ATTEMPT CONTEXT: a prior run of this card produced the events below (its final failure included). Use them as context and continue or complete the task.\n";
+pub const CONTEXT_LABEL: &str = "previous run";
+pub const CONTEXT_EVENT_MAX: usize = 1500;
+pub const RETRY_CONTEXT_EVENTS: i64 = 40;
+
 /// Append one full-text run event and publish the board event so open cards
 /// stream it live over the websocket.
 async fn log_event(app: &TaskApp, card_id: i64, kind: &str, text: &str) {
@@ -317,6 +323,13 @@ fn unregister_cancel(card_id: i64) {
     }
 }
 
+/// Per-run controls threaded through execution: the cancel flag and the
+/// optional prior-attempt context a retry run is primed with.
+struct RunCtx<'a> {
+    cancel: &'a CancelFlag,
+    context: Option<&'a str>,
+}
+
 /// Run the card's assigned agent once. A card without an agent still records
 /// a failed run so the card moves on instead of silently staying put.
 /// The agent's configured model is routed through `engines` first (cloud
@@ -328,6 +341,7 @@ pub async fn run_card(
     card_id: i64,
     trigger: &'static str,
     wt: Option<&WorkTree>,
+    context: Option<&str>,
 ) -> Result<RunRecord, StoreError> {
     let card = app
         .cards
@@ -341,8 +355,12 @@ pub async fn run_card(
     }
     move_to_column(app, card_id, &card.column_id, TaskStatus::InProgress).await?;
     let cancel = register_cancel(card_id);
+    let ctx = RunCtx {
+        cancel: &cancel,
+        context,
+    };
     let record = match select_mode(wt, &card) {
-        RunMode::Text => execute(app, engine.as_ref(), engines, &card, &cancel).await,
+        RunMode::Text => execute(app, engine.as_ref(), engines, &card, &ctx).await,
         RunMode::Work(bound) => {
             execute_work(
                 app,
@@ -351,7 +369,7 @@ pub async fn run_card(
                 &card,
                 wt.expect("mode selected with work tree"),
                 bound,
-                &cancel,
+                &ctx,
             )
             .await
         }
@@ -373,7 +391,7 @@ async fn execute(
     engine: Option<&Arc<dyn Inference>>,
     engines: Option<&dyn ModelEngines>,
     card: &CardRow,
-    cancel: &CancelFlag,
+    ctx: &RunCtx<'_>,
 ) -> RunRecord {
     let agent = card.agent_name.clone().unwrap_or_default();
     match (engine, card.agent_name.as_deref()) {
@@ -382,7 +400,7 @@ async fn execute(
         (Some(engine), Some(name)) => match app.agents.by_name(name).await.ok().flatten() {
             None => fail(&agent, NOTE_NO_AGENT),
             Some(cfg) => {
-                if cancel.is_cancelled() {
+                if ctx.cancel.is_cancelled() {
                     return fail(&agent, NOTE_RUN_CANCELLED);
                 }
                 let model = cfg.model.trim();
@@ -391,7 +409,7 @@ async fn execute(
                     .filter(|_| !model.is_empty());
                 let target = routed.as_ref().unwrap_or(engine);
                 let skills = agent_skills(app, &cfg).await;
-                infer(app, target, &cfg, card, &agent, &skills).await
+                infer(app, target, &cfg, card, &agent, &skills, ctx.context).await
             }
         },
     }
@@ -413,18 +431,10 @@ async fn infer(
     card: &CardRow,
     agent: &str,
     skills: &[SkillRow],
+    context: Option<&str>,
 ) -> RunRecord {
-    match submit_retry(
-        app,
-        card.id,
-        engine,
-        None,
-        cfg,
-        task_prompt(cfg, card, skills),
-        INFER_MAX_TOKENS,
-    )
-    .await
-    {
+    let prompt = with_context(task_prompt(cfg, card, skills), context);
+    match submit_retry(app, card.id, engine, None, cfg, prompt, INFER_MAX_TOKENS).await {
         Ok(text) => RunRecord {
             agent: agent.to_owned(),
             status: RunStatus::Ok,
@@ -481,6 +491,43 @@ pub fn task_prompt(cfg: &AgentConfigRow, card: &CardRow, skills: &[SkillRow]) ->
     prompt.push_str(PROMPT_TASK);
     prompt.push_str(&task_body(card));
     prompt
+}
+
+/// Append the prior-attempt context block to a base prompt.
+fn with_context(base: String, context: Option<&str>) -> String {
+    match context {
+        Some(c) if !c.trim().is_empty() => {
+            let mut prompt = base;
+            prompt.push_str(TEXT_SEP);
+            prompt.push_str(CONTEXT_HEADING);
+            prompt.push_str(c);
+            prompt
+        }
+        _ => base,
+    }
+}
+
+/// Tail of the card's prior run events, trimmed per event — the context a
+/// "retry" run is primed with.
+pub async fn prior_context(app: &TaskApp, card_id: i64) -> Option<String> {
+    let rows = app
+        .store
+        .list_run_events(card_id, 0, RETRY_CONTEXT_EVENTS)
+        .await
+        .ok()?;
+    let mut out = String::new();
+    for row in rows {
+        let text: String = row.text.chars().take(CONTEXT_EVENT_MAX).collect();
+        if text.trim().is_empty() {
+            continue;
+        }
+        out.push('[');
+        out.push_str(&row.kind);
+        out.push_str("] ");
+        out.push_str(&text);
+        out.push('\n');
+    }
+    (!out.is_empty()).then_some(out)
 }
 
 pub fn work_prompt(
@@ -684,7 +731,7 @@ async fn execute_work(
     card: &CardRow,
     wt: &WorkTree,
     bound: BoundRepo,
-    cancel: &CancelFlag,
+    ctx: &RunCtx<'_>,
 ) -> RunRecord {
     let agent = card.agent_name.clone().unwrap_or_default();
     let Some(engine) = engine else {
@@ -725,8 +772,11 @@ async fn execute_work(
     let mut final_text = String::new();
     let mut no_tool_replies = 0usize;
     let mut ran_out = true;
+    if let Some(c) = ctx.context.filter(|c| !c.trim().is_empty()) {
+        append_tool(&mut transcript, CONTEXT_LABEL, c);
+    }
     for round in 0..CARD_TOOL_ROUNDS {
-        if cancel.is_cancelled() {
+        if ctx.cancel.is_cancelled() {
             ran_out = false;
             break;
         }
@@ -772,7 +822,7 @@ async fn execute_work(
             WorkStep::Final(_) => unreachable!("final handled during parse"),
         }
     }
-    let cancelled = cancel.is_cancelled();
+    let cancelled = ctx.cancel.is_cancelled();
     let rounds_note = if cancelled {
         NOTE_RUN_CANCELLED.to_owned()
     } else if ran_out {

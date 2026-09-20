@@ -204,6 +204,7 @@ impl BoardOps for BoardService {
                     card_id,
                     task_rs::TRIGGER_MANUAL,
                     self.wt.as_deref(),
+                    None,
                 )
                 .await
                 .map_err(|e| e.to_string())?;

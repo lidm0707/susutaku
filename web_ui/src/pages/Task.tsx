@@ -25,6 +25,7 @@ import {
   set_card_image,
   set_card_schedule,
   run_card,
+  retry_card_with_context,
   run_of,
   progress_of,
   fetch_active_runs,
@@ -711,6 +712,19 @@ export default function Task() {
     }
   }
 
+  async function retry_with_context(card: Card) {
+    setRunningId(card.id);
+    setError("");
+    try {
+      await retry_card_with_context(card.id);
+      await refresh();
+    } catch (err) {
+      handle(err);
+    } finally {
+      setRunningId(null);
+    }
+  }
+
   /// Finish the card's agent task slot (`<agent>#<card id>`) and push its
   /// branch to the project's bound repo.
   async function finish_push(card: Card) {
@@ -1230,6 +1244,21 @@ export default function Task() {
                   >
                     {runningId === detail.id ? <Loader2 size={13} className="spin" /> : <Play size={13} />} run now
                   </button>
+                  {detail.run_status === "failed" && (
+                    <button
+                      type="button"
+                      className="task-run-inline"
+                      onClick={() => retry_with_context(detail)}
+                      disabled={runningId != null}
+                      title="re-run the agent with the prior run's full event stream as context"
+                    >
+                      {runningId === detail.id ? (
+                        <Loader2 size={13} className="spin" />
+                      ) : (
+                        <RotateCcw size={13} />
+                      )}{' '}retry with context
+                    </button>
+                  )}
                   <button
                     type="button"
                     className="task-run-inline"

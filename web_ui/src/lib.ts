@@ -1496,6 +1496,11 @@ export async function run_card(id: number): Promise<CardRun> {
   return res.json();
 }
 
+export async function retry_card_with_context(id: number): Promise<CardRun> {
+  const res = await api(`/api/task/cards/${id}/retry`, { method: "POST" });
+  return res.json();
+}
+
 export async function rename_card(card: Card, title: string): Promise<Response> {
   return api(`/api/task/cards/${card.id}`, {
     method: "PUT",

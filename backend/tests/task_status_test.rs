@@ -165,8 +165,16 @@ async fn card_run_reports_missing_agent_and_uses_status_columns() {
         Arc::new(backend::port::outbound::MockWorkspaceRepo::new()),
         Arc::new(backend::port::outbound::MockProjectRepo::new()),
     );
-    let record = card_run::run_card(&app, None, None, CARD_ID, task_rs::TRIGGER_MANUAL, None)
-        .await
-        .unwrap();
+    let record = card_run::run_card(
+        &app,
+        None,
+        None,
+        CARD_ID,
+        task_rs::TRIGGER_MANUAL,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
     assert_eq!(record.status, card_run::RunStatus::Failed);
 }

@@ -236,6 +236,7 @@ async fn run_card_records_ok_and_persists_state() {
         CARD_ID,
         task_rs::TRIGGER_MANUAL,
         None,
+        None,
     )
     .await
     .expect("ran");
@@ -269,6 +270,7 @@ async fn run_card_without_engine_fails_run_with_note() {
         None,
         CARD_ID,
         task_rs::TRIGGER_MANUAL,
+        None,
         None,
     )
     .await
@@ -314,6 +316,7 @@ async fn run_card_without_agent_persists_failed_run() {
         None,
         CARD_ID,
         task_rs::TRIGGER_MANUAL,
+        None,
         None,
     )
     .await
@@ -385,6 +388,7 @@ async fn run_card_routes_through_agent_model() {
         Some(&RoutedEngine(CLOUD_MODEL)),
         CARD_ID,
         task_rs::TRIGGER_MANUAL,
+        None,
         None,
     )
     .await

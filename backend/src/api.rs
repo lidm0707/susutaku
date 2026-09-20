@@ -389,6 +389,7 @@ fn task_router(state: TaskStore) -> Router {
         .route("/api/task/cards/{id}/resources", get(list_card_resources))
         .route("/api/task/cards/{id}/image", put(set_card_image))
         .route("/api/task/cards/{id}/run", post(run_card))
+        .route("/api/task/cards/{id}/retry", post(retry_card_run))
         .route("/api/task/cards/{id}/cancel", post(cancel_card_run))
         .route("/api/task/cards/{id}/schedule", put(set_card_schedule))
         .route("/api/runs/active", get(list_active_runs))
@@ -2895,6 +2896,7 @@ async fn run_card(
         id,
         task_rs::TRIGGER_MANUAL,
         state.wt.as_deref(),
+        None,
     )
     .await
     .map_err(task_err)?;
@@ -2902,6 +2904,42 @@ async fn run_card(
         &state.store,
         "run",
         format!("started agent run for task {id}"),
+    )
+    .await;
+    crate::app::events::publish(crate::app::events::EventKind::Card);
+    Ok(Json(record))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/task/cards/{id}/retry",
+    responses((status = 200, body = crate::app::card_run::RunRecord), (status = 404, body = str), (status = 400, body = str))
+)]
+/// Re-run the card's agent primed with the prior run's full event stream as
+/// context — used after a failed run (e.g. rate limit) so the agent resumes
+/// with everything it already saw.
+async fn retry_card_run(
+    State(state): State<TaskStore>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+    user: AuthUser,
+) -> Result<Json<crate::app::card_run::RunRecord>, ApiError> {
+    require_edit(&user)?;
+    let context = crate::app::card_run::prior_context(&state.app, id).await;
+    let record = crate::app::card_run::run_card(
+        &state.app,
+        state.engine.clone(),
+        state.engines.as_deref(),
+        id,
+        task_rs::TRIGGER_MANUAL,
+        state.wt.as_deref(),
+        context.as_deref(),
+    )
+    .await
+    .map_err(task_err)?;
+    record_activity(
+        &state.store,
+        "run",
+        format!("retried agent run with context for task {id}"),
     )
     .await;
     crate::app::events::publish(crate::app::events::EventKind::Card);
