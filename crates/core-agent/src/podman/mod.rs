@@ -36,6 +36,7 @@
 //! - Default image built: `make sandbox-image`
 //!   (override with `SUSUTAKU_SANDBOX_IMAGE`).
 
+pub mod codex;
 pub mod image;
 pub mod install;
 pub mod limits;
@@ -44,6 +45,7 @@ pub mod sandbox;
 pub mod state;
 pub mod util;
 
+pub use codex::CodexEnv;
 pub use image::{AgentImage, cached_tag, ensure as ensure_image, resolve as resolve_image};
 pub use limits::{NetworkPolicy, NetworkPolicyChoice, SandboxConfig, SandboxLimits};
 pub use sandbox::{Role, Sandbox, run};

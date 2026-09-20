@@ -26,6 +26,16 @@ pub fn resolve_mcp_bin() -> Option<PathBuf> {
     sibling.exists().then_some(sibling)
 }
 
+/// The `[mcp_servers.susutaku]` TOML block for `command` (host or
+/// container path). Shared by the host config injection and the podman
+/// sandbox preinit prelude.
+pub fn server_block(command: &str) -> String {
+    format!(
+        "\n{SERVER_SECTION}\n{COMMAND_KEY} = \"{}\"\nargs = []\n",
+        escape(command)
+    )
+}
+
 /// Append the `[mcp_servers.susutaku]` block to `codex_home/config.toml`
 /// when the bridge binary exists and the section is not already present.
 /// Best-effort: a failed write must never break `codex exec`.
@@ -38,10 +48,7 @@ pub fn ensure_config(codex_home: &Path, bin: &Path) {
     if existing.contains(SERVER_SECTION) {
         return;
     }
-    let block = format!(
-        "\n{SERVER_SECTION}\n{COMMAND_KEY} = \"{}\"\nargs = []\n",
-        escape(bin.to_string_lossy().as_ref())
-    );
+    let block = server_block(&bin.to_string_lossy());
     let _ = fs::OpenOptions::new()
         .append(true)
         .create(true)

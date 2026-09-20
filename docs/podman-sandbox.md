@@ -106,6 +106,13 @@ allow-list, `--network=none` by default, rlimits, timeout kill).
   nested overlay needs kernel mounts or `/dev/fuse`, both unreliable when
   nested — vfs stores layers as plain directories. `fuse-overlayfs` stays
   installed as the fallback storage driver (row 2 above).
+- **codex in the sandbox** (`.plans/62-codex-in-podman.md`): the sandbox
+  image pre-inits the codex CLI (node + `@openai/codex` in the
+  Containerfile). Per run, `core_agent::podman::codex` bind-mounts the
+  host `$CODEX_HOME` read-only (auth.json is copied into a writable
+  `/tmp/codex-home`) and the `susutaku-mcp` bridge binary, then runs
+  `codex exec --json` with network enabled. Susutaku tools reach codex
+  via the stdio MCP config written by the prelude.
 
 ### Build vs run network
 

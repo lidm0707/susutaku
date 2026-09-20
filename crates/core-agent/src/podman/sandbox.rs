@@ -290,6 +290,20 @@ impl Sandbox {
         network: NetworkPolicyChoice,
         extra_env: &[(String, String)],
     ) -> Result<String, Error> {
+        self.run_with_env_mounts(cmd, limits, network, extra_env, &[])
+    }
+
+    /// Like [`run_with_env`], but bind-mounts extra host paths into the
+    /// container for this run only (read-only bridges, e.g. the codex
+    /// auth home + MCP bridge binary).
+    pub fn run_with_env_mounts(
+        &self,
+        cmd: &str,
+        limits: &SandboxLimits,
+        network: NetworkPolicyChoice,
+        extra_env: &[(String, String)],
+        extra_mounts: &[String],
+    ) -> Result<String, Error> {
         {
             let lc = self
                 .lifecycle
@@ -306,7 +320,7 @@ impl Sandbox {
         if let Ok(mut lc) = self.lifecycle.write() {
             *lc = Lifecycle::Running;
         }
-        let result = self.run_inner(cmd, limits, network, extra_env);
+        let result = self.run_inner(cmd, limits, network, extra_env, extra_mounts);
         let entry = HistoryEntry {
             role: Role::Tool,
             content: match &result {
@@ -333,6 +347,7 @@ impl Sandbox {
         limits: &SandboxLimits,
         network: NetworkPolicyChoice,
         extra_env: &[(String, String)],
+        extra_mounts: &[String],
     ) -> Result<String, Error> {
         let cwd_rel = self
             .state
@@ -356,6 +371,7 @@ impl Sandbox {
             seq,
             image: &image,
             cache_tag: cache_tag.as_deref(),
+            extra_mounts,
         };
         runner::run_container(
             &self.root(),

@@ -30,13 +30,15 @@ const SANDBOX_ENV: [(&str, &str); 5] = [
     ("LANG", "C.UTF-8"),
 ];
 
-/// Container identity for one run: sandbox name parts, base image, and the
-/// optional cache tag the container is committed into after the run.
+/// Container identity for one run: sandbox name parts, base image, the
+/// optional cache tag the container is committed into after the run, and
+/// extra read-only bind mounts (`host:container:ro` strings).
 pub(crate) struct ContainerSpec<'a> {
     pub sandbox_id: &'a str,
     pub seq: u64,
     pub image: &'a str,
     pub cache_tag: Option<&'a str>,
+    pub extra_mounts: &'a [String],
 }
 
 /// Run one command in a fresh container. `workspace` is the host-side
@@ -80,6 +82,9 @@ pub(crate) fn run_container(
     if let Some(repo) = linked_repo_dir(&workspace) {
         let repo = repo.display();
         command.arg("-v").arg(format!("{repo}:{repo}"));
+    }
+    for mount in spec.extra_mounts {
+        command.arg("-v").arg(mount);
     }
     command.arg("-w").arg(cwd_mount_path(cwd_rel));
     for (k, v) in SANDBOX_ENV {

@@ -1,5 +1,7 @@
 # Default sandbox image for agent commands (see core-agent sandbox_jail::podman).
 # Build: make sandbox-image
+# The codex CLI is baked in ("pre-init") so sandboxed codex runs need no
+# setup — only the auth home and MCP bridge are mounted per run.
 FROM docker.io/library/rust:slim AS toolchain
 
 FROM debian:stable-slim
@@ -11,6 +13,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         git \
         build-essential \
         pkg-config \
+        nodejs \
+        npm \
+    && npm install -g @openai/codex \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=toolchain /usr/local/rustup /usr/local/rustup
