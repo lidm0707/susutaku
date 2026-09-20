@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ArrowLeft, ArrowRight, Bot, CalendarClock, CheckCircle2, Eye, EyeOff, Flag, Hash, Image, LayoutGrid, List, ListChecks, Loader2, Play, Plus, Save, Tag, Trash2, Upload, User, X, XCircle, Zap } from "lucide-react";
+import { ArrowLeft, ArrowRight, Bot, CalendarClock, CheckCircle2, Eye, EyeOff, FileText, Flag, Hash, Image, Info, LayoutGrid, List, ListChecks, Loader2, Play, Plus, RotateCcw, Save, Sparkles, Tag, Terminal, Trash2, Upload, User, X, XCircle, Zap } from "lucide-react";
 import {
   clear_token,
   connect_events,
@@ -43,6 +43,7 @@ import {
   type RunEvent,
 } from "../lib.js";
 import { Modal, SlideOver } from "../ui/Overlay.js";
+import ZedPane from "../components/ZedPane.js";
 import { toast } from "../ui/Toast.js";
 import { use_projects } from "../components/ProjectContext.tsx";
 import { emit_card_created } from "../features/card_bus.js";
@@ -148,7 +149,7 @@ export default function Task() {
   const [users, setUsers] = useState<UserInfo[]>([]);
   const [dComments, setDComments] = useState<Comment[]>([]);
   const [dCommentBody, setDCommentBody] = useState("");
-  const [dTab, setDTab] = useState<"comments" | "history">("comments");
+  const [dTab, setDTab] = useState<"comments" | "agent" | "history">("comments");
   const [dPriority, setDPriority] = useState<Priority>(PRIORITIES[1]);
   const [dDeadline, setDDeadline] = useState("");
   const [dLabel, setDLabel] = useState("");
@@ -1090,6 +1091,14 @@ export default function Task() {
               </button>
               <button
                 role="tab"
+                aria-selected={dTab === "agent"}
+                className={dTab === "agent" ? "active" : ""}
+                onClick={() => setDTab("agent")}
+              >
+                agent text
+              </button>
+              <button
+                role="tab"
                 aria-selected={dTab === "history"}
                 className={dTab === "history" ? "active" : ""}
                 onClick={() => setDTab("history")}
@@ -1158,6 +1167,11 @@ export default function Task() {
                   </button>
                 </form>
               </div>
+            ) : dTab === "agent" ? (
+              <AgentTextPane
+                card={detail ? cards.find((c) => c.id === detail.id) ?? detail : null}
+                live_text={dThinking ? dAgentLive : ""}
+              />
             ) : (
               <RunLive
                 card={detail ? cards.find((c) => c.id === detail.id) ?? detail : null}
@@ -1493,6 +1507,21 @@ const RUN_EVENT_LABEL: Record<string, string> = {
   final: "result",
 };
 
+/// Icon per run-event kind so the history reads as a feed of agent actions.
+const RUN_EVENT_ICON: Record<string, JSX.Element> = {
+  run: <Play size={12} />,
+  gen: <Sparkles size={12} />,
+  tool: <Terminal size={12} />,
+  out: <FileText size={12} />,
+  retry: <RotateCcw size={12} />,
+  note: <Info size={12} />,
+  final: <CheckCircle2 size={12} />,
+};
+
+function RunEventIcon({ kind }: { kind: string }) {
+  return <span className="run-ev-icon">{RUN_EVENT_ICON[kind] ?? <Info size={12} />}</span>;
+}
+
 function RunLive({ card, run }: { card: Card | null; run: CardRun | null }) {
   const live = card?.run_status === "running";
   const card_id = card?.id ?? null;
@@ -1525,6 +1554,7 @@ function RunLive({ card, run }: { card: Card | null; run: CardRun | null }) {
     <ol>
       {events.map((e) => (
         <li key={e.id} className={`run-stage run-ok run-ev run-ev-${e.kind}`}>
+          <span className="run-stage-icon"><RunEventIcon kind={e.kind} /></span>
           <span className="run-stage-body">
             <strong>{RUN_EVENT_LABEL[e.kind] ?? e.kind}</strong>
             <pre className="run-output">{e.text}</pre>
@@ -1557,6 +1587,65 @@ function RunLive({ card, run }: { card: Card | null; run: CardRun | null }) {
         <section className="run-timeline" aria-label="agent stream">{stream}</section>
       )}
     </>
+  );
+}
+
+/// Zed-like read-only editor pane for the agent's text: tab strip with a
+/// file label, line-number gutter, monospace body. Shows the live stream
+/// while the agent thinks, otherwise the gen/result text of the last run.
+function AgentTextPane({ card, live_text }: { card: Card | null; live_text: string }) {
+  const live = card?.run_status === "running";
+  const card_id = card?.id ?? null;
+  const [text, setText] = useState("");
+  useEffect(() => {
+    if (live_text) {
+      setText(live_text);
+      return;
+    }
+    if (card_id == null) {
+      setText("");
+      return;
+    }
+    let alive = true;
+    const gen_text = (rows: RunEvent[]) =>
+      rows
+        .filter((e) => e.kind === "gen" || e.kind === "final")
+        .map((e) => e.text)
+        .join("\n\n");
+    (async () => {
+      let rows: RunEvent[] = [];
+      try {
+        rows = await fetch_card_events(card_id, 0);
+      } catch {
+        return;
+      }
+      if (!alive) return;
+      let after = rows.length ? rows[rows.length - 1].id : 0;
+      const joined = gen_text(rows);
+      if (joined) setText(joined);
+      if (!live) return;
+      const timer = setInterval(async () => {
+        try {
+          const more = await fetch_card_events(card_id, after);
+          if (!alive || !more.length) return;
+          after = more[more.length - 1].id;
+          const chunk = gen_text(more);
+          if (chunk) setText((prev) => (prev ? `${prev}\n\n${chunk}` : chunk));
+        } catch {
+          // backend unreachable: keep what we have
+        }
+      }, RUN_EVENT_POLL_MS);
+      return () => clearInterval(timer);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [card_id, live, live_text]);
+  return (
+    <ZedPane
+      text={text}
+      empty_hint="no agent text yet — run the card or mention @agent in a comment"
+    />
   );
 }
 

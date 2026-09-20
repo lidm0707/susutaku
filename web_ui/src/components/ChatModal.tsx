@@ -39,6 +39,7 @@ import { use_projects } from "./ProjectContext.js";
 import GraphView from "./GraphView.tsx";
 import { parse_plot_spec } from "../features/graph.js";
 import CapscreenModal from "./CapscreenModal.js";
+import ZedPane from "./ZedPane.js";
 import { image_files_to_data_urls } from "../features/capscreen.js";
 import { use_card_created, type CardEvent } from "../features/card_bus.js";
 
@@ -559,6 +560,8 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
   const pickerRef = useRef<HTMLDivElement | null>(null);
   const logRef = useRef<HTMLElement | null>(null);
   const stickBottom = useRef(true);
+  // "chat" = message log, "agent" = zed-like pane of the last agent text
+  const [pane, setPane] = useState<"chat" | "agent">("chat");
   const active = threads.find((t) => t.id === activeId) ?? threads[0];
   const messages = active.messages;
   const sortedThreads = [...threads].sort(
@@ -1328,7 +1331,39 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
             aria-label="resize chat panel"
           />
         )}
-        <div className={`chat-main${messages.length === 0 ? " empty" : ""}`}>
+        <div className={`chat-main${pane === "chat" && messages.length === 0 ? " empty" : ""}`}>
+          <div className="chat-pane-tabs" role="tablist">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={pane === "chat"}
+              className={pane === "chat" ? "active" : ""}
+              onClick={() => setPane("chat")}
+            >
+              chat
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={pane === "agent"}
+              className={pane === "agent" ? "active" : ""}
+              onClick={() => setPane("agent")}
+            >
+              agent text
+            </button>
+          </div>
+          {pane === "agent" ? (
+            <div className="chat-agent-pane">
+              <ZedPane
+                text={
+                  [...messages].reverse().find((m) => m.role === "assistant" && !m.pending)?.text ??
+                  ""
+                }
+                empty_hint="no agent text yet — send a message to an agent"
+              />
+            </div>
+          ) : (
+          <>
           {messages.length > 0 && (
           <section
             className="log chat-modal-log"
@@ -1614,6 +1649,8 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
               </button>
             </div>
           </form>
+          </>
+          )}
           <CapscreenModal
             open={capscreenOpen}
             on_close={() => setCapscreenOpen(false)}

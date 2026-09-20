@@ -98,20 +98,15 @@ impl ZaiEngine {
         if self.cancelled() {
             return Err(CANCELLED.to_string());
         }
-        let Some(events) = &self.events else {
-            let client = self.client()?;
-            let req = ChatRequest::new(String::new(), vec![message]);
-            return ChatProvider::complete(&client, &req)
-                .map(|r| GenReply {
-                    model,
-                    text: r.content,
-                    stats: GenStats::default(),
-                })
-                .map_err(|e| e.to_string());
-        };
+        // Always stream: a one-shot completion holds the response until the
+        // whole text is generated, which trips the client read timeout on
+        // long agent turns. Without an event channel deltas are just dropped.
         let client = self.client()?;
         let req = ChatRequest::new(String::new(), vec![message]);
-        let _ = events.send(StreamEvent::Turn);
+        let events = self.events.clone();
+        if let Some(ev) = &events {
+            let _ = ev.send(StreamEvent::Turn);
+        }
         match client.complete_stream(&req) {
             Ok(mut stream) => {
                 let mut text = String::new();
@@ -133,7 +128,9 @@ impl ZaiEngine {
                     match delta {
                         Ok(d) => {
                             text.push_str(&d);
-                            let _ = events.send(StreamEvent::Delta(d));
+                            if let Some(ev) = &events {
+                                let _ = ev.send(StreamEvent::Delta(d));
+                            }
                         }
                         Err(e) => {
                             if text.is_empty() {
