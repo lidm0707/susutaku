@@ -18,10 +18,11 @@ use manager_rs::manager::{Manager, RemoteRepo, TaskOutcome};
 use task_rs::store::{CardRow, RunRecordNew, StoreError};
 use task_rs::{AgentConfigRow, SkillRow, TaskStatus};
 
-use crate::domain::{CardMove, GitOp, TOOL_RESULT_HEADER, ToolCall};
+use crate::domain::{CardMove, GitOp, ToolCall};
 use crate::infra::manager_git::ManagerGit;
 use crate::infra::zai::settings::SettingsState;
 use crate::port::outbound::{Inference, ModelEngines};
+use latenspace::{JsonStuck, ToolPruner, check_json, repair_prompt};
 use manager_rs::git_state::NO_CHANGES;
 
 use super::task::TaskApp;
@@ -89,12 +90,42 @@ pub const NOTE_NOTHING_PUBLISHED: &str = "run produced no commits — nothing to
 pub const NOTE_EVIDENCE: &str = "\n\nlast reply:\n";
 pub const NOTE_TRANSCRIPT: &str = "\n\nlast steps:\n";
 pub const TRANSCRIPT_TAIL_MAX: usize = 2000;
+/// Token budget for the work-loop transcript: the kat pruner evicts cold,
+/// old tool outputs first instead of letting round 24 carry rounds 1..24.
+pub const TRANSCRIPT_BUDGET_TOKENS: usize = latenspace::kat_tool_call::PRUNER_DEFAULT_BUDGET;
 pub const NOTE_ROUNDS_OUT: &str = "\n\nrun ended: out of tool rounds before the agent finished";
+
+/// `run_events.kind` values: the full agent stream (generation, tool calls,
+/// command output, retries) persisted per card.
+pub const RUN_EVENT_RUN: &str = "run";
+pub const RUN_EVENT_GEN: &str = "gen";
+pub const RUN_EVENT_TOOL: &str = "tool";
+pub const RUN_EVENT_OUT: &str = "out";
+pub const RUN_EVENT_RETRY: &str = "retry";
+pub const RUN_EVENT_NOTE: &str = "note";
+pub const RUN_EVENT_FINAL: &str = "final";
+
+/// Append one full-text run event and publish the board event so open cards
+/// stream it live over the websocket.
+async fn log_event(app: &TaskApp, card_id: i64, kind: &str, text: &str) {
+    if text.is_empty() {
+        return;
+    }
+    if app
+        .store
+        .insert_run_event(card_id, kind, text)
+        .await
+        .is_ok()
+    {
+        crate::app::events::publish(crate::app::events::EventKind::Card);
+    }
+}
 /// Bare verb lines accepted as tool calls when the model skipped the exact
 /// `TOOL: ` prefix (work runs only; chat keeps strict parsing).
 pub const LENIENT_TOOLS: [&str; 4] = ["SHELL", "AGENT_RUN", "GIT", "LSP"];
 pub const LENIENT_PREFIX: &str = "TOOL: ";
 pub const REMINDER_LABEL: &str = "assistant";
+pub const MALFORMED_LABEL: &str = "malformed";
 /// No-tool replies tolerated before the run ends: one strict reminder per
 /// reply. Small models often need a second nudge before they emit a tool
 /// line, and each extra nudge is cheaper than a wasted failed run.
@@ -306,6 +337,7 @@ pub async fn run_card(
     let agent = card.agent_name.clone().unwrap_or_default();
     if app.cards.set_run_start(card_id, &agent).await.is_ok() {
         crate::app::events::publish(crate::app::events::EventKind::Card);
+        log_event(app, card_id, RUN_EVENT_RUN, &agent).await;
     }
     move_to_column(app, card_id, &card.column_id, TaskStatus::InProgress).await?;
     let cancel = register_cancel(card_id);
@@ -325,7 +357,15 @@ pub async fn run_card(
         }
     };
     unregister_cancel(card_id);
-    persist(app, card_id, &card, record, trigger).await
+    let record = persist(app, card_id, &card, record, trigger).await?;
+    log_event(
+        app,
+        card_id,
+        RUN_EVENT_FINAL,
+        &record.output.clone().unwrap_or_default(),
+    )
+    .await;
+    Ok(record)
 }
 
 async fn execute(
@@ -525,7 +565,10 @@ async fn submit_retry(
 ) -> Result<String, String> {
     for attempt in 1..=INFER_RETRY_MAX {
         match submit(engine, engines, cfg, prompt.clone(), max_tokens).await {
-            Ok(text) => return Ok(text),
+            Ok(text) => {
+                log_event(app, card_id, RUN_EVENT_GEN, &text).await;
+                return Ok(text);
+            }
             Err(e) if attempt < INFER_RETRY_MAX => {
                 tracing::warn!(attempt, error = %e, "inference retry scheduled");
                 report_retry(app, card_id, attempt).await;
@@ -552,6 +595,17 @@ async fn report_retry(app: &TaskApp, card_id: i64, failed_attempt: usize) {
         "updated_at": now_iso(),
     });
     write_progress(app, card_id, progress).await;
+    log_event(
+        app,
+        card_id,
+        RUN_EVENT_RETRY,
+        &format!(
+            "{RETRY_LABEL} {}/{} — {RETRY_NEXT_IN} {delay_s}s",
+            failed_attempt + 1,
+            INFER_RETRY_MAX
+        ),
+    )
+    .await;
 }
 
 /// Move a task unless it already sits in the target column.
@@ -664,7 +718,10 @@ async fn execute_work(
         Ok(None) => task_branch(&bound.agent, &bound.task),
         Err(e) => return fail(&agent, &format!("{NOTE_SPAWN_ERR}{e}")),
     };
-    let mut transcript = String::new();
+    let mut transcript = ToolPruner::with_counter(
+        ToolPruner::new(TRANSCRIPT_BUDGET_TOKENS),
+        Box::new(modelless::policy::token_count),
+    );
     let mut final_text = String::new();
     let mut no_tool_replies = 0usize;
     let mut ran_out = true;
@@ -673,7 +730,7 @@ async fn execute_work(
             ran_out = false;
             break;
         }
-        let prompt = work_prompt(&cfg, card, &transcript, &skills, &branch);
+        let prompt = work_prompt(&cfg, card, &transcript.render(), &skills, &branch);
         let reply = match submit_retry(app, card.id, engine, engines, &cfg, prompt, WORK_MAX_TOKENS)
             .await
         {
@@ -703,10 +760,14 @@ async fn execute_work(
                 let label = call_label(&call);
                 let out = exec_tool(wt, &bound, &work_tree, call).await;
                 append_tool(&mut transcript, &label, &out);
+                log_event(app, card.id, RUN_EVENT_TOOL, &label).await;
+                log_event(app, card.id, RUN_EVENT_OUT, &out).await;
                 report_progress(app, card.id, round, &label, &out).await;
             }
             WorkStep::Retry => {
-                append_tool(&mut transcript, "malformed", CARD_TOOL_MALFORMED);
+                let note = retry_note(&reply);
+                append_tool(&mut transcript, MALFORMED_LABEL, &note);
+                log_event(app, card.id, RUN_EVENT_NOTE, &note).await;
             }
             WorkStep::Final(_) => unreachable!("final handled during parse"),
         }
@@ -736,7 +797,7 @@ async fn execute_work(
                 "{NOTE_NOTHING_PUBLISHED}{rounds_note}{}{}{NOTE_TRANSCRIPT}{}",
                 NOTE_EVIDENCE,
                 truncate(&final_text, TRANSCRIPT_TAIL_MAX),
-                tail(&transcript, TRANSCRIPT_TAIL_MAX)
+                tail(&transcript.render(), TRANSCRIPT_TAIL_MAX)
             ),
         ),
         Publish::Failed(e) => fail(&agent, &format!("{NOTE_PUBLISH_ERR}{e}")),
@@ -958,15 +1019,30 @@ fn call_label(call: &ToolCall) -> String {
     }
 }
 
-fn append_tool(transcript: &mut String, label: &str, out: &str) {
-    if transcript.is_empty() {
-        transcript.push_str(TOOL_RESULT_HEADER);
+/// One transcript turn into the kat pruner: cold, old tool outputs are
+/// evicted first once the token budget is exceeded.
+fn append_tool(transcript: &mut ToolPruner, label: &str, out: &str) {
+    transcript.append(label, &truncate(out, TOOL_OUTPUT_MAX));
+}
+
+/// Corrective feedback for a malformed tool offer: a stuck/invalid JSON call
+/// gets the specific kat repair prompt, anything else the generic reminder.
+fn retry_note(reply: &str) -> String {
+    match check_json(reply) {
+        Ok(value) => {
+            let bad = latenspace::kat_tool_call::global_policy().violations(&value);
+            if bad.is_empty() {
+                CARD_TOOL_MALFORMED.to_owned()
+            } else {
+                latenspace::kat_tool_call::policy_prompt(&bad)
+            }
+        }
+        Err(
+            stuck
+            @ (JsonStuck::Truncated { .. } | JsonStuck::Invalid { .. } | JsonStuck::NotObject),
+        ) => repair_prompt(&stuck),
+        _ => CARD_TOOL_MALFORMED.to_owned(),
     }
-    transcript.push('\n');
-    transcript.push_str(label);
-    transcript.push('\n');
-    transcript.push_str(&truncate(out, TOOL_OUTPUT_MAX));
-    transcript.push('\n');
 }
 
 fn truncate(s: &str, max: usize) -> String {

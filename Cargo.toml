@@ -58,6 +58,7 @@ pdf-rs = { path = "crates/pdf-rs" }
 task-rs = { path = "crates/task-rs" }
 codex-usage-rs = { path = "crates/codex-usage-rs" }
 queue-rs = { path = "crates/queue-rs" }
+modelless = { path = "crates/modelless" }
 manager-rs = { path = "crates/manager-rs" }
 prompt-sys = { path = "crates/prompt-sys" }
 piplines = { path = "crates/piplines" }
@@ -87,4 +88,5 @@ katgpt-speculative = { git = "https://github.com/lidm0707/katgpt-rs", branch = "
 katgpt-core = { git = "https://github.com/lidm0707/katgpt-rs", branch = "main", default-features = false, features = [
     "usage_rate_eviction",
 ] }
+katgpt-validator = { git = "https://github.com/lidm0707/katgpt-rs", branch = "main" }
 serde = { version = "1", features = ["derive"] }

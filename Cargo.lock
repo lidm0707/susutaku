@@ -305,10 +305,12 @@ dependencies = [
  "core-agent",
  "fastembed",
  "hostname",
+ "latenspace",
  "libc",
  "manager-rs",
  "math",
  "mockall",
+ "modelless",
  "prompt-sys",
  "proto-rs",
  "serde",
@@ -1205,7 +1207,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -1368,7 +1370,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2633,7 +2635,7 @@ dependencies = [
 [[package]]
 name = "katgpt-core"
 version = "0.4.1"
-source = "git+https://github.com/lidm0707/katgpt-rs?branch=main#11a5b84c6cd10659f2da433b5a80a363e58a2bf4"
+source = "git+https://github.com/lidm0707/katgpt-rs?branch=main#3c844aebbcfa6be2591468cb22fb3fe363a13e31"
 dependencies = [
  "ahash",
  "arrayvec",
@@ -2659,12 +2661,12 @@ dependencies = [
 [[package]]
 name = "katgpt-dec"
 version = "0.1.3"
-source = "git+https://github.com/lidm0707/katgpt-rs?branch=main#11a5b84c6cd10659f2da433b5a80a363e58a2bf4"
+source = "git+https://github.com/lidm0707/katgpt-rs?branch=main#3c844aebbcfa6be2591468cb22fb3fe363a13e31"
 
 [[package]]
 name = "katgpt-hla"
 version = "0.1.3"
-source = "git+https://github.com/lidm0707/katgpt-rs?branch=main#11a5b84c6cd10659f2da433b5a80a363e58a2bf4"
+source = "git+https://github.com/lidm0707/katgpt-rs?branch=main#3c844aebbcfa6be2591468cb22fb3fe363a13e31"
 dependencies = [
  "katgpt-types",
 ]
@@ -2672,7 +2674,7 @@ dependencies = [
 [[package]]
 name = "katgpt-micro-belief"
 version = "0.2.1"
-source = "git+https://github.com/lidm0707/katgpt-rs?branch=main#11a5b84c6cd10659f2da433b5a80a363e58a2bf4"
+source = "git+https://github.com/lidm0707/katgpt-rs?branch=main#3c844aebbcfa6be2591468cb22fb3fe363a13e31"
 dependencies = [
  "blake3",
  "fastrand",
@@ -2683,7 +2685,7 @@ dependencies = [
 [[package]]
 name = "katgpt-percepta"
 version = "0.1.0"
-source = "git+https://github.com/lidm0707/katgpt-rs?branch=main#11a5b84c6cd10659f2da433b5a80a363e58a2bf4"
+source = "git+https://github.com/lidm0707/katgpt-rs?branch=main#3c844aebbcfa6be2591468cb22fb3fe363a13e31"
 dependencies = [
  "log",
 ]
@@ -2691,7 +2693,7 @@ dependencies = [
 [[package]]
 name = "katgpt-personality"
 version = "0.1.3"
-source = "git+https://github.com/lidm0707/katgpt-rs?branch=main#11a5b84c6cd10659f2da433b5a80a363e58a2bf4"
+source = "git+https://github.com/lidm0707/katgpt-rs?branch=main#3c844aebbcfa6be2591468cb22fb3fe363a13e31"
 dependencies = [
  "blake3",
  "katgpt-types",
@@ -2701,7 +2703,7 @@ dependencies = [
 [[package]]
 name = "katgpt-pruners"
 version = "0.1.0"
-source = "git+https://github.com/lidm0707/katgpt-rs?branch=main#11a5b84c6cd10659f2da433b5a80a363e58a2bf4"
+source = "git+https://github.com/lidm0707/katgpt-rs?branch=main#3c844aebbcfa6be2591468cb22fb3fe363a13e31"
 dependencies = [
  "blake3",
  "bytemuck",
@@ -2722,7 +2724,7 @@ dependencies = [
 [[package]]
 name = "katgpt-sense"
 version = "0.2.1"
-source = "git+https://github.com/lidm0707/katgpt-rs?branch=main#11a5b84c6cd10659f2da433b5a80a363e58a2bf4"
+source = "git+https://github.com/lidm0707/katgpt-rs?branch=main#3c844aebbcfa6be2591468cb22fb3fe363a13e31"
 dependencies = [
  "blake3",
  "fastrand",
@@ -2733,7 +2735,7 @@ dependencies = [
 [[package]]
 name = "katgpt-speculative"
 version = "0.1.0"
-source = "git+https://github.com/lidm0707/katgpt-rs?branch=main#11a5b84c6cd10659f2da433b5a80a363e58a2bf4"
+source = "git+https://github.com/lidm0707/katgpt-rs?branch=main#3c844aebbcfa6be2591468cb22fb3fe363a13e31"
 dependencies = [
  "katgpt-core",
  "katgpt-transformer",
@@ -2744,7 +2746,7 @@ dependencies = [
 [[package]]
 name = "katgpt-tokenizer"
 version = "0.1.0"
-source = "git+https://github.com/lidm0707/katgpt-rs?branch=main#11a5b84c6cd10659f2da433b5a80a363e58a2bf4"
+source = "git+https://github.com/lidm0707/katgpt-rs?branch=main#3c844aebbcfa6be2591468cb22fb3fe363a13e31"
 dependencies = [
  "serde",
 ]
@@ -2752,7 +2754,7 @@ dependencies = [
 [[package]]
 name = "katgpt-transformer"
 version = "0.1.0"
-source = "git+https://github.com/lidm0707/katgpt-rs?branch=main#11a5b84c6cd10659f2da433b5a80a363e58a2bf4"
+source = "git+https://github.com/lidm0707/katgpt-rs?branch=main#3c844aebbcfa6be2591468cb22fb3fe363a13e31"
 dependencies = [
  "arrayvec",
  "blake3",
@@ -2766,13 +2768,24 @@ dependencies = [
 [[package]]
 name = "katgpt-types"
 version = "0.2.1"
-source = "git+https://github.com/lidm0707/katgpt-rs?branch=main#11a5b84c6cd10659f2da433b5a80a363e58a2bf4"
+source = "git+https://github.com/lidm0707/katgpt-rs?branch=main#3c844aebbcfa6be2591468cb22fb3fe363a13e31"
 dependencies = [
  "blake3",
  "fastrand",
  "half",
  "rayon",
  "serde",
+]
+
+[[package]]
+name = "katgpt-validator"
+version = "0.1.0"
+source = "git+https://github.com/lidm0707/katgpt-rs?branch=main#3c844aebbcfa6be2591468cb22fb3fe363a13e31"
+dependencies = [
+ "katgpt-core",
+ "katgpt-tokenizer",
+ "proc-macro2",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -2807,6 +2820,9 @@ name = "latenspace"
 version = "0.1.0"
 dependencies = [
  "katgpt-core",
+ "katgpt-validator",
+ "modelless",
+ "serde_json",
 ]
 
 [[package]]
@@ -3420,7 +3436,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -4549,7 +4565,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -4687,7 +4703,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5b55fb86dfd3a2f5f76ea78310a88f96c4ea21a3031f8d212443d56123fd0521"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -5369,7 +5385,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -6501,7 +6517,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
@@ -6826,7 +6842,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d6f32a0ff4a9f6f01231eb2059cc85479330739333e0e58cadf03b6af2cca10"
 dependencies = [
  "cfg-if",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

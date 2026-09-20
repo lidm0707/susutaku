@@ -6,6 +6,8 @@ mod regular;
 
 use irregular::IRREGULAR;
 use regular::REGULAR;
+use std::collections::HashSet;
+use std::sync::OnceLock;
 
 pub const VERB_COUNT: usize = 173 + 827;
 pub const FORMS_PER_VERB: usize = 3;
@@ -126,4 +128,15 @@ pub fn text() -> String {
         out.push('\n');
     }
     out
+}
+
+fn form_set() -> &'static HashSet<&'static str> {
+    static SET: OnceLock<HashSet<&'static str>> = OnceLock::new();
+    SET.get_or_init(|| words().collect())
+}
+
+/// True when `word` is one of the 3000 corpus verb forms
+/// (base, past or past participle, case-sensitive lowercase).
+pub fn is_word(word: &str) -> bool {
+    form_set().contains(word)
 }

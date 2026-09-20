@@ -27,6 +27,9 @@ pub const SSE_DATA_PREFIX: &str = "data:";
 pub const SSE_DONE_MARKER: &str = "[DONE]";
 pub const EMPTY_BODY_NOTE: &str = "<unreadable body>";
 pub const REQUEST_TIMEOUT_SECS: u64 = 300;
+/// Bound on establishing the TCP/TLS connection: a black-holed host must
+/// fail fast with a clear error instead of stalling the whole request slot.
+pub const CONNECT_TIMEOUT_SECS: u64 = 10;
 /// Max gap between SSE bytes: ureq's request timeout ends at the response
 /// headers, so without this a stalled stream blocks the reader forever.
 pub const STREAM_READ_TIMEOUT_SECS: u64 = 180;
@@ -108,7 +111,9 @@ impl ZaiClient {
     }
 
     fn plain_agent() -> ureq::Agent {
-        ureq::AgentBuilder::new().build()
+        ureq::AgentBuilder::new()
+            .timeout_connect(std::time::Duration::from_secs(CONNECT_TIMEOUT_SECS))
+            .build()
     }
 
     /// Agent whose socket reads time out: ureq's request timeout ends when
@@ -116,6 +121,7 @@ impl ZaiClient {
     /// block the reader thread forever.
     fn streaming_agent() -> ureq::Agent {
         ureq::AgentBuilder::new()
+            .timeout_connect(std::time::Duration::from_secs(CONNECT_TIMEOUT_SECS))
             .timeout_read(std::time::Duration::from_secs(STREAM_READ_TIMEOUT_SECS))
             .build()
     }
