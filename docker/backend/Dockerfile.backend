@@ -16,7 +16,8 @@ COPY .agents ./.agents
 ENV SQLX_OFFLINE=true
 # susutaku-mcp: the MCP bridge bin codex runs inside the sandbox image
 # (resolved as a sibling of the backend exe, bind-mounted into sandboxes).
-RUN cargo build --release -p backend -p core-agent --bin susutaku-mcp
+# NOTE: --bin filters the whole build, so the backend needs its own command.
+RUN cargo build --release -p backend && cargo build --release -p core-agent --bin susutaku-mcp
 
 # Hub-only build: the client-test stack uses a tiny proto-rs stub hub instead
 # of the model server, so no MLX/model deps are needed at runtime.
