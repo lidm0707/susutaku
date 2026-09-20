@@ -9,7 +9,7 @@ use mlx_rs::{
     module::{Module, Param},
     nn,
     ops::indexing::IndexOp,
-    ops::{concatenate_axis, conv1d, exp, repeat_axis, sigmoid, stack, sum_axis, zeros},
+    ops::{concatenate, conv1d, exp, repeat_axis, sigmoid, stack, sum_axis, zeros},
 };
 
 use crate::quant::{
@@ -161,8 +161,8 @@ impl Attention {
                 q = self.rope.forward((&q, rope_pos))?;
                 k = self.rope.forward((&k, rope_pos))?;
                 (
-                    concatenate_axis(&[kc, &k], 2)?,
-                    concatenate_axis(&[vc, &v], 2)?,
+                    concatenate(&[kc, &k], 2)?,
+                    concatenate(&[vc, &v], 2)?,
                 )
             }
             None => {
@@ -172,7 +172,7 @@ impl Attention {
             }
         };
 
-        let out = scaled_dot_product_attention(q, &k, &v, self.scale, mask)?;
+        let out = scaled_dot_product_attention(q, &k, &v, self.scale, mask, None)?;
         let out = out.transpose_axes(&[0, 2, 1, 3])?.reshape(&[b, l, -1])?;
         let out = out.multiply(&sigmoid(gate)?)?;
         Ok(AttnOutput {
@@ -231,7 +231,7 @@ impl Gdn {
             ),
         };
 
-        let conv_in = concatenate_axis(&[&prev_conv, &qkv], 1)?;
+        let conv_in = concatenate(&[&prev_conv, &qkv], 1)?;
         let conv_state = conv_in.index((.., (conv_in.shape()[1] - (self.conv_k - 1)).., ..));
         let conv_out = nn::silu(conv1d(&conv_in, &self.conv_w, 1, 0, 1, conv_dim)?)?;
 
@@ -282,10 +282,10 @@ impl Gdn {
             ys.push(y);
             state = state_new;
         }
-        let y = stack(&ys.iter().collect::<Vec<_>>())?.transpose_axes(&[1, 0, 2, 3])?;
+        let y = stack(&ys.iter().collect::<Vec<_>>(), 0)?.transpose_axes(&[1, 0, 2, 3])?;
 
         // gated rmsnorm: rms(y) * silu(z)
-        let normed = rms_norm(&y, &self.norm.weight, self.norm.eps)?;
+        let normed = rms_norm(&y, Some(&self.norm.weight), self.norm.eps)?;
         let gated = normed
             .multiply(&nn::silu(z)?)?
             .reshape(&[b, s, self.num_v * self.dv])?;

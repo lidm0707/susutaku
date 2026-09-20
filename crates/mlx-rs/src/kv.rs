@@ -8,7 +8,7 @@
 use mlx_rs::{
     Array,
     ops::indexing::IndexOp,
-    ops::{concatenate_axis, dequantize, quantize},
+    ops::{concatenate, dequantize, quantize},
     transforms::eval,
 };
 
@@ -52,7 +52,7 @@ impl QuantKv {
         let (w, s, b) = match (&self.w, &self.scales, &self.biases) {
             (Some(w), Some(s), Some(b)) => {
                 let old = dequantize(w, s, b, KV_GROUP, KV_BITS)?;
-                let all = concatenate_axis(&[&old, raw], 2)?;
+                let all = concatenate(&[&old, raw], 2)?;
                 quantize(&all, KV_GROUP, KV_BITS)?
             }
             _ => quantize(raw, KV_GROUP, KV_BITS)?,
@@ -131,7 +131,7 @@ impl QuantKv {
         let s = sink as i32;
         let r = (self.count - recent) as i32;
         let pick =
-            |a: &Array| concatenate_axis(&[&a.index((.., .., ..s)), &a.index((.., .., r..))], 2);
+            |a: &Array| concatenate(&[&a.index((.., .., ..s)), &a.index((.., .., r..))], 2);
         if let Some(w) = &self.w {
             self.w = Some(pick(w)?);
         }

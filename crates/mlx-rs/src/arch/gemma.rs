@@ -11,7 +11,7 @@ use mlx_rs::{
     module::{Module, Param},
     nn,
     ops::indexing::{IndexOp, take_along_axis},
-    ops::{argpartition_axis, concatenate_axis, quantized_matmul, softmax_axis, tanh, zeros},
+    ops::{argpartition_axis, concatenate, quantized_matmul, softmax_axis, tanh, zeros},
 };
 
 use crate::quant::{
@@ -288,15 +288,15 @@ impl Attn {
                 let (mut keys, mut values) = match cache {
                     AttnCache::Full(c) => match c.read()? {
                         Some((kc, vc)) => (
-                            concatenate_axis(&[&kc, &k], 2)?,
-                            concatenate_axis(&[&vc, &v], 2)?,
+                            concatenate(&[&kc, &k], 2)?,
+                            concatenate(&[&vc, &v], 2)?,
                         ),
                         None => (k.clone(), v.clone()),
                     },
                     AttnCache::Roll(r) => match r.kv.read()? {
                         Some((kc, vc)) => (
-                            concatenate_axis(&[&kc, &k], 2)?,
-                            concatenate_axis(&[&vc, &v], 2)?,
+                            concatenate(&[&kc, &k], 2)?,
+                            concatenate(&[&vc, &v], 2)?,
                         ),
                         None => (k.clone(), v.clone()),
                     },
@@ -347,8 +347,9 @@ impl Attn {
                 &values,
                 1.0,
                 ScaledDotProductAttentionMask::Array(m),
+                None,
             )?,
-            None => scaled_dot_product_attention(&q, &keys, &values, 1.0, None)?,
+            None => scaled_dot_product_attention(&q, &keys, &values, 1.0, None, None)?,
         };
         let out = out.transpose_axes(&[0, 2, 1, 3])?.reshape(&[b, l, -1])?;
         let out = self.o_proj.forward(&out)?;
@@ -467,7 +468,7 @@ impl Moe {
         let sw = self
             .scale
             .multiply(&array!(root).as_dtype(self.scale.dtype())?)?;
-        let normed = rms_norm(h, &sw, eps)?;
+        let normed = rms_norm(h, Some(&sw), eps)?;
         let scores = self.proj.forward(&normed)?;
         let e = self.per_expert.shape()[0];
         let idx_shape0 = scores.shape()[0];
@@ -893,8 +894,8 @@ impl Gemma {
             let proj = from_hidden.reshape(&[b, l, n, w])?;
             let proj = match self.pli_proj_norm.as_ref() {
                 Some(wgt) => {
-                    let wgt = wgt.as_ref().as_dtype(proj.dtype())?;
-                    mlx_rs::fast::rms_norm(&proj, wgt, self.pli_norm_eps)?
+                    let wgt = &wgt.as_ref().as_dtype(proj.dtype())?;
+                    mlx_rs::fast::rms_norm(&proj, Some(wgt), self.pli_norm_eps)?
                 }
                 None => proj,
             };

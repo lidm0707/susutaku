@@ -302,7 +302,7 @@ impl Model {
 
         let t1 = std::time::Instant::now();
         for i in 0..max_tokens {
-            let id = y.item::<u32>();
+            let id = y.item_cast::<u32>();
             if self.is_eos(id) {
                 break;
             }
@@ -328,7 +328,7 @@ impl Model {
         eval(&out)?;
         let decode_secs = t1.elapsed().as_secs_f64();
 
-        let ids: Vec<u32> = out.drain(..).map(|a| a.item::<u32>()).collect();
+        let ids: Vec<u32> = out.drain(..).map(|a| a.item_cast::<u32>()).collect();
         let text = tokenizer.decode(&ids)?;
         let stats = GenStats {
             prompt_tokens: tokens.dim(1) as usize,
@@ -363,7 +363,7 @@ impl Model {
         // the pending `y` (already predicted, not yet in `out`).
         let mut y = sample(&logits.index((.., -1, ..)), TEMP)?;
         let mut context = ids.clone();
-        context.push(y.item::<u32>());
+        context.push(y.item_cast::<u32>());
         let mut out: Vec<Array> = Vec::with_capacity(max_tokens);
         let mut n_accepted: usize = 0;
 
@@ -373,7 +373,7 @@ impl Model {
             let steps = drafts.len() + 1; // drafts + one free token
             if drafts.is_empty() || out.len() + steps > max_tokens {
                 // plain single-token step
-                let id = y.item::<u32>();
+                let id = y.item_cast::<u32>();
                 if self.is_eos(id) {
                     break;
                 }
@@ -381,7 +381,7 @@ impl Model {
                 let next = y.index((.., NewAxis));
                 let logits = self.forward(&next)?;
                 y = sample(&logits.index((.., -1, ..)), TEMP)?;
-                context.push(y.item::<u32>());
+                context.push(y.item_cast::<u32>());
                 ngram.observe(&context);
                 if out.len().is_multiple_of(4) {
                     eval(&out)?;
@@ -397,7 +397,7 @@ impl Model {
             // verify [y] + drafts in one forward; `before` = cache positions
             // before this call
             let before = self.cached_len();
-            let mut verify = vec![y.item::<u32>()];
+            let mut verify = vec![y.item_cast::<u32>()];
             verify.extend_from_slice(&drafts);
             let vtok = Array::from_slice(&verify, &[1, verify.len() as i32]);
             let logits = self.forward(&vtok)?;
@@ -444,7 +444,7 @@ impl Model {
         eval(&out)?;
         let decode_secs = t1.elapsed().as_secs_f64();
 
-        let ids: Vec<u32> = out.drain(..).map(|a| a.item::<u32>()).collect();
+        let ids: Vec<u32> = out.drain(..).map(|a| a.item_cast::<u32>()).collect();
         let text = tokenizer.decode(&ids)?;
         let stats = GenStats {
             prompt_tokens: prompt_len,
