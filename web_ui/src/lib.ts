@@ -1042,6 +1042,19 @@ export async function fetch_card_runs(card_id: number): Promise<CardRunRecord[]>
   return (await api(`/api/task/cards/${card_id}/runs`)).json();
 }
 
+/** One entry of the persisted agent run stream (gen/tool/output/retry). */
+export interface RunEvent {
+  id: number;
+  card_id: number;
+  kind: string;
+  text: string;
+  created_at: string;
+}
+
+export async function fetch_card_events(card_id: number, after = 0): Promise<RunEvent[]> {
+  return (await api(`/api/tasks/${card_id}/events?after=${after}`)).json();
+}
+
 export interface ActiveRun {
   card: Card;
   progress: { round: number; rounds: number; last_tool: string } | null;

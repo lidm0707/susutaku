@@ -16,6 +16,7 @@ pub mod comment;
 pub mod resource;
 pub mod routine;
 pub mod run;
+pub mod run_event;
 pub mod skill;
 pub mod user;
 pub mod workspace;
@@ -329,6 +330,18 @@ CREATE INDEX IF NOT EXISTS task_cards_project_idx ON task_cards (project_id);
 "#,
     r#"
 CREATE INDEX IF NOT EXISTS chat_threads_project_idx ON chat_threads (project_id);
+"#,
+    r#"
+CREATE TABLE IF NOT EXISTS run_events (
+    id         BIGSERIAL PRIMARY KEY,
+    card_id    BIGINT NOT NULL,
+    kind       TEXT NOT NULL,
+    text       TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+"#,
+    r#"
+CREATE INDEX IF NOT EXISTS run_events_card_idx ON run_events (card_id, id);
 "#,
 ];
 

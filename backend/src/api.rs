@@ -385,6 +385,7 @@ fn task_router(state: TaskStore) -> Router {
         )
         .route("/api/task/cards/{id}/agent", get(get_agent).put(set_agent))
         .route("/api/task/cards/{id}/runs", get(list_card_runs))
+        .route("/api/tasks/{id}/events", get(list_card_events))
         .route("/api/task/cards/{id}/resources", get(list_card_resources))
         .route("/api/task/cards/{id}/image", put(set_card_image))
         .route("/api/task/cards/{id}/run", post(run_card))
@@ -1380,6 +1381,9 @@ async fn quota_board(
 
 const CODEX_USAGE_HISTORY_DEFAULT_LIMIT: i64 = 50;
 const CODEX_USAGE_HISTORY_MAX_LIMIT: i64 = 500;
+
+/// Max run-event rows returned per fetch of the card agent stream.
+const RUN_EVENTS_LIMIT: i64 = 1000;
 
 #[derive(Deserialize)]
 struct UsageHistoryQuery {
@@ -2829,6 +2833,27 @@ async fn list_card_runs(
     Ok(Json(
         runs.iter().map(|r| CardRunDto::from(r.clone())).collect(),
     ))
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct RunEventsQuery {
+    after: Option<i64>,
+}
+
+/// Full agent run stream for a card (generation, tool calls, output),
+/// ordered oldest-first; `?after=<id>` resumes the stream past a reconnect.
+async fn list_card_events(
+    State(state): State<TaskStore>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+    axum::extract::Query(q): axum::extract::Query<RunEventsQuery>,
+    _user: AuthUser,
+) -> Result<Json<Vec<task_rs::RunEventRow>>, ApiError> {
+    let rows = state
+        .store
+        .list_run_events(id, q.after.unwrap_or(0), RUN_EVENTS_LIMIT)
+        .await
+        .map_err(store_err)?;
+    Ok(Json(rows))
 }
 
 async fn list_active_runs(State(state): State<TaskStore>, _user: AuthUser) -> impl IntoResponse {

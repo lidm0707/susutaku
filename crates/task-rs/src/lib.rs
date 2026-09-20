@@ -37,8 +37,8 @@ pub use routine::{
 pub use skill::{NewSkill, SkillRow};
 pub use store::{
     ACTIVITY_LIST_DEFAULT, ACTIVITY_LIST_MAX, ACTIVITY_MESSAGE_MAX_CHARS, ActivityRow, AddCard,
-    AgentState, CardRow, CommentRow, MoveCard, RunRecordNew, RunRecordRow, StoreError, UpdateCard,
-    validate_card_json,
+    AgentState, CardRow, CommentRow, MoveCard, RunEventRow, RunRecordNew, RunRecordRow, StoreError,
+    UpdateCard, validate_card_json,
 };
 pub use user::{
     DEFAULT_ADMIN_PASSWORD, DEFAULT_ADMIN_USER, MIN_PASSWORD_LEN, NewUser, Role, UserRow,

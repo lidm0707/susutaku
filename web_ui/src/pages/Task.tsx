@@ -10,6 +10,7 @@ import {
   chat_zai_stream,
   create_task,
   fetch_agents,
+  fetch_card_events,
   fetch_tasks,
   fetch_comments,
   fetch_projects,
@@ -39,6 +40,7 @@ import {
   type StoredOutcome,
   type ActiveRun,
   type ChatStreamEvent,
+  type RunEvent,
 } from "../lib.js";
 import { Modal, SlideOver } from "../ui/Overlay.js";
 import { toast } from "../ui/Toast.js";
@@ -1476,12 +1478,61 @@ function CardMeta({ card }: { card: Card }) {
   );
 }
 
-// Live run view inside the card: while the agent is running the board
-// refreshes itself off card events, so this renders the live state; once a
-// record exists the finished run timeline takes over.
+// Live run view inside the card: the agent stream (generation, tool calls,
+// command output) is persisted in the DB per card, so this replays it via
+// fetch + incremental `after` polling and nothing is lost on reconnect; once
+// a record exists the finished run timeline rides above the stream.
+const RUN_EVENT_POLL_MS = 1500;
+const RUN_EVENT_LABEL: Record<string, string> = {
+  run: "run",
+  gen: "agent",
+  tool: "tool",
+  out: "output",
+  retry: "retry",
+  note: "note",
+  final: "result",
+};
+
 function RunLive({ card, run }: { card: Card | null; run: CardRun | null }) {
   const live = card?.run_status === "running";
-  if (!run && !live) return null;
+  const card_id = card?.id ?? null;
+  const [events, setEvents] = useState<RunEvent[]>([]);
+  useEffect(() => {
+    if (card_id == null) {
+      setEvents([]);
+      return;
+    }
+    let alive = true;
+    let after = 0;
+    setEvents([]);
+    const load = async () => {
+      try {
+        const rows = await fetch_card_events(card_id, after);
+        if (!alive || rows.length === 0) return;
+        after = rows[rows.length - 1].id;
+        setEvents((prev) => [...prev, ...rows]);
+      } catch {
+        // backend unreachable: keep what we already have
+      }
+    };
+    load();
+    if (!live) return () => { alive = false; };
+    const timer = setInterval(load, RUN_EVENT_POLL_MS);
+    return () => { alive = false; clearInterval(timer); };
+  }, [card_id, live]);
+  if (!run && !live && events.length === 0) return null;
+  const stream = (
+    <ol>
+      {events.map((e) => (
+        <li key={e.id} className={`run-stage run-ok run-ev run-ev-${e.kind}`}>
+          <span className="run-stage-body">
+            <strong>{RUN_EVENT_LABEL[e.kind] ?? e.kind}</strong>
+            <pre className="run-output">{e.text}</pre>
+          </span>
+        </li>
+      ))}
+    </ol>
+  );
   if (live) {
     const p = card ? progress_of(card) : null;
     return (
@@ -1490,27 +1541,23 @@ function RunLive({ card, run }: { card: Card | null; run: CardRun | null }) {
           <Loader2 size={13} className="spin" /> run
           <span className="run-ok-text">running{card?.last_agent ? ` · ${card.last_agent}` : ""}</span>
         </h3>
-        <ol>
-          <li className="run-stage run-ok">
-            <span className="run-stage-icon">
-              <Loader2 size={13} className="spin" />
-            </span>
-            <span className="run-stage-body">
-              <strong>agent</strong>
-              <span className="run-stage-stage">
-                {p
-                  ? `${p.retry ? "retry" : "step"} ${p.round}/${p.rounds} · ${p.last_tool}`
-                  : "starting…"}
-              </span>
-              {p?.last_output && <pre className="run-output run-output-live">{p.last_output}</pre>}
-              <span className="run-stage-note">this view updates as the agent works</span>
-            </span>
-          </li>
-        </ol>
+        {p && (
+          <p className="run-stage-stage">
+            {p.retry ? "retry" : "step"} {p.round}/{p.rounds} · {p.last_tool}
+          </p>
+        )}
+        {stream}
       </section>
     );
   }
-  return <RunTimeline run={run} />;
+  return (
+    <>
+      <RunTimeline run={run} />
+      {events.length > 0 && (
+        <section className="run-timeline" aria-label="agent stream">{stream}</section>
+      )}
+    </>
+  );
 }
 
 function RunTimeline({ run }: { run: CardRun | null }) {

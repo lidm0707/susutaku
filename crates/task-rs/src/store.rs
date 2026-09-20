@@ -167,6 +167,15 @@ pub struct RunRecordRow {
     pub summary: String,
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RunEventRow {
+    pub id: i64,
+    pub card_id: i64,
+    pub kind: String,
+    pub text: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
 pub struct RunRecordNew {
     pub card_id: i64,
     pub trigger: String,
