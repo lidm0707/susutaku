@@ -13,6 +13,27 @@ use crate::infra::codex::auth::codex_home;
 const AGENT_EVENT: &str = "agent_message";
 const ERROR_EVENT: &str = "error";
 const MCP_BIN_IN: &str = "/usr/local/bin/susutaku-mcp";
+const ROLE_USER: &str = "user";
+const ROLE_ASSISTANT: &str = "assistant";
+const HISTORY_HEADER: &str = "conversation so far:";
+const MESSAGE_HEADER: &str = "user message:";
+
+/// Assemble the one-shot codex prompt: card snapshot, prior thread turns
+/// and the new message. Only non-empty parts are included.
+pub fn build_prompt(history: &str, context: &str, message: &str) -> String {
+    let mut prompt = String::new();
+    let context = context.trim();
+    if !context.is_empty() {
+        prompt.push_str(context);
+        prompt.push_str("\n\n");
+    }
+    let history = history.trim();
+    if !history.is_empty() {
+        prompt.push_str(&format!("{HISTORY_HEADER}\n{history}\n\n"));
+    }
+    prompt.push_str(&format!("{MESSAGE_HEADER}\n{message}"));
+    prompt
+}
 
 /// Run one prompt through codex inside a podman sandbox rooted at
 /// `work_tree`, return the final agent text.

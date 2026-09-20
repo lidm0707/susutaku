@@ -542,11 +542,16 @@ export async function fetch_codex_models(): Promise<CodexModel[]> {
   return res.json();
 }
 
-export async function chat_codex(message: string, model: string): Promise<ChatReply> {
+export async function chat_codex(
+  message: string,
+  model: string,
+  thread_id?: number,
+  card_id?: number
+): Promise<ChatReply> {
   const res = await fetch(`${API_BASE}/api/chat/codex`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message, model }),
+    body: JSON.stringify({ message, model, thread_id, card_id }),
   });
   if (!res.ok) throw new ApiError(res.status, await res.text());
   return res.json();

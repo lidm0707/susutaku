@@ -239,8 +239,15 @@ pub fn router<T: ChatHandling + ModelSwitch + 'static>(
         .route("/api/auth/codex/start", post(codex_start))
         .route("/api/auth/codex/status", get(codex_status))
         .route("/api/auth/codex/models", get(codex_models))
-        .route("/api/chat/codex", post(chat_codex))
         .with_state(Arc::new(CodexAuth::new(codex_workspace.clone())));
+    // codex chat gets its own state: thread transcript + card context live
+    // in the task store, the auth-only state cannot serve them.
+    let codex_chat = Router::new()
+        .route("/api/chat/codex", post(chat_codex))
+        .with_state(Arc::new(CodexChatState {
+            auth: Arc::new(CodexAuth::new(codex_workspace.clone())),
+            store: task_store.clone(),
+        }));
     let claude = Router::new()
         .route("/api/auth/claude/start", post(claude_start))
         .route("/api/auth/claude/callback", post(claude_callback))
@@ -337,6 +344,7 @@ pub fn router<T: ChatHandling + ModelSwitch + 'static>(
     ));
     let engine = use_case.inference();
     core.merge(auth)
+        .merge(codex_chat)
         .merge(claude)
         .merge(settings)
         .merge(local_settings_router)
@@ -1206,6 +1214,45 @@ async fn codex_models() -> Json<Vec<CodexModelInfo>> {
     )
 }
 
+/// Codex chat state: auth/workspace plus the task store serving thread
+/// transcript and card snapshots.
+struct CodexChatState {
+    auth: Arc<CodexAuth>,
+    store: std::sync::Arc<crate::infra::postgres::Store>,
+}
+
+const CODEX_HISTORY_MAX_MSGS: usize = 20;
+const CODEX_HISTORY_MSG_MAX_CHARS: usize = 2000;
+
+/// Build the one-shot codex prompt: thread transcript, card snapshot and
+/// the new message (codex exec has no server-side session).
+async fn codex_prompt(
+    store: &crate::infra::postgres::Store,
+    req: &CodexChatRequest,
+) -> Result<String, ApiError> {
+    let mut context = String::new();
+    if let Some(card_id) = req.card_id {
+        if let Ok(Some(card)) = store.get(card_id).await {
+            context.push_str(&format!(
+                "TASK CONTEXT\ncard #{} [{}]: {}\n{}\n",
+                card.id, card.column_id, card.title, card.description
+            ));
+        }
+    }
+    let mut history = String::new();
+    if let Some(thread_id) = req.thread_id {
+        let msgs = store
+            .list_chat_messages(thread_id)
+            .await
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+        for m in msgs.iter().rev().take(CODEX_HISTORY_MAX_MSGS).rev() {
+            let text: String = m.text.chars().take(CODEX_HISTORY_MSG_MAX_CHARS).collect();
+            history.push_str(&format!("{}: {}\n", m.role, text));
+        }
+    }
+    Ok(codex_chat::build_prompt(&history, &context, &req.message))
+}
+
 #[utoipa::path(
     post,
     path = "/api/chat/codex",
@@ -1213,20 +1260,26 @@ async fn codex_models() -> Json<Vec<CodexModelInfo>> {
     responses((status = 200, body = ChatReply), (status = 500, body = str))
 )]
 async fn chat_codex(
-    State(auth): State<Arc<CodexAuth>>,
+    State(state): State<Arc<CodexChatState>>,
     Json(req): Json<CodexChatRequest>,
 ) -> Result<Json<ChatReply>, ApiError> {
     const TOKENIZER: &str = "codex";
     const ZERO_TPS: f64 = 0.0;
     let model = req.model.clone().filter(|m| !m.is_empty());
-    let workspace = auth.workspace().to_path_buf();
+    let workspace = state.auth.workspace().to_path_buf();
     let chat_model = model.clone();
+    // codex exec is one-shot: thread memory and card grounding must travel
+    // inside the prompt.
+    let prompt = codex_prompt(&state.store, &req).await?;
     let reply = tokio::task::spawn_blocking(move || {
-        codex_chat::chat(&req.message, chat_model.as_deref(), &workspace)
+        codex_chat::chat(&prompt, chat_model.as_deref(), &workspace)
     })
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?
     .map_err(ApiError::internal)?;
+    if let Some(thread_id) = req.thread_id {
+        persist_transcript(state.store.clone(), thread_id, &req.message, &reply).await;
+    }
     Ok(Json(ChatReply {
         model,
         reply,
@@ -5002,6 +5055,11 @@ struct CodexChatRequest {
     message: String,
     /// "gpt-5-codex" | "gpt-5" | "gpt-5-mini" (default: gpt-5-codex).
     model: Option<String>,
+    /// Server-side thread id; when set, prior turns are replayed into the
+    /// prompt and the exchange is persisted to Postgres.
+    thread_id: Option<i64>,
+    /// Mentioned task card; its snapshot grounds the codex turn.
+    card_id: Option<i64>,
 }
 
 #[derive(Serialize, utoipa::ToSchema)]

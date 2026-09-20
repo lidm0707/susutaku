@@ -962,7 +962,8 @@ export default function ChatModal({ open, on_close }: { open: boolean; on_close:
       codex = await fetch_codex_models().catch(() => []);
       setCodexModels(codex);
     }
-    if (codex.some((m) => m.id === a.model)) return chat_codex(text, a.model);
+    if (codex.some((m) => m.id === a.model))
+      return chat_codex(text, a.model, thread_id ?? undefined, card_mentions(text)[0]);
     const local = models.find((m) => m.name === a.model);
     if (local) {
       if (!local.selected) await select_model(a.model);
