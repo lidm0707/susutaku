@@ -92,6 +92,8 @@ pub fn exec_json(
     if let Some(m) = model {
         cmd.args(["-m", m]);
     }
+    // Best-effort: expose susutaku tools to codex via MCP config.
+    crate::mcp::wire(codex_home);
     cmd.arg(prompt)
         .current_dir(workspace)
         .env(CODEX_HOME_ENV, codex_home)

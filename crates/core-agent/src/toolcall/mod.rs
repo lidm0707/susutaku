@@ -1,7 +1,8 @@
 pub mod fetch;
 pub mod git_in_sandbox;
-pub mod task;
 pub mod lsp;
+pub mod mcp;
+pub mod task;
 pub mod web_search;
 
 /// Agent-timeout for every outbound HTTP call — the tool harness must never

@@ -5,6 +5,7 @@
 
 pub mod auth;
 pub mod exec;
+pub mod mcp;
 pub mod model;
 pub mod pkce;
 pub mod usage;
