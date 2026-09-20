@@ -76,10 +76,12 @@ impl ZaiEngine {
 
     fn client(&self) -> Result<zai_api::client::ZaiClient, String> {
         match &self.model {
-            Some(m) => Ok(zai_api::client::ZaiClient::from_key(
-                &self.settings.zai_token()?,
-                m,
-            )),
+            Some(m) => Ok(self
+                .settings
+                .zai_apply_proxy(zai_api::client::ZaiClient::from_key(
+                    &self.settings.zai_token()?,
+                    m,
+                ))),
             None => self.settings.zai_client(),
         }
     }

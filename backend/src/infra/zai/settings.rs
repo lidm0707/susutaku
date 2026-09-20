@@ -23,6 +23,9 @@ pub const FIELD_PROMPT: &str = "prompt";
 pub const FIELD_SAY_HI_TIME: &str = "say_hi_time";
 pub const FIELD_SAY_HI_INTERVAL: &str = "say_hi_interval_mins";
 pub const FIELD_TIMEZONE: &str = "timezone";
+/// Outbound proxy for the z.ai endpoint (e.g. `http://127.0.0.1:7890`),
+/// stored so it applies no matter how the backend process was started.
+pub const FIELD_PROXY: &str = "proxy";
 pub const TIME_LEN: usize = 5;
 /// Repeat interval for say hi, in minutes (1 step every N minutes).
 pub const MIN_SAY_HI_INTERVAL: u64 = 1;
@@ -81,6 +84,8 @@ pub struct ZaiSettings {
     pub say_hi_interval_mins: Option<u64>,
     #[serde(default)]
     pub timezone: Option<String>,
+    #[serde(default)]
+    pub proxy: Option<String>,
 }
 
 pub fn validate_api_key(raw_key: &str) -> Result<(), String> {
@@ -252,12 +257,7 @@ impl SettingsState {
 
     /// Upsert by name; `value: None` keeps the stored value (secret
     /// values can be edited without retyping them).
-    pub fn set_env_var(
-        &self,
-        name: &str,
-        value: Option<&str>,
-        secret: bool,
-    ) -> Result<(), String> {
+    pub fn set_env_var(&self, name: &str, value: Option<&str>, secret: bool) -> Result<(), String> {
         let name = name.trim();
         crate::infra::settings::env_vars::validate_name(name)?;
         if let Some(v) = value {
@@ -269,7 +269,9 @@ impl SettingsState {
             Some(entry) => {
                 // `None` keeps the stored value (secret edit without
                 // retyping); a masked echo must never overwrite it either.
-                if let Some(v) = value.filter(|v| *v != crate::infra::settings::env_vars::SECRET_MASK) {
+                if let Some(v) =
+                    value.filter(|v| *v != crate::infra::settings::env_vars::SECRET_MASK)
+                {
                     entry.value = v.to_owned();
                 }
                 entry
@@ -474,7 +476,19 @@ impl SettingsState {
             .clone()
             .unwrap_or_else(|| DEFAULT_MODEL.to_string());
         let token = self.zai_token()?;
-        Ok(zai_api::client::ZaiClient::from_key(&token, &name))
+        Ok(
+            zai_api::client::ZaiClient::from_key(&token, &name)
+                .with_proxy_opt(zai.proxy.as_deref()),
+        )
+    }
+
+    /// Applies the stored proxy to any client (per-model keys build their own).
+    pub fn zai_apply_proxy(
+        &self,
+        client: zai_api::client::ZaiClient,
+    ) -> zai_api::client::ZaiClient {
+        let proxy = self.zai().proxy;
+        client.with_proxy_opt(proxy.as_deref())
     }
 }
 
@@ -540,6 +554,10 @@ fn read_file() -> Option<ZaiSettings> {
             .get(FIELD_TIMEZONE)
             .and_then(serde_json::Value::as_str)
             .map(str::to_owned),
+        proxy: zai
+            .get(FIELD_PROXY)
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned),
     })
 }
 
@@ -567,6 +585,7 @@ fn write_file(zai: &ZaiSettings) -> Result<(), String> {
         FIELD_SAY_HI_TIME: zai.say_hi_time,
         FIELD_SAY_HI_INTERVAL: zai.say_hi_interval_mins,
         FIELD_TIMEZONE: zai.timezone,
+        FIELD_PROXY: zai.proxy,
     });
     write_doc(&doc)
 }

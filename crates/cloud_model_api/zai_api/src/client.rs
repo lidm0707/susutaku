@@ -39,6 +39,16 @@ pub const STREAM_READ_TIMEOUT_SECS: u64 = 180;
 /// response headers).
 pub const ENV_PROXIES: [&str; 3] = ["SUSUTAKU_PROXY", "HTTPS_PROXY", "https_proxy"];
 
+/// Proxy for one request: the per-client override from settings, falling
+/// back to the environment (SUSUTAKU_PROXY / HTTPS_PROXY / https_proxy).
+fn request_proxy(client: &ZaiClient) -> Option<ureq::Proxy> {
+    client
+        .proxy
+        .as_deref()
+        .and_then(|url| ureq::Proxy::new(url).ok())
+        .or_else(env_proxy)
+}
+
 /// Proxy from the environment, if any of the supported vars is set.
 fn env_proxy() -> Option<ureq::Proxy> {
     ENV_PROXIES.iter().find_map(|name| {
@@ -77,6 +87,8 @@ pub struct ZaiClient {
     api_key: String,
     model: String,
     endpoint: Endpoint,
+    /// Proxy URL from settings (`zai.proxy` in setting.json); beats the env.
+    proxy: Option<String>,
 }
 
 impl ZaiClient {
@@ -86,6 +98,7 @@ impl ZaiClient {
             api_key: strip_bearer_scheme(api_key).to_string(),
             model: model.to_string(),
             endpoint: Endpoint::default(),
+            proxy: None,
         }
     }
 
@@ -111,6 +124,26 @@ impl ZaiClient {
         self
     }
 
+    /// Proxy URL for all requests of this client (invalid urls are ignored,
+    /// the env vars stay as fallback).
+    pub fn with_proxy(mut self, url: &str) -> Self {
+        self.proxy = Some(url.trim().to_string()).filter(|s| !s.is_empty());
+        self
+    }
+
+    /// Same, but `None` leaves the client unchanged.
+    pub fn with_proxy_opt(self, url: Option<&str>) -> Self {
+        match url {
+            Some(url) => self.with_proxy(url),
+            None => self,
+        }
+    }
+
+    /// The configured proxy url, if any (test/visibility accessor).
+    pub fn proxy_url(&self) -> Option<&str> {
+        self.proxy.as_deref()
+    }
+
     /// Fill in the concrete model when the request leaves it unset.
     fn effective_model<'a>(&'a self, request: &'a ChatRequest) -> &'a str {
         if request.model.is_empty() {
@@ -121,15 +154,15 @@ impl ZaiClient {
     }
 
     fn send(&self, body: &str) -> Result<String, AiError> {
-        self.post(&Self::plain_agent(), body)?
+        self.post(&self.plain_agent(), body)?
             .into_string()
             .map_err(|e| AiError::Http(e.to_string()))
     }
 
-    fn plain_agent() -> ureq::Agent {
+    fn plain_agent(&self) -> ureq::Agent {
         let mut builder = ureq::AgentBuilder::new()
             .timeout_connect(std::time::Duration::from_secs(CONNECT_TIMEOUT_SECS));
-        if let Some(proxy) = env_proxy() {
+        if let Some(proxy) = request_proxy(self) {
             builder = builder.proxy(proxy);
         }
         builder.build()
@@ -138,11 +171,11 @@ impl ZaiClient {
     /// Agent whose socket reads time out: ureq's request timeout ends when
     /// the response headers arrive, so a stalled SSE stream would otherwise
     /// block the reader thread forever.
-    fn streaming_agent() -> ureq::Agent {
+    fn streaming_agent(&self) -> ureq::Agent {
         let mut builder = ureq::AgentBuilder::new()
             .timeout_connect(std::time::Duration::from_secs(CONNECT_TIMEOUT_SECS))
             .timeout_read(std::time::Duration::from_secs(STREAM_READ_TIMEOUT_SECS));
-        if let Some(proxy) = env_proxy() {
+        if let Some(proxy) = request_proxy(self) {
             builder = builder.proxy(proxy);
         }
         builder.build()
@@ -169,7 +202,7 @@ impl ZaiClient {
     /// OpenAI-compatible SSE stream of content deltas. The request sets
     /// `"stream": true` and the caller iterates `DeltaStream` as tokens arrive.
     fn send_stream(&self, body: &str) -> Result<DeltaStream, AiError> {
-        let reader = self.post(&Self::streaming_agent(), body)?.into_reader();
+        let reader = self.post(&self.streaming_agent(), body)?.into_reader();
         Ok(DeltaStream {
             reader: std::io::BufReader::new(Box::new(reader)),
             done: false,
