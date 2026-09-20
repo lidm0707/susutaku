@@ -487,6 +487,9 @@ export default function AgentSettings() {
                       <option value={fields.model}>{pretty_name(fields.model)}</option>
                     )}
                     <optgroup label="codex (gpt)">
+                      {codexModels.length === 0 && (
+                        <option value="" disabled>log in to codex cli to load models</option>
+                      )}
                       {codexModels.map((m) => (
                         <option key={m.id} value={m.id}>{m.label || m.id}</option>
                       ))}

@@ -7,8 +7,6 @@ use serde::Deserialize;
 
 pub const MODELS_CACHE_FILE: &str = "models_cache.json";
 const VISIBILITY_LIST: &str = "list";
-/// Shown when the cache is missing (not logged in yet / older CLI).
-const FALLBACK_SLUGS: &[&str] = &["gpt-5-codex", "gpt-5", "gpt-5-mini"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModelInfo {
@@ -34,14 +32,10 @@ struct CacheModel {
 }
 
 /// Visible models for the logged-in account, cheapest-priority first.
+/// Empty when the CLI cache is missing (not logged in yet / older CLI).
 pub fn list(codex_home: &Path) -> Vec<ModelInfo> {
     let raw = std::fs::read_to_string(codex_home.join(MODELS_CACHE_FILE)).unwrap_or_default();
-    let parsed = parse(&raw);
-    if parsed.is_empty() {
-        fallback()
-    } else {
-        parsed
-    }
+    parse(&raw)
 }
 
 pub fn parse(raw: &str) -> Vec<ModelInfo> {
@@ -64,14 +58,4 @@ pub fn parse(raw: &str) -> Vec<ModelInfo> {
         .collect();
     models.sort_by_key(|(priority, _)| *priority);
     models.into_iter().map(|(_, info)| info).collect()
-}
-
-fn fallback() -> Vec<ModelInfo> {
-    FALLBACK_SLUGS
-        .iter()
-        .map(|slug| ModelInfo {
-            slug: (*slug).to_string(),
-            display_name: (*slug).to_string(),
-        })
-        .collect()
 }
