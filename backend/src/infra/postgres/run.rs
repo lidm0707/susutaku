@@ -59,6 +59,22 @@ impl Store {
         Ok(())
     }
 
+    /// Startup recovery: after a restart no run can still be in flight, so
+    /// any card left `queued`/`running` by a previous process is reset to
+    /// `idle`.
+    pub async fn reset_stale_runs(&self) -> Result<u64, StoreError> {
+        let res = sqlx::query!(
+            r#"UPDATE task_cards SET run_status = $2
+               WHERE run_status IN ($1, $3)"#,
+            task_rs::RUN_STATUS_QUEUED,
+            task_rs::RUN_STATUS_IDLE,
+            task_rs::RUN_STATUS_RUNNING,
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected())
+    }
+
     /// Run history for a card, newest first.
     pub async fn card_runs(&self, card_id: i64) -> Result<Vec<RunRecordRow>, StoreError> {
         let rows = sqlx::query_as!(

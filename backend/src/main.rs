@@ -84,6 +84,11 @@ fn spawn_health_log(manager: Arc<Manager>) {
 async fn main() {
     init_tracing();
     let task_store = Arc::new(connect().await);
+    match task_store.reset_stale_runs().await {
+        Ok(n) if n > 0 => tracing::info!("recovered {n} stale run(s) after restart"),
+        Ok(_) => {}
+        Err(err) => tracing::warn!("stale run recovery failed: {err}"),
+    }
     let model = Arc::new(RemoteModel::new(&local_model_url()));
     let sandbox = Arc::new(AgentSandbox::restore().expect("agent sandbox init"));
     spawn_client_node(sandbox.clone()).await;

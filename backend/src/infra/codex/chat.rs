@@ -13,8 +13,6 @@ use crate::infra::codex::auth::codex_home;
 const AGENT_EVENT: &str = "agent_message";
 const ERROR_EVENT: &str = "error";
 const MCP_BIN_IN: &str = "/usr/local/bin/susutaku-mcp";
-const ROLE_USER: &str = "user";
-const ROLE_ASSISTANT: &str = "assistant";
 const HISTORY_HEADER: &str = "conversation so far:";
 const MESSAGE_HEADER: &str = "user message:";
 
